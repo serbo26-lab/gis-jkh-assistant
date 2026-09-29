@@ -106,3 +106,27 @@ QSplitter::handle {
     width: 1px;
 }
 """
+
+
+COMPACT_WINDOW_STYLESHEET = """
+QWidget {
+    font-size: 9pt;
+}
+QLabel#Title {
+    font-size: 16pt;
+}
+QLabel#SectionTitle {
+    font-size: 10pt;
+}
+QPushButton {
+    padding: 5px 9px;
+    min-height: 20px;
+}
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {
+    padding: 4px 6px;
+    min-height: 20px;
+}
+QListWidget::item {
+    padding: 6px;
+}
+"""
