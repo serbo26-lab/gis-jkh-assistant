@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -35,6 +34,7 @@ from gis_jkh_assistant.gis_files.housing_objects import (
 )
 
 from .dialogs import HouseDialog, OrganizationDialog
+from .widgets import SafeSpinBox
 
 
 class HousesPage(QWidget):
@@ -197,9 +197,9 @@ class HousesPage(QWidget):
         premises_title = QLabel("Помещения")
         premises_title.setObjectName("SectionTitle")
         self.card_layout.addWidget(premises_title)
-        self.residential_spin = QSpinBox()
+        self.residential_spin = SafeSpinBox()
         self.residential_spin.setRange(0, 100000)
-        self.non_residential_spin = QSpinBox()
+        self.non_residential_spin = SafeSpinBox()
         self.non_residential_spin.setRange(0, 100000)
         self.total_label = QLabel("0")
         premises_form = QFormLayout()
