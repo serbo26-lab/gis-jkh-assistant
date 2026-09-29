@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from gis_jkh_assistant.database import Repository
 
 from .houses_page import HousesPage
+from .styles import COMPACT_WINDOW_STYLESHEET
 
 
 class MainWindow(QMainWindow):
@@ -26,7 +27,8 @@ class MainWindow(QMainWindow):
         self.repository = repository
         self.setWindowTitle("GIS ЖКХ Assistant")
         self.resize(1360, 820)
-        self.setMinimumSize(980, 640)
+        self.setMinimumSize(880, 600)
+        self._compact_mode = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -35,6 +37,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         sidebar = QWidget()
+        self.sidebar = sidebar
         sidebar.setFixedWidth(220)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
@@ -59,6 +62,15 @@ class MainWindow(QMainWindow):
 
         self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.navigation.setCurrentRow(0)
+
+    def resizeEvent(self, event) -> None:
+        compact = event.size().width() < 1120
+        if compact != self._compact_mode:
+            self._compact_mode = compact
+            self.sidebar.setFixedWidth(180 if compact else 220)
+            self.houses_page.set_compact_mode(compact)
+            self.setStyleSheet(COMPACT_WINDOW_STYLESHEET if compact else "")
+        super().resizeEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.houses_page.flush_pending_changes()
