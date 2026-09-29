@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import shutil
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -25,7 +29,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gis_jkh_assistant.database.paths import template_files_dir
 from gis_jkh_assistant.database.repository import Repository
+from gis_jkh_assistant.gis_files.work_lists import (
+    WorkListExportError,
+    WorkTemplateImportError,
+    export_work_list_xlsx,
+    parse_work_template,
+)
 
 from .widgets import SafeComboBox, SafeSpinBox
 from .work_row_rules import editable_columns_for_mode, infer_work_row_mode
@@ -86,42 +97,52 @@ class WorkListsPage(QWidget):
 
         context = QFrame()
         context.setObjectName("Card")
-        context_layout = QVBoxLayout(context)
+        context_layout = QGridLayout(context)
         context_layout.setContentsMargins(12, 10, 12, 10)
-        context_layout.setSpacing(8)
+        context_layout.setHorizontalSpacing(10)
+        context_layout.setVerticalSpacing(8)
 
-        row_one = QHBoxLayout()
-        row_one.addWidget(QLabel("Управляющая организация"))
+        context_layout.addWidget(QLabel("Управляющая организация"), 0, 0)
         self.organization_combo = SafeComboBox()
-        self.organization_combo.setMinimumWidth(220)
-        row_one.addWidget(self.organization_combo, 1)
-        row_one.addWidget(QLabel("Дом"))
-        self.house_combo = SafeComboBox()
-        self.house_combo.setMinimumWidth(280)
-        row_one.addWidget(self.house_combo, 2)
-        context_layout.addLayout(row_one)
+        self.organization_combo.setMinimumWidth(260)
+        context_layout.addWidget(self.organization_combo, 0, 1, 1, 3)
 
-        row_two = QHBoxLayout()
-        row_two.addWidget(QLabel("Год нового перечня"))
+        context_layout.addWidget(QLabel("Дом"), 1, 0)
+        self.house_combo = SafeComboBox()
+        self.house_combo.setMinimumWidth(320)
+        context_layout.addWidget(self.house_combo, 1, 1, 1, 3)
+
+        context_layout.addWidget(QLabel("Год нового перечня"), 2, 0)
         self.year_spin = SafeSpinBox()
         self.year_spin.setRange(2015, 2100)
         self.year_spin.setValue(datetime.now().year)
         self.year_spin.setFixedWidth(138)
-        row_two.addWidget(self.year_spin)
+        context_layout.addWidget(self.year_spin, 2, 1)
 
-        row_two.addWidget(QLabel("Шаблон"))
+        context_layout.addWidget(QLabel("Шаблон"), 2, 2)
         self.template_combo = SafeComboBox()
         self.template_combo.setMinimumWidth(240)
-        row_two.addWidget(self.template_combo, 1)
+        context_layout.addWidget(self.template_combo, 2, 3)
 
         self.templates_button = QPushButton("Шаблоны пользователя")
         self.create_from_current_button = QPushButton("Создать на основе выбранного")
+        self.export_button = QPushButton("Сформировать XLSX")
         self.create_button = QPushButton("Создать перечень")
         self.create_button.setObjectName("PrimaryButton")
-        row_two.addWidget(self.templates_button)
-        row_two.addWidget(self.create_from_current_button)
-        row_two.addWidget(self.create_button)
-        context_layout.addLayout(row_two)
+
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(8)
+        actions.setVerticalSpacing(6)
+        actions.addWidget(self.templates_button, 0, 0)
+        actions.addWidget(self.create_from_current_button, 0, 1)
+        actions.addWidget(self.export_button, 1, 0)
+        actions.addWidget(self.create_button, 1, 1)
+        actions.setColumnStretch(0, 1)
+        actions.setColumnStretch(1, 1)
+        context_layout.addLayout(actions, 3, 0, 1, 4)
+
+        context_layout.setColumnStretch(1, 1)
+        context_layout.setColumnStretch(3, 3)
         root.addWidget(context)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -171,6 +192,7 @@ class WorkListsPage(QWidget):
         start_layout = QHBoxLayout(start_widget)
         start_layout.setContentsMargins(0, 0, 0, 0)
         self.start_month = SafeComboBox()
+        self.start_month.setMinimumWidth(160)
         self.start_month.addItems(_MONTHS)
         self.start_year = SafeSpinBox()
         self.start_year.setRange(2015, 2100)
@@ -183,6 +205,7 @@ class WorkListsPage(QWidget):
         end_layout = QHBoxLayout(end_widget)
         end_layout.setContentsMargins(0, 0, 0, 0)
         self.end_month = SafeComboBox()
+        self.end_month.setMinimumWidth(160)
         self.end_month.addItems(_MONTHS)
         self.end_year = SafeSpinBox()
         self.end_year.setRange(2015, 2100)
@@ -229,6 +252,7 @@ class WorkListsPage(QWidget):
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         self.house_combo.currentIndexChanged.connect(self._house_changed)
         self.templates_button.clicked.connect(self._manage_templates)
+        self.export_button.clicked.connect(self._export_current_work_list)
         self.create_button.clicked.connect(self._create_work_list)
         self.create_from_current_button.clicked.connect(self._clone_current_work_list)
         self.delete_button.clicked.connect(self._delete_work_list)
