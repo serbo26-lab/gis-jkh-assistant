@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gis_jkh_assistant.database.paths import template_files_dir
+from gis_jkh_assistant.database.paths import gis_export_template_dir
 from gis_jkh_assistant.database.repository import Repository
 from gis_jkh_assistant.gis_files.work_lists import (
     WorkListExportError,
@@ -79,6 +79,7 @@ class WorkListsPage(QWidget):
         self._period_timer.timeout.connect(self._save_period)
 
         self._build_ui()
+        self._refresh_export_template_status()
         self.refresh_organizations()
 
     def _build_ui(self) -> None:
@@ -99,48 +100,71 @@ class WorkListsPage(QWidget):
         context = QFrame()
         context.setObjectName("Card")
         context_layout = QGridLayout(context)
-        context_layout.setContentsMargins(12, 10, 12, 10)
+        context_layout.setContentsMargins(14, 12, 14, 12)
         context_layout.setHorizontalSpacing(10)
         context_layout.setVerticalSpacing(8)
 
-        context_layout.addWidget(QLabel("Управляющая организация"), 0, 0)
-        self.organization_combo = SafeComboBox()
-        self.organization_combo.setMinimumWidth(260)
-        context_layout.addWidget(self.organization_combo, 0, 1, 1, 3)
+        context_title = QLabel("Контекст")
+        context_title.setObjectName("SectionTitle")
+        context_layout.addWidget(context_title, 0, 0, 1, 4)
 
-        context_layout.addWidget(QLabel("Дом"), 1, 0)
+        context_layout.addWidget(QLabel("Управляющая организация"), 1, 0)
+        self.organization_combo = SafeComboBox()
+        self.organization_combo.setMinimumWidth(280)
+        context_layout.addWidget(self.organization_combo, 1, 1, 1, 3)
+
+        context_layout.addWidget(QLabel("Дом"), 2, 0)
         self.house_combo = SafeComboBox()
         self.house_combo.setMinimumWidth(320)
-        context_layout.addWidget(self.house_combo, 1, 1, 1, 3)
+        context_layout.addWidget(self.house_combo, 2, 1, 1, 3)
 
-        context_layout.addWidget(QLabel("Год нового перечня"), 2, 0)
+        creation_title = QLabel("Создание перечня")
+        creation_title.setObjectName("SectionTitle")
+        context_layout.addWidget(creation_title, 3, 0, 1, 4)
+
+        context_layout.addWidget(QLabel("Год"), 4, 0)
         self.year_spin = SafeSpinBox()
         self.year_spin.setRange(2015, 2100)
         self.year_spin.setValue(datetime.now().year)
         self.year_spin.setFixedWidth(138)
-        context_layout.addWidget(self.year_spin, 2, 1)
+        context_layout.addWidget(self.year_spin, 4, 1)
 
-        context_layout.addWidget(QLabel("Шаблон"), 2, 2)
+        context_layout.addWidget(QLabel("Шаблон перечня"), 4, 2)
         self.template_combo = SafeComboBox()
-        self.template_combo.setMinimumWidth(240)
-        context_layout.addWidget(self.template_combo, 2, 3)
+        self.template_combo.setMinimumWidth(260)
+        context_layout.addWidget(self.template_combo, 4, 3)
 
         self.templates_button = QPushButton("Шаблоны пользователя")
         self.create_from_current_button = QPushButton("Создать на основе выбранного")
-        self.export_button = QPushButton("Сформировать XLSX")
-        self.create_button = QPushButton("Создать перечень")
+        self.create_button = QPushButton("Создать новый перечень")
         self.create_button.setObjectName("PrimaryButton")
 
-        actions = QGridLayout()
-        actions.setHorizontalSpacing(8)
-        actions.setVerticalSpacing(6)
-        actions.addWidget(self.templates_button, 0, 0)
-        actions.addWidget(self.create_from_current_button, 0, 1)
-        actions.addWidget(self.export_button, 1, 0)
-        actions.addWidget(self.create_button, 1, 1)
-        actions.setColumnStretch(0, 1)
-        actions.setColumnStretch(1, 1)
-        context_layout.addLayout(actions, 3, 0, 1, 4)
+        creation_actions = QHBoxLayout()
+        creation_actions.setSpacing(8)
+        creation_actions.addWidget(self.templates_button)
+        creation_actions.addStretch(1)
+        creation_actions.addWidget(self.create_from_current_button)
+        creation_actions.addWidget(self.create_button)
+        context_layout.addLayout(creation_actions, 5, 0, 1, 4)
+
+        gis_title = QLabel("Обмен с ГИС ЖКХ")
+        gis_title.setObjectName("SectionTitle")
+        context_layout.addWidget(gis_title, 6, 0, 1, 4)
+
+        self.export_template_status = QLabel("Шаблон экспорта: не загружен")
+        self.export_template_status.setObjectName("Muted")
+        self.export_template_status.setWordWrap(True)
+        context_layout.addWidget(self.export_template_status, 7, 0, 1, 4)
+
+        self.load_export_template_button = QPushButton("Загрузить / обновить шаблон экспорта")
+        self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
+
+        gis_actions = QHBoxLayout()
+        gis_actions.setSpacing(8)
+        gis_actions.addWidget(self.load_export_template_button)
+        gis_actions.addStretch(1)
+        gis_actions.addWidget(self.export_button)
+        context_layout.addLayout(gis_actions, 8, 0, 1, 4)
 
         context_layout.setColumnStretch(1, 1)
         context_layout.setColumnStretch(3, 3)
@@ -253,6 +277,7 @@ class WorkListsPage(QWidget):
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         self.house_combo.currentIndexChanged.connect(self._house_changed)
         self.templates_button.clicked.connect(self._manage_templates)
+        self.load_export_template_button.clicked.connect(self._load_or_update_export_template)
         self.export_button.clicked.connect(self._export_current_work_list)
         self.create_button.clicked.connect(self._create_work_list)
         self.create_from_current_button.clicked.connect(self._clone_current_work_list)
