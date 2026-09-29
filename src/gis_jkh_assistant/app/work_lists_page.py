@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -644,6 +645,145 @@ class WorkListsPage(QWidget):
                         "Очистите цену и объем, чтобы вводить стоимость."
                     )
 
+    def _export_current_work_list(self) -> None:
+        """Build an XLSX from the currently selected local work list."""
+
+        self._save_period()
+        if not self._current_work_list_id:
+            QMessageBox.information(
+                self,
+                "Не выбран перечень",
+                "Сначала выберите перечень, который нужно сформировать в XLSX.",
+            )
+            return
+
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if not work_list:
+            return
+
+        house = self.repository.get_house(work_list.house_id)
+        if not house:
+            QMessageBox.critical(self, "Дом не найден", "Карточка дома отсутствует в локальной базе.")
+            return
+        if not house.house_object_guid:
+            QMessageBox.warning(
+                self,
+                "Нет GUID дома",
+                "Для формирования файла нужен GUID объекта жилищного фонда.",
+            )
+            return
+
+        template = (
+            self.repository.get_work_template(work_list.template_id)
+            if work_list.template_id
+            else None
+        )
+        if not template:
+            QMessageBox.information(
+                self,
+                "Нет исходного шаблона",
+                "Этот перечень создан без пользовательского шаблона. "
+                "Для формирования файла ГИС ЖКХ создайте перечень на основе импортированного XLSX-шаблона.",
+            )
+            return
+
+        source_path = self._ensure_template_source_file(template)
+        if source_path is None:
+            return
+
+        extension = source_path.suffix.lower()
+        if extension not in {".xlsx", ".xlsm"}:
+            extension = ".xlsx"
+
+        safe_house = house.gis_unique_house_number or house.house_object_guid[:8]
+        default_name = (
+            f"Перечень_{safe_house}_"
+            f"{work_list.start_month:02d}.{work_list.start_year}-"
+            f"{work_list.end_month:02d}.{work_list.end_year}{extension}"
+        )
+        default_path = Path.home() / "Downloads" / default_name
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сформировать файл для ГИС ЖКХ",
+            str(default_path),
+            "Excel (*.xlsx *.xlsm)",
+        )
+        if not filename:
+            return
+
+        output_path = Path(filename)
+        if output_path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            output_path = output_path.with_suffix(extension)
+
+        items = self.repository.list_work_list_items(work_list.id)
+        self.save_status.setText("Формируется XLSX…")
+        try:
+            result = export_work_list_xlsx(
+                source_template_path=source_path,
+                output_path=output_path,
+                house_guid=house.house_object_guid,
+                start_year=work_list.start_year,
+                start_month=work_list.start_month,
+                end_year=work_list.end_year,
+                end_month=work_list.end_month,
+                items=items,
+            )
+        except (WorkListExportError, OSError, zipfile.BadZipFile) as exc:
+            self.save_status.setText("Ошибка формирования")
+            QMessageBox.critical(self, "Не удалось сформировать XLSX", str(exc))
+            return
+
+        self.save_status.setText("Сохранено")
+        QMessageBox.information(
+            self,
+            "XLSX сформирован",
+            f"Файл готов для загрузки в ГИС ЖКХ.\n\n"
+            f"Строк выгружено: {result.exported_rows}\n"
+            f"{result.output_path}",
+        )
+
+    def _ensure_template_source_file(self, template) -> Path | None:
+        """Return the preserved original GIS XLSX, asking once for old templates."""
+
+        if template.source_file_path:
+            source_path = Path(template.source_file_path)
+            if source_path.exists():
+                return source_path
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Укажите исходный XLSX для шаблона «{template.name}»",
+            "",
+            "Excel (*.xlsx *.xlsm)",
+        )
+        if not filename:
+            return None
+
+        try:
+            parse_work_template(Path(filename))
+        except (WorkTemplateImportError, OSError, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Это не шаблон перечня ГИС ЖКХ",
+                str(exc),
+            )
+            return None
+
+        suffix = Path(filename).suffix.lower() or ".xlsx"
+        stored_path = template_files_dir() / f"{template.id}{suffix}"
+        try:
+            shutil.copy2(filename, stored_path)
+            self.repository.set_work_template_source_path(template.id, str(stored_path))
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Не удалось сохранить исходный шаблон",
+                str(exc),
+            )
+            return None
+        return stored_path
+
     def _manage_templates(self) -> None:
         self._save_period()
         organization_id = self.organization_combo.currentData()
@@ -689,6 +829,7 @@ class WorkListsPage(QWidget):
             self.items_table,
             self.delete_button,
             self.create_from_current_button,
+            self.export_button,
         ):
             widget.setEnabled(enabled)
 
