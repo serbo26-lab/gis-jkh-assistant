@@ -159,6 +159,11 @@ class Repository:
 
             CREATE INDEX IF NOT EXISTS ix_work_list_items
                 ON work_list_items(work_list_id, position);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
             """
         )
         self._ensure_column("work_templates", "source_file_path", "TEXT")
@@ -183,6 +188,30 @@ class Repository:
         data = dict(row)
         data["source"] = RecordSource(data["source"])
         return House(**data)
+
+    def get_setting(self, key: str) -> str | None:
+        row = self.connection.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return str(row["value"]) if row and row["value"] is not None else None
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        with self.connection:
+            if value is None:
+                self.connection.execute(
+                    "DELETE FROM app_settings WHERE key = ?",
+                    (key,),
+                )
+            else:
+                self.connection.execute(
+                    """
+                    INSERT INTO app_settings (key, value)
+                    VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (key, str(value)),
+                )
 
     def list_organizations(self) -> list[ManagementOrganization]:
         rows = self.connection.execute(
