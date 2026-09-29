@@ -9,11 +9,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
-    QSpinBox,
     QVBoxLayout,
 )
 
 from gis_jkh_assistant.database.models import House, ManagementOrganization
+
+from .widgets import SafeSpinBox
 
 
 class OrganizationDialog(QDialog):
@@ -81,10 +82,10 @@ class HouseDialog(QDialog):
         self.fias_guid_edit = QLineEdit((house.fias_house_guid or "") if house else "")
         self.unique_number_edit = QLineEdit((house.gis_unique_house_number or "") if house else "")
         self.cadastral_edit = QLineEdit((house.cadastral_number or "") if house else "")
-        self.residential_spin = QSpinBox()
+        self.residential_spin = SafeSpinBox()
         self.residential_spin.setRange(0, 100000)
         self.residential_spin.setValue(house.residential_premises_count if house else 0)
-        self.non_residential_spin = QSpinBox()
+        self.non_residential_spin = SafeSpinBox()
         self.non_residential_spin.setRange(0, 100000)
         self.non_residential_spin.setValue(house.non_residential_premises_count if house else 0)
 
