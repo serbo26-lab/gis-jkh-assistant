@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database.models import TemplateSource
+from gis_jkh_assistant.database.paths import template_files_dir
 from gis_jkh_assistant.database.repository import Repository
 from gis_jkh_assistant.gis_files.work_lists import WorkTemplateImportError, parse_work_template
 
@@ -144,6 +146,20 @@ class WorkTemplatesDialog(QDialog):
             )
             return
 
+        try:
+            suffix = Path(filename).suffix.lower() or ".xlsx"
+            stored_path = template_files_dir() / f"{template.id}{suffix}"
+            shutil.copy2(filename, stored_path)
+            self.repository.set_work_template_source_path(template.id, str(stored_path))
+        except OSError as exc:
+            self.repository.delete_work_template(template.id)
+            QMessageBox.critical(
+                self,
+                "Не удалось сохранить исходный шаблон",
+                str(exc),
+            )
+            return
+
         period = ""
         if imported.start_year and imported.start_month and imported.end_year and imported.end_month:
             period = (
@@ -216,5 +232,11 @@ class WorkTemplatesDialog(QDialog):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
+        source_path = Path(template.source_file_path) if template.source_file_path else None
         self.repository.delete_work_template(template_id)
+        if source_path and source_path.exists():
+            try:
+                source_path.unlink()
+            except OSError:
+                pass
         self.refresh()
