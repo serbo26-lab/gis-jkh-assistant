@@ -69,6 +69,7 @@ class WorkTemplate:
     name: str
     source: TemplateSource = TemplateSource.MANUAL
     source_file_name: str | None = None
+    source_file_path: str | None = None
     source_house_guid: str | None = None
     file_type: str | None = None
     file_version: str | None = None
