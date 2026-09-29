@@ -63,8 +63,13 @@ class MainWindow(QMainWindow):
             self.pages.addWidget(_placeholder(title))
         layout.addWidget(self.pages, 1)
 
-        self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.navigation.currentRowChanged.connect(self._navigation_changed)
         self.navigation.setCurrentRow(0)
+
+    def _navigation_changed(self, index: int) -> None:
+        self.pages.setCurrentIndex(index)
+        if index == 1:
+            self.work_lists_page.refresh_organizations()
 
     def resizeEvent(self, event) -> None:
         compact = event.size().width() < 1120
