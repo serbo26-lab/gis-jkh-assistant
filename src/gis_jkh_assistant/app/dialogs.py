@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QSpinBox,
     QVBoxLayout,
@@ -19,7 +20,7 @@ class OrganizationDialog(QDialog):
     def __init__(self, parent=None, organization: ManagementOrganization | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Управляющая организация")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(500)
 
         self.name_edit = QLineEdit(organization.name if organization else "")
         self.ogrn_edit = QLineEdit(organization.ogrn if organization else "")
@@ -28,14 +29,21 @@ class OrganizationDialog(QDialog):
         self.comment_edit.setMaximumHeight(90)
 
         form = QFormLayout()
-        form.addRow("Наименование", self.name_edit)
-        form.addRow("ОГРН", self.ogrn_edit)
+        form.addRow("Наименование *", self.name_edit)
+        form.addRow("ОГРН *", self.ogrn_edit)
         form.addRow("КПП", self.kpp_edit)
         form.addRow("Комментарий", self.comment_edit)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        save_button.setText("Сохранить")
+        save_button.setObjectName("PrimaryButton")
+        cancel_button.setText("Отмена")
+        save_button.clicked.connect(self._validate_and_accept)
+        cancel_button.clicked.connect(self.reject)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -49,8 +57,14 @@ class OrganizationDialog(QDialog):
             "comment": self.comment_edit.toPlainText().strip() or None,
         }
 
-    def accept(self) -> None:
-        if not self.name_edit.text().strip() or not self.ogrn_edit.text().strip():
+    def _validate_and_accept(self) -> None:
+        if not self.name_edit.text().strip():
+            QMessageBox.warning(self, "Не заполнено поле", "Укажите наименование УО.")
+            self.name_edit.setFocus()
+            return
+        if not self.ogrn_edit.text().strip():
+            QMessageBox.warning(self, "Не заполнено поле", "Укажите ОГРН УО.")
+            self.ogrn_edit.setFocus()
             return
         super().accept()
 
@@ -59,7 +73,7 @@ class HouseDialog(QDialog):
     def __init__(self, parent=None, house: House | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Дом")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(560)
 
         self.address_edit = QLineEdit(house.address if house else "")
         self.object_guid_edit = QLineEdit((house.house_object_guid or "") if house else "")
@@ -75,7 +89,7 @@ class HouseDialog(QDialog):
         self.non_residential_spin.setValue(house.non_residential_premises_count if house else 0)
 
         form = QFormLayout()
-        form.addRow("Адрес", self.address_edit)
+        form.addRow("Адрес *", self.address_edit)
         form.addRow("GUID объекта жилищного фонда", self.object_guid_edit)
         form.addRow("HOUSEGUID ГИС ЖКХ", self.gis_guid_edit)
         form.addRow("HOUSEGUID ФИАС", self.fias_guid_edit)
@@ -84,9 +98,16 @@ class HouseDialog(QDialog):
         form.addRow("Жилых помещений", self.residential_spin)
         form.addRow("Нежилых помещений", self.non_residential_spin)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        save_button.setText("Сохранить")
+        save_button.setObjectName("PrimaryButton")
+        cancel_button.setText("Отмена")
+        save_button.clicked.connect(self._validate_and_accept)
+        cancel_button.clicked.connect(self.reject)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -104,7 +125,9 @@ class HouseDialog(QDialog):
             "non_residential_premises_count": self.non_residential_spin.value(),
         }
 
-    def accept(self) -> None:
+    def _validate_and_accept(self) -> None:
         if not self.address_edit.text().strip():
+            QMessageBox.warning(self, "Не заполнено поле", "Укажите адрес дома.")
+            self.address_edit.setFocus()
             return
         super().accept()
