@@ -21,3 +21,9 @@ def user_data_dir() -> Path:
 
 def database_path() -> Path:
     return user_data_dir() / "data.db"
+
+
+def template_files_dir() -> Path:
+    path = user_data_dir() / "templates"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
