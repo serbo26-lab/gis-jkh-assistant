@@ -8,7 +8,17 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import House, ManagementOrganization, RecordSource
+from .models import (
+    House,
+    ManagementOrganization,
+    RecordSource,
+    TemplateSource,
+    WorkList,
+    WorkListItem,
+    WorkListStatus,
+    WorkTemplate,
+    WorkTemplateItem,
+)
 
 
 def _now() -> str:
@@ -70,6 +80,84 @@ class Repository:
             CREATE UNIQUE INDEX IF NOT EXISTS ux_house_gis_guid
                 ON houses(organization_id, gis_house_guid)
                 WHERE gis_house_guid IS NOT NULL AND gis_house_guid <> '';
+
+            CREATE TABLE IF NOT EXISTS work_templates (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                source_file_name TEXT,
+                source_house_guid TEXT,
+                file_type TEXT,
+                file_version TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (organization_id)
+                    REFERENCES management_organizations(id)
+                    ON DELETE CASCADE,
+                UNIQUE (organization_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS work_template_items (
+                id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                work_code TEXT,
+                work_name TEXT NOT NULL,
+                work_guid TEXT,
+                price TEXT,
+                volume TEXT,
+                quantity TEXT,
+                cost TEXT,
+                FOREIGN KEY (template_id)
+                    REFERENCES work_templates(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_template_items
+                ON work_template_items(template_id, position);
+
+            CREATE TABLE IF NOT EXISTS work_lists (
+                id TEXT PRIMARY KEY,
+                house_id TEXT NOT NULL,
+                template_id TEXT,
+                base_year INTEGER NOT NULL,
+                start_year INTEGER NOT NULL,
+                start_month INTEGER NOT NULL,
+                end_year INTEGER NOT NULL,
+                end_month INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'local',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (house_id)
+                    REFERENCES houses(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (template_id)
+                    REFERENCES work_templates(id)
+                    ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_lists_house_year
+                ON work_lists(house_id, base_year, start_year, start_month);
+
+            CREATE TABLE IF NOT EXISTS work_list_items (
+                id TEXT PRIMARY KEY,
+                work_list_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                work_code TEXT,
+                work_name TEXT NOT NULL,
+                work_guid TEXT,
+                price TEXT,
+                volume TEXT,
+                quantity TEXT,
+                cost TEXT,
+                FOREIGN KEY (work_list_id)
+                    REFERENCES work_lists(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_list_items
+                ON work_list_items(work_list_id, position);
             """
         )
         self.connection.commit()
@@ -303,6 +391,272 @@ class Repository:
     def delete_house(self, house_id: str) -> None:
         self.connection.execute("DELETE FROM houses WHERE id = ?", (house_id,))
         self.connection.commit()
+
+
+    @staticmethod
+    def _template_from_row(row: sqlite3.Row) -> WorkTemplate:
+        data = dict(row)
+        data["source"] = TemplateSource(data["source"])
+        return WorkTemplate(**data)
+
+    @staticmethod
+    def _template_item_from_row(row: sqlite3.Row) -> WorkTemplateItem:
+        return WorkTemplateItem(**dict(row))
+
+    @staticmethod
+    def _work_list_from_row(row: sqlite3.Row) -> WorkList:
+        data = dict(row)
+        data["status"] = WorkListStatus(data["status"])
+        return WorkList(**data)
+
+    @staticmethod
+    def _work_list_item_from_row(row: sqlite3.Row) -> WorkListItem:
+        return WorkListItem(**dict(row))
+
+    def list_work_templates(self, organization_id: str) -> list[WorkTemplate]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_templates
+            WHERE organization_id = ?
+            ORDER BY name COLLATE NOCASE
+            """,
+            (organization_id,),
+        ).fetchall()
+        return [self._template_from_row(row) for row in rows]
+
+    def get_work_template(self, template_id: str) -> WorkTemplate | None:
+        row = self.connection.execute(
+            "SELECT * FROM work_templates WHERE id = ?", (template_id,)
+        ).fetchone()
+        return self._template_from_row(row) if row else None
+
+    def list_work_template_items(self, template_id: str) -> list[WorkTemplateItem]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_template_items
+            WHERE template_id = ?
+            ORDER BY position
+            """,
+            (template_id,),
+        ).fetchall()
+        return [self._template_item_from_row(row) for row in rows]
+
+    def create_work_template(
+        self,
+        *,
+        organization_id: str,
+        name: str,
+        items: Iterable[object] = (),
+        source: TemplateSource = TemplateSource.MANUAL,
+        source_file_name: str | None = None,
+        source_house_guid: str | None = None,
+        file_type: str | None = None,
+        file_version: str | None = None,
+    ) -> WorkTemplate:
+        template_id = str(uuid.uuid4())
+        timestamp = _now()
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_templates (
+                    id, organization_id, name, source, source_file_name,
+                    source_house_guid, file_type, file_version, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template_id,
+                    organization_id,
+                    name.strip(),
+                    str(source),
+                    _clean(source_file_name),
+                    _clean(source_house_guid),
+                    _clean(file_type),
+                    _clean(file_version),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            for position, item in enumerate(items, start=1):
+                self.connection.execute(
+                    """
+                    INSERT INTO work_template_items (
+                        id, template_id, position, work_code, work_name, work_guid,
+                        price, volume, quantity, cost
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        template_id,
+                        int(getattr(item, "position", position) or position),
+                        _clean(getattr(item, "work_code", None)),
+                        str(getattr(item, "work_name", "")).strip(),
+                        _clean(getattr(item, "work_guid", None)),
+                        _clean(getattr(item, "price", None)),
+                        _clean(getattr(item, "volume", None)),
+                        _clean(getattr(item, "quantity", None)),
+                        _clean(getattr(item, "cost", None)),
+                    ),
+                )
+        result = self.get_work_template(template_id)
+        assert result is not None
+        return result
+
+    def rename_work_template(self, template_id: str, name: str) -> None:
+        self.connection.execute(
+            "UPDATE work_templates SET name = ?, updated_at = ? WHERE id = ?",
+            (name.strip(), _now(), template_id),
+        )
+        self.connection.commit()
+
+    def delete_work_template(self, template_id: str) -> None:
+        self.connection.execute("DELETE FROM work_templates WHERE id = ?", (template_id,))
+        self.connection.commit()
+
+    def list_work_lists(self, house_id: str, base_year: int | None = None) -> list[WorkList]:
+        if base_year is None:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM work_lists
+                WHERE house_id = ?
+                ORDER BY base_year DESC, start_year, start_month, end_year, end_month
+                """,
+                (house_id,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM work_lists
+                WHERE house_id = ? AND base_year = ?
+                ORDER BY start_year, start_month, end_year, end_month
+                """,
+                (house_id, int(base_year)),
+            ).fetchall()
+        return [self._work_list_from_row(row) for row in rows]
+
+    def get_work_list(self, work_list_id: str) -> WorkList | None:
+        row = self.connection.execute(
+            "SELECT * FROM work_lists WHERE id = ?", (work_list_id,)
+        ).fetchone()
+        return self._work_list_from_row(row) if row else None
+
+    def list_work_list_items(self, work_list_id: str) -> list[WorkListItem]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_list_items
+            WHERE work_list_id = ?
+            ORDER BY position
+            """,
+            (work_list_id,),
+        ).fetchall()
+        return [self._work_list_item_from_row(row) for row in rows]
+
+    def create_work_list(
+        self,
+        *,
+        house_id: str,
+        base_year: int,
+        template_id: str | None = None,
+    ) -> WorkList:
+        work_list_id = str(uuid.uuid4())
+        timestamp = _now()
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_lists (
+                    id, house_id, template_id, base_year,
+                    start_year, start_month, end_year, end_month,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, 12, ?, ?, ?)
+                """,
+                (
+                    work_list_id,
+                    house_id,
+                    template_id,
+                    int(base_year),
+                    int(base_year),
+                    int(base_year),
+                    str(WorkListStatus.LOCAL),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            if template_id:
+                rows = self.connection.execute(
+                    """
+                    SELECT * FROM work_template_items
+                    WHERE template_id = ?
+                    ORDER BY position
+                    """,
+                    (template_id,),
+                ).fetchall()
+                for row in rows:
+                    self.connection.execute(
+                        """
+                        INSERT INTO work_list_items (
+                            id, work_list_id, position, work_code, work_name, work_guid,
+                            price, volume, quantity, cost
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            work_list_id,
+                            row["position"],
+                            row["work_code"],
+                            row["work_name"],
+                            row["work_guid"],
+                            row["price"],
+                            row["volume"],
+                            row["quantity"],
+                            row["cost"],
+                        ),
+                    )
+        result = self.get_work_list(work_list_id)
+        assert result is not None
+        return result
+
+    def update_work_list_period(
+        self,
+        work_list_id: str,
+        *,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+    ) -> None:
+        self.connection.execute(
+            """
+            UPDATE work_lists
+            SET start_year = ?, start_month = ?, end_year = ?, end_month = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                int(start_year),
+                int(start_month),
+                int(end_year),
+                int(end_month),
+                _now(),
+                work_list_id,
+            ),
+        )
+        self.connection.commit()
+
+    def update_work_list_item(self, item_id: str, **fields: object) -> None:
+        allowed = {"work_code", "work_name", "work_guid", "price", "volume", "quantity", "cost"}
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if not updates:
+            return
+        clause = ", ".join(f"{key} = ?" for key in updates)
+        values = [_clean(updates[key]) for key in updates]
+        values.append(item_id)
+        self.connection.execute(
+            f"UPDATE work_list_items SET {clause} WHERE id = ?", values
+        )
+        self.connection.commit()
+
+    def delete_work_list(self, work_list_id: str) -> None:
+        self.connection.execute("DELETE FROM work_lists WHERE id = ?", (work_list_id,))
+        self.connection.commit()
+
 
 
 def _clean(value: object) -> str | None:
