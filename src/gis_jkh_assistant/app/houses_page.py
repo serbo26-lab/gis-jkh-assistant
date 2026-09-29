@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -74,14 +75,17 @@ class HousesPage(QWidget):
 
         toolbar = QFrame()
         toolbar.setObjectName("Card")
-        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout = QVBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(12, 10, 12, 10)
+        toolbar_layout.setSpacing(8)
 
-        toolbar_layout.addWidget(QLabel("Управляющая организация"))
+        organization_row = QHBoxLayout()
+        organization_row.addWidget(QLabel("Управляющая организация"))
         self.organization_combo = QComboBox()
-        self.organization_combo.setMinimumWidth(300)
+        self.organization_combo.setMinimumWidth(180)
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
-        toolbar_layout.addWidget(self.organization_combo, 1)
+        organization_row.addWidget(self.organization_combo, 1)
+        toolbar_layout.addLayout(organization_row)
 
         self.add_org_button = QPushButton("Добавить УО")
         self.edit_org_button = QPushButton("Изменить УО")
@@ -96,6 +100,8 @@ class HousesPage(QWidget):
         self.import_button.clicked.connect(self._import_file)
         self.add_house_button.clicked.connect(self._add_house)
 
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(8)
         for button in (
             self.add_org_button,
             self.edit_org_button,
@@ -103,11 +109,14 @@ class HousesPage(QWidget):
             self.import_button,
             self.add_house_button,
         ):
-            toolbar_layout.addWidget(button)
+            actions_row.addWidget(button)
+        actions_row.addStretch(1)
+        toolbar_layout.addLayout(actions_row)
         root.addWidget(toolbar)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
+        self.splitter = splitter
         root.addWidget(splitter, 1)
 
         left = QFrame()
@@ -128,6 +137,8 @@ class HousesPage(QWidget):
         left_layout.addLayout(count_row)
 
         self.house_list = QListWidget()
+        self.house_list.setWordWrap(True)
+        self.house_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.house_list.currentItemChanged.connect(self._house_selection_changed)
         left_layout.addWidget(self.house_list, 1)
 
@@ -233,6 +244,17 @@ class HousesPage(QWidget):
             lambda value: self._queue_change("non_residential_premises_count", value)
         )
         self.card_org_combo.currentIndexChanged.connect(self._queue_organization_change)
+
+    def set_compact_mode(self, compact: bool) -> None:
+        """Adjust the page density without allowing controls to collapse into unreadable shapes."""
+        if compact:
+            self.splitter.setSizes([300, 620])
+            self.card_layout.setContentsMargins(12, 12, 12, 14)
+            self.card_layout.setSpacing(10)
+        else:
+            self.splitter.setSizes([400, 820])
+            self.card_layout.setContentsMargins(18, 16, 18, 18)
+            self.card_layout.setSpacing(14)
 
     def refresh_organizations(self, select_id: str | None = None) -> None:
         current = select_id or self.organization_combo.currentData()
@@ -407,7 +429,7 @@ class HousesPage(QWidget):
 
     def _add_organization(self) -> None:
         dialog = OrganizationDialog(self)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
             organization = self.repository.create_organization(**dialog.values())
@@ -428,7 +450,7 @@ class HousesPage(QWidget):
         if not organization:
             return
         dialog = OrganizationDialog(self, organization)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
             self.repository.update_organization(organization_id, **dialog.values())
@@ -469,7 +491,7 @@ class HousesPage(QWidget):
             )
             return
         dialog = HouseDialog(self)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
             house = self.repository.create_house(
