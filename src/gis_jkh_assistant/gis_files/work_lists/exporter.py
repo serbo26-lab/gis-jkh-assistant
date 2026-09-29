@@ -99,13 +99,14 @@ def export_work_list_xlsx(
         )
 
         rows = []
-        for item in prepared_items:
-            work_guid = _text(getattr(item, "work_guid", None))
+        for prepared in prepared_items:
+            source_item = prepared[0]
+            work_guid = _text(getattr(source_item, "work_guid", None))
             if work_guid and work_guid in labels_by_guid:
                 label = labels_by_guid[work_guid]
             else:
-                code = _text(getattr(item, "work_code", None))
-                name = _text(getattr(item, "work_name", None))
+                code = _text(getattr(source_item, "work_code", None))
+                name = _text(getattr(source_item, "work_name", None))
                 if not name:
                     raise WorkListExportError("У строки перечня отсутствует наименование работы.")
                 label = f"{code}.{name}" if code else name
@@ -113,7 +114,7 @@ def export_work_list_xlsx(
                     raise WorkListExportError(
                         f"Работа «{label}» отсутствует в справочнике исходного шаблона."
                     )
-            rows.append((label, *item[1:]))
+            rows.append((label, *prepared[1:]))
 
         modified: dict[str, bytes] = {
             main_path: _patch_main_sheet(src.read(main_path), rows),
