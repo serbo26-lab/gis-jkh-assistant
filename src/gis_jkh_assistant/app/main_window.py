@@ -19,6 +19,7 @@ from gis_jkh_assistant.database import Repository
 
 from .houses_page import HousesPage
 from .styles import COMPACT_WINDOW_STYLESHEET
+from .work_lists_page import WorkListsPage
 
 
 class MainWindow(QMainWindow):
@@ -55,8 +56,10 @@ class MainWindow(QMainWindow):
 
         self.pages = QStackedWidget()
         self.houses_page = HousesPage(repository)
+        self.work_lists_page = WorkListsPage(repository)
         self.pages.addWidget(self.houses_page)
-        for title in ("Перечни работ и услуг", "Планирование", "Выполнение", "Настройки"):
+        self.pages.addWidget(self.work_lists_page)
+        for title in ("Планирование", "Выполнение", "Настройки"):
             self.pages.addWidget(_placeholder(title))
         layout.addWidget(self.pages, 1)
 
@@ -69,11 +72,13 @@ class MainWindow(QMainWindow):
             self._compact_mode = compact
             self.sidebar.setFixedWidth(180 if compact else 220)
             self.houses_page.set_compact_mode(compact)
+            self.work_lists_page.set_compact_mode(compact)
             self.setStyleSheet(COMPACT_WINDOW_STYLESHEET if compact else "")
         super().resizeEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.houses_page.flush_pending_changes()
+        self.work_lists_page.flush_pending_changes()
         self.repository.close()
         super().closeEvent(event)
 
