@@ -27,7 +27,7 @@ jobs:
         run: pytest -q
 
       - name: Build executable
-        run: pyinstaller --clean --noconfirm --onefile --paths src --name GIS-JKH-Assistant src/gis_jkh_assistant/__main__.py
+        run: pyinstaller --clean --noconfirm --onefile --windowed --paths src --name GIS-JKH-Assistant src/gis_jkh_assistant/__main__.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
