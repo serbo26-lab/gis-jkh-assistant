@@ -271,8 +271,9 @@ class WorkListsPage(QWidget):
 
         self.work_lists.blockSignals(True)
         self.work_lists.clear()
+        selected_row = -1
         lists = self.repository.list_work_lists(house_id, year) if house_id else []
-        for work_list in lists:
+        for row, work_list in enumerate(lists):
             item = QListWidgetItem(
                 f"{work_list.period_label}\n"
                 f"{'Локальный' if work_list.status.value == 'local' else work_list.status.value}"
@@ -280,13 +281,16 @@ class WorkListsPage(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, work_list.id)
             self.work_lists.addItem(item)
             if work_list.id == selected_id:
-                self.work_lists.setCurrentItem(item)
+                selected_row = row
         self.list_count.setText(str(len(lists)))
         self.work_lists.blockSignals(False)
 
-        if self.work_lists.currentItem() is None and self.work_lists.count():
+        if selected_row >= 0:
+            self.work_lists.setCurrentRow(selected_row)
+            self._load_work_list(selected_id)
+        elif self.work_lists.count():
             self.work_lists.setCurrentRow(0)
-        elif not self.work_lists.count():
+        else:
             self._load_work_list(None)
 
     def _create_work_list(self) -> None:
