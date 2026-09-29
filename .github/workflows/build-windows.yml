@@ -1,5 +1,9 @@
 name: Build Windows
 
+concurrency:
+  group: windows-dev-build
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   push:
