@@ -87,6 +87,7 @@ class Repository:
                 name TEXT NOT NULL,
                 source TEXT NOT NULL DEFAULT 'manual',
                 source_file_name TEXT,
+                source_file_path TEXT,
                 source_house_guid TEXT,
                 file_type TEXT,
                 file_version TEXT,
@@ -160,7 +161,18 @@ class Repository:
                 ON work_list_items(work_list_id, position);
             """
         )
+        self._ensure_column("work_templates", "source_file_path", "TEXT")
         self.connection.commit()
+
+    def _ensure_column(self, table: str, column: str, declaration: str) -> None:
+        columns = {
+            row["name"]
+            for row in self.connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            self.connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+            )
 
     @staticmethod
     def _org_from_row(row: sqlite3.Row) -> ManagementOrganization:
@@ -449,6 +461,7 @@ class Repository:
         items: Iterable[object] = (),
         source: TemplateSource = TemplateSource.MANUAL,
         source_file_name: str | None = None,
+        source_file_path: str | None = None,
         source_house_guid: str | None = None,
         file_type: str | None = None,
         file_version: str | None = None,
@@ -459,9 +472,9 @@ class Repository:
             self.connection.execute(
                 """
                 INSERT INTO work_templates (
-                    id, organization_id, name, source, source_file_name,
+                    id, organization_id, name, source, source_file_name, source_file_path,
                     source_house_guid, file_type, file_version, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     template_id,
@@ -469,6 +482,7 @@ class Repository:
                     name.strip(),
                     str(source),
                     _clean(source_file_name),
+                    _clean(source_file_path),
                     _clean(source_house_guid),
                     _clean(file_type),
                     _clean(file_version),
@@ -500,6 +514,17 @@ class Repository:
         result = self.get_work_template(template_id)
         assert result is not None
         return result
+
+    def set_work_template_source_path(self, template_id: str, source_file_path: str) -> None:
+        self.connection.execute(
+            """
+            UPDATE work_templates
+            SET source_file_path = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (source_file_path, _now(), template_id),
+        )
+        self.connection.commit()
 
     def rename_work_template(self, template_id: str, name: str) -> None:
         self.connection.execute(
