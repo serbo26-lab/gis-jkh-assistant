@@ -97,7 +97,7 @@ def _read_work_lookup(sheet: Any) -> dict[str, str | None]:
 
 def _read_visible_items(sheet: Any, lookup: dict[str, str | None]) -> list[ImportedWorkItem]:
     result: list[ImportedWorkItem] = []
-    for row_number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+    for row in sheet.iter_rows(min_row=2, values_only=True):
         values = list(row) + [None] * 6
         label = _text(values[0])
         if not label:
