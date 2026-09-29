@@ -43,6 +43,34 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     selection-background-color: #cfe8ff;
     selection-color: #111111;
 }
+QComboBox {
+    padding-right: 34px;
+}
+QComboBox::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 30px;
+    background: #fbfbfb;
+    border: none;
+    border-left: 1px solid #dedede;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+}
+QComboBox::drop-down:hover {
+    background: #f1f1f1;
+}
+QComboBox::drop-down:pressed {
+    background: #e8e8e8;
+}
+QComboBox QAbstractItemView {
+    background: #ffffff;
+    color: #1f1f1f;
+    border: 1px solid #d0d0d0;
+    outline: 0;
+    padding: 4px;
+    selection-background-color: #e7f2fb;
+    selection-color: #1f1f1f;
+}
 QSpinBox {
     background: #ffffff;
     border: 1px solid #cfcfcf;
