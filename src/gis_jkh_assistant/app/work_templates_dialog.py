@@ -41,8 +41,9 @@ class WorkTemplatesDialog(QDialog):
         layout.addWidget(title)
 
         hint = QLabel(
-            "Шаблон хранится в рамках выбранной УО. Его можно импортировать из XLSX ГИС ЖКХ, "
-            "переименовать и затем использовать для разных домов."
+            "Здесь хранятся пользовательские шаблоны состава перечня: набор работ и "
+            "при необходимости исходные значения. Это не технический шаблон экспорта "
+            "ГИС ЖКХ — он загружается отдельно на вкладке «Перечни работ и услуг»."
         )
         hint.setWordWrap(True)
         hint.setObjectName("Muted")
@@ -53,7 +54,7 @@ class WorkTemplatesDialog(QDialog):
         layout.addWidget(self.list_widget, 1)
 
         buttons = QHBoxLayout()
-        self.import_button = QPushButton("Импорт из Excel")
+        self.import_button = QPushButton("Импортировать состав из Excel")
         self.import_button.setObjectName("PrimaryButton")
         self.empty_button = QPushButton("Пустой шаблон")
         self.rename_button = QPushButton("Переименовать")
