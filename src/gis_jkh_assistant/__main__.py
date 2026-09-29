@@ -1,13 +1,27 @@
-"""Development entry point."""
+"""Application entry point."""
 
-from gis_jkh_assistant import __version__
+from __future__ import annotations
+
+import sys
+
+from PySide6.QtWidgets import QApplication
+
+from gis_jkh_assistant.app.main_window import MainWindow
+from gis_jkh_assistant.app.styles import APP_STYLESHEET
+from gis_jkh_assistant.database.paths import database_path
+from gis_jkh_assistant.database.repository import Repository
 
 
-def main() -> None:
-    """Run the current development entry point."""
-    print(f"GIS ЖКХ Assistant {__version__}")
-    print("Следующий модуль: импорт объектов жилищного фонда.")
+def main() -> int:
+    app = QApplication(sys.argv)
+    app.setApplicationName("GIS ЖКХ Assistant")
+    app.setStyleSheet(APP_STYLESHEET)
+
+    repository = Repository(database_path())
+    window = MainWindow(repository)
+    window.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
