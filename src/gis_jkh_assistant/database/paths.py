@@ -27,3 +27,9 @@ def template_files_dir() -> Path:
     path = user_data_dir() / "templates"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def gis_export_template_dir() -> Path:
+    path = user_data_dir() / "gis-export-template"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
