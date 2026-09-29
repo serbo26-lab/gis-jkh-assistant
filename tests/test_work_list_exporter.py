@@ -7,6 +7,11 @@ from gis_jkh_assistant.gis_files.work_lists import (
     WorkListExportError,
     export_work_list_xlsx,
 )
+from gis_jkh_assistant.gis_files.work_lists.exporter import (
+    _patch_main_sheet,
+    _patch_options_sheet,
+    _replace_shared_string,
+)
 
 
 @dataclass
@@ -133,3 +138,64 @@ def test_export_rejects_quantity_without_a_complete_mode(tmp_path) -> None:
                 )
             ],
         )
+
+
+def test_official_shared_string_representation_is_preserved() -> None:
+    from xml.etree import ElementTree as ET
+
+    main_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    worksheet = (
+        f'<worksheet xmlns="{main_ns}">'
+        '<dimension ref="A1:F1"/>'
+        '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>'
+        '</worksheet>'
+    ).encode()
+
+    patched_main = _patch_main_sheet(
+        worksheet,
+        [("12.Услуга по управлению", "", "", "1", "1")],
+        {"12.Услуга по управлению": 18},
+    )
+    root = ET.fromstring(patched_main)
+    a2 = root.find(f".//{{{main_ns}}}c[@r='A2']")
+    assert a2 is not None
+    assert a2.attrib["t"] == "s"
+    assert a2.find(f"{{{main_ns}}}v").text == "18"
+
+    shared_root = ET.fromstring(
+        (
+            f'<sst xmlns="{main_ns}" count="2" uniqueCount="2">'
+            "<si><t>header</t></si>"
+            "<si><t>old-house-guid</t></si>"
+            "</sst>"
+        ).encode()
+    )
+    _replace_shared_string(shared_root, 1, "new-house-guid")
+    values = [
+        "".join(node.text or "" for node in item.iter(f"{{{main_ns}}}t"))
+        for item in shared_root.findall(f"{{{main_ns}}}si")
+    ]
+    assert values == ["header", "new-house-guid"]
+
+    options = (
+        f'<worksheet xmlns="{main_ns}"><sheetData>'
+        '<row r="1"><c r="B1" t="s"><v>1</v></c></row>'
+        '<row r="2"><c r="B2" t="n"><v>2020</v></c></row>'
+        '<row r="3"><c r="B3" t="n"><v>1</v></c></row>'
+        '<row r="4"><c r="B4" t="n"><v>2020</v></c></row>'
+        '<row r="5"><c r="B5" t="n"><v>12</v></c></row>'
+        "</sheetData></worksheet>"
+    ).encode()
+    patched_options = _patch_options_sheet(
+        options,
+        house_guid=None,
+        start_year=2026,
+        start_month=5,
+        end_year=2026,
+        end_month=12,
+    )
+    root = ET.fromstring(patched_options)
+    b1 = root.find(f".//{{{main_ns}}}c[@r='B1']")
+    assert b1 is not None
+    assert b1.attrib["t"] == "s"
+    assert b1.find(f"{{{main_ns}}}v").text == "1"
