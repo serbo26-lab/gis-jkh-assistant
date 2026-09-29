@@ -61,6 +61,12 @@ _MONTHS = (
 
 _ORIGINAL_VALUE_ROLE = Qt.ItemDataRole.UserRole + 1
 
+_EXPORT_TEMPLATE_PATH_KEY = "gis_work_list_export_template_path"
+_EXPORT_TEMPLATE_NAME_KEY = "gis_work_list_export_template_name"
+_EXPORT_TEMPLATE_TYPE_KEY = "gis_work_list_export_template_type"
+_EXPORT_TEMPLATE_VERSION_KEY = "gis_work_list_export_template_version"
+_EXPORT_TEMPLATE_UPDATED_KEY = "gis_work_list_export_template_updated_at"
+
 
 class WorkListsPage(QWidget):
     """Local work-list registry grouped by organization and house."""
@@ -670,6 +676,117 @@ class WorkListsPage(QWidget):
                         "Очистите цену и объем, чтобы вводить стоимость."
                     )
 
+    def _refresh_export_template_status(self) -> None:
+        path_text = self.repository.get_setting(_EXPORT_TEMPLATE_PATH_KEY)
+        source_name = self.repository.get_setting(_EXPORT_TEMPLATE_NAME_KEY)
+        file_type = self.repository.get_setting(_EXPORT_TEMPLATE_TYPE_KEY)
+        version = self.repository.get_setting(_EXPORT_TEMPLATE_VERSION_KEY)
+
+        if path_text and Path(path_text).exists():
+            details = [source_name or Path(path_text).name]
+            if file_type:
+                details.append(file_type)
+            if version:
+                details.append(f"v{version}")
+            self.export_template_status.setText(
+                "Шаблон экспорта ГИС ЖКХ: " + " • ".join(details)
+            )
+            return
+
+        self.export_template_status.setText(
+            "Шаблон экспорта ГИС ЖКХ: не загружен. "
+            "Он нужен один раз как техническая основа для формирования XLSX."
+        )
+
+    def _load_or_update_export_template(self) -> None:
+        message = QMessageBox(self)
+        message.setWindowTitle("Шаблон экспорта ГИС ЖКХ")
+        message.setIcon(QMessageBox.Icon.Information)
+        message.setText("Загрузить или обновить технический шаблон экспорта?")
+        message.setInformativeText(
+            "Скачайте официальный XLSX в личном кабинете ГИС ЖКХ: "
+            "«Добавление перечня оказываемых услуг, выполняемых работ…» → "
+            "выберите любой дом → «Выгрузить шаблон».\n\n"
+            "Достаточно одного такого файла. Программа использует его только как "
+            "техническую основу, а GUID дома, период и строки перечня подставляет сама. "
+            "Если формат шаблона в ГИС ЖКХ изменится, нажмите эту кнопку снова и выберите "
+            "новый файл."
+        )
+        message.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        if message.exec() != QMessageBox.StandardButton.Ok:
+            return
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите шаблон экспорта, выгруженный из ГИС ЖКХ",
+            "",
+            "Excel (*.xlsx *.xlsm)",
+        )
+        if not filename:
+            return
+
+        source = Path(filename)
+        try:
+            imported = parse_work_template(source)
+        except (WorkTemplateImportError, OSError, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Файл не распознан",
+                "Выбранный файл не похож на шаблон экспорта перечня ГИС ЖКХ.\n\n"
+                + str(exc),
+            )
+            return
+
+        suffix = source.suffix.lower()
+        if suffix not in {".xlsx", ".xlsm"}:
+            suffix = ".xlsx"
+
+        directory = gis_export_template_dir()
+        stored_path = directory / f"work-list-export-template{suffix}"
+
+        try:
+            for old_file in directory.glob("work-list-export-template.*"):
+                if old_file != stored_path:
+                    old_file.unlink(missing_ok=True)
+            shutil.copy2(source, stored_path)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Не удалось сохранить шаблон",
+                str(exc),
+            )
+            return
+
+        self.repository.set_setting(_EXPORT_TEMPLATE_PATH_KEY, str(stored_path))
+        self.repository.set_setting(_EXPORT_TEMPLATE_NAME_KEY, source.name)
+        self.repository.set_setting(_EXPORT_TEMPLATE_TYPE_KEY, imported.file_type)
+        self.repository.set_setting(_EXPORT_TEMPLATE_VERSION_KEY, imported.version)
+        self.repository.set_setting(
+            _EXPORT_TEMPLATE_UPDATED_KEY,
+            datetime.now().isoformat(timespec="seconds"),
+        )
+        self._refresh_export_template_status()
+
+        details = []
+        if imported.file_type:
+            details.append(f"TYPE: {imported.file_type}")
+        if imported.version:
+            details.append(f"VERSION: {imported.version}")
+
+        text = "Шаблон экспорта сохранен и будет использоваться при формировании XLSX."
+        if details:
+            text += "\n\n" + "\n".join(details)
+        QMessageBox.information(self, "Шаблон экспорта обновлен", text)
+
+    def _export_template_path(self) -> Path | None:
+        path_text = self.repository.get_setting(_EXPORT_TEMPLATE_PATH_KEY)
+        if not path_text:
+            return None
+        path = Path(path_text)
+        return path if path.exists() else None
+
     def _export_current_work_list(self) -> None:
         """Build an XLSX from the currently selected local work list."""
 
@@ -682,13 +799,29 @@ class WorkListsPage(QWidget):
             )
             return
 
+        source_path = self._export_template_path()
+        if source_path is None:
+            QMessageBox.information(
+                self,
+                "Не загружен шаблон экспорта",
+                "Сначала нажмите «Загрузить / обновить шаблон экспорта» и выберите "
+                "официальный XLSX, выгруженный из ГИС ЖКХ. Это отдельная разовая "
+                "настройка и она не выполняется внутри формирования файла.",
+            )
+            self._refresh_export_template_status()
+            return
+
         work_list = self.repository.get_work_list(self._current_work_list_id)
         if not work_list:
             return
 
         house = self.repository.get_house(work_list.house_id)
         if not house:
-            QMessageBox.critical(self, "Дом не найден", "Карточка дома отсутствует в локальной базе.")
+            QMessageBox.critical(
+                self,
+                "Дом не найден",
+                "Карточка дома отсутствует в локальной базе.",
+            )
             return
         if not house.house_object_guid:
             QMessageBox.warning(
@@ -696,24 +829,6 @@ class WorkListsPage(QWidget):
                 "Нет GUID дома",
                 "Для формирования файла нужен GUID объекта жилищного фонда.",
             )
-            return
-
-        template = (
-            self.repository.get_work_template(work_list.template_id)
-            if work_list.template_id
-            else None
-        )
-        if not template:
-            QMessageBox.information(
-                self,
-                "Нет исходного шаблона",
-                "Этот перечень создан без пользовательского шаблона. "
-                "Для формирования файла ГИС ЖКХ создайте перечень на основе импортированного XLSX-шаблона.",
-            )
-            return
-
-        source_path = self._ensure_template_source_file(template)
-        if source_path is None:
             return
 
         extension = source_path.suffix.lower()
@@ -767,47 +882,6 @@ class WorkListsPage(QWidget):
             f"Строк выгружено: {result.exported_rows}\n"
             f"{result.output_path}",
         )
-
-    def _ensure_template_source_file(self, template) -> Path | None:
-        """Return the preserved original GIS XLSX, asking once for old templates."""
-
-        if template.source_file_path:
-            source_path = Path(template.source_file_path)
-            if source_path.exists():
-                return source_path
-
-        filename, _ = QFileDialog.getOpenFileName(
-            self,
-            f"Укажите исходный XLSX для шаблона «{template.name}»",
-            "",
-            "Excel (*.xlsx *.xlsm)",
-        )
-        if not filename:
-            return None
-
-        try:
-            parse_work_template(Path(filename))
-        except (WorkTemplateImportError, OSError, ValueError) as exc:
-            QMessageBox.critical(
-                self,
-                "Это не шаблон перечня ГИС ЖКХ",
-                str(exc),
-            )
-            return None
-
-        suffix = Path(filename).suffix.lower() or ".xlsx"
-        stored_path = template_files_dir() / f"{template.id}{suffix}"
-        try:
-            shutil.copy2(filename, stored_path)
-            self.repository.set_work_template_source_path(template.id, str(stored_path))
-        except OSError as exc:
-            QMessageBox.critical(
-                self,
-                "Не удалось сохранить исходный шаблон",
-                str(exc),
-            )
-            return None
-        return stored_path
 
     def _manage_templates(self) -> None:
         self._save_period()
