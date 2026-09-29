@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFormLayout,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 from gis_jkh_assistant.database.repository import Repository
 
 from .widgets import SafeComboBox, SafeSpinBox
+from .work_row_rules import editable_columns_for_mode, infer_work_row_mode
 from .work_templates_dialog import WorkTemplatesDialog
 
 
@@ -196,6 +198,15 @@ class WorkListsPage(QWidget):
         items_title = QLabel("Работы и услуги")
         items_title.setObjectName("SectionTitle")
         right_layout.addWidget(items_title)
+
+        input_hint = QLabel(
+            "Для каждой строки используется один из двух вариантов: "
+            "«Цена + Объем + Кол-во» или «Кол-во + Стоимость». "
+            "Недоступные поля блокируются автоматически."
+        )
+        input_hint.setWordWrap(True)
+        input_hint.setObjectName("Muted")
+        right_layout.addWidget(input_hint)
 
         self.items_table = QTableWidget(0, 5)
         self.items_table.setHorizontalHeaderLabels(
@@ -450,6 +461,8 @@ class WorkListsPage(QWidget):
                 cell.setData(_ORIGINAL_VALUE_ROLE, value or "")
                 self.items_table.setItem(row, column, cell)
 
+            self._apply_row_input_mode(row)
+
         self.items_table.blockSignals(False)
 
     def _current_period(self) -> tuple[int, int, int, int]:
@@ -555,7 +568,55 @@ class WorkListsPage(QWidget):
             **{field: current or None},
         )
         table_item.setData(_ORIGINAL_VALUE_ROLE, current)
+
+        self.items_table.blockSignals(True)
+        try:
+            self._apply_row_input_mode(row)
+        finally:
+            self.items_table.blockSignals(False)
+
         self.save_status.setText("Сохранено")
+
+    def _apply_row_input_mode(self, row: int) -> None:
+        """Mirror the mutually exclusive input schemes used by GIS ЖКХ."""
+
+        price_item = self.items_table.item(row, 1)
+        volume_item = self.items_table.item(row, 2)
+        cost_item = self.items_table.item(row, 4)
+        if not price_item or not volume_item or not cost_item:
+            return
+
+        mode = infer_work_row_mode(
+            price=price_item.text(),
+            volume=volume_item.text(),
+            cost=cost_item.text(),
+        )
+        editable_columns = editable_columns_for_mode(mode)
+
+        for column in range(5):
+            item = self.items_table.item(row, column)
+            if item is None:
+                continue
+
+            flags = item.flags()
+            if column in editable_columns:
+                item.setFlags(flags | Qt.ItemFlag.ItemIsEditable)
+                item.setBackground(QBrush())
+                if column != 0:
+                    item.setToolTip("")
+            else:
+                item.setFlags(flags & ~Qt.ItemFlag.ItemIsEditable)
+                item.setBackground(QBrush(QColor("#f0f1f3")))
+                if column in (1, 2):
+                    item.setToolTip(
+                        "Выбран вариант «Кол-во + Стоимость». "
+                        "Очистите стоимость, чтобы снова вводить цену и объем."
+                    )
+                elif column == 4:
+                    item.setToolTip(
+                        "Выбран вариант «Цена + Объем + Кол-во». "
+                        "Очистите цену и объем, чтобы вводить стоимость."
+                    )
 
     def _manage_templates(self) -> None:
         self._save_period()
