@@ -518,7 +518,7 @@ class Repository:
                 """
                 SELECT * FROM work_lists
                 WHERE house_id = ?
-                ORDER BY base_year DESC, start_year, start_month, end_year, end_month
+                ORDER BY start_year, start_month, end_year, end_month, created_at
                 """,
                 (house_id,),
             ).fetchall()
@@ -527,7 +527,7 @@ class Repository:
                 """
                 SELECT * FROM work_lists
                 WHERE house_id = ? AND base_year = ?
-                ORDER BY start_year, start_month, end_year, end_month
+                ORDER BY start_year, start_month, end_year, end_month, created_at
                 """,
                 (house_id, int(base_year)),
             ).fetchall()
@@ -610,6 +610,73 @@ class Repository:
                             row["cost"],
                         ),
                     )
+        result = self.get_work_list(work_list_id)
+        assert result is not None
+        return result
+
+    def clone_work_list(self, source_id: str, target_base_year: int) -> WorkList:
+        source = self.get_work_list(source_id)
+        if source is None:
+            raise ValueError("Исходный перечень не найден.")
+
+        target_base_year = int(target_base_year)
+        year_shift = target_base_year - source.base_year
+        work_list_id = str(uuid.uuid4())
+        timestamp = _now()
+
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_lists (
+                    id, house_id, template_id, base_year,
+                    start_year, start_month, end_year, end_month,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    work_list_id,
+                    source.house_id,
+                    source.template_id,
+                    target_base_year,
+                    source.start_year + year_shift,
+                    source.start_month,
+                    source.end_year + year_shift,
+                    source.end_month,
+                    str(WorkListStatus.LOCAL),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            rows = self.connection.execute(
+                """
+                SELECT * FROM work_list_items
+                WHERE work_list_id = ?
+                ORDER BY position
+                """,
+                (source_id,),
+            ).fetchall()
+            for row in rows:
+                self.connection.execute(
+                    """
+                    INSERT INTO work_list_items (
+                        id, work_list_id, position, work_code, work_name, work_guid,
+                        price, volume, quantity, cost
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        work_list_id,
+                        row["position"],
+                        row["work_code"],
+                        row["work_name"],
+                        row["work_guid"],
+                        row["price"],
+                        row["volume"],
+                        row["quantity"],
+                        row["cost"],
+                    ),
+                )
+
         result = self.get_work_list(work_list_id)
         assert result is not None
         return result
