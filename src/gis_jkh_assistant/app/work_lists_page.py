@@ -7,7 +7,6 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
