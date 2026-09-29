@@ -46,31 +46,25 @@ QSpinBox {
     background: #ffffff;
     border: 1px solid #cfcfcf;
     border-radius: 6px;
-    padding: 4px 30px 4px 8px;
+    padding: 4px 8px;
     min-height: 26px;
     selection-background-color: #cfe8ff;
     selection-color: #111111;
 }
-QSpinBox::up-button {
-    subcontrol-origin: border;
-    subcontrol-position: top right;
-    width: 24px;
+QToolButton#SpinPlusButton, QToolButton#SpinMinusButton {
+    background: #fafafa;
+    border: none;
     border-left: 1px solid #d4d4d4;
-    border-bottom: 1px solid #e2e2e2;
-    border-top-right-radius: 5px;
+    border-radius: 0px;
+    padding: 0px;
+    font-size: 11pt;
+    font-weight: 600;
 }
-QSpinBox::down-button {
-    subcontrol-origin: border;
-    subcontrol-position: bottom right;
-    width: 24px;
-    border-left: 1px solid #d4d4d4;
-    border-bottom-right-radius: 5px;
+QToolButton#SpinPlusButton:hover, QToolButton#SpinMinusButton:hover {
+    background: #eeeeee;
 }
-QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-    background: #f0f0f0;
-}
-QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {
-    background: #e5e5e5;
+QToolButton#SpinPlusButton:pressed, QToolButton#SpinMinusButton:pressed {
+    background: #e2e2e2;
 }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {
     border: 1px solid #0067c0;
@@ -157,11 +151,8 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     min-height: 20px;
 }
 QSpinBox {
-    padding: 3px 28px 3px 6px;
+    padding: 3px 6px;
     min-height: 24px;
-}
-QSpinBox::up-button, QSpinBox::down-button {
-    width: 22px;
 }
 QListWidget::item {
     padding: 6px;
