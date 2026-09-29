@@ -16,6 +16,7 @@ class SafeSpinBox(QSpinBox):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.setMinimumWidth(112)
 
         self._plus_button = QToolButton(self)
         self._plus_button.setText("+")
