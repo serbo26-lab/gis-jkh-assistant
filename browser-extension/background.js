@@ -2,6 +2,7 @@ const LOCAL_BASE = "http://127.0.0.1:8765/api/integration";
 const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 8 * 60 * 1000;
+const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -139,6 +140,20 @@ async function pollLoop() {
 }
 
 pollLoop();
+
+chrome.alarms.create(KEEP_ALIVE_ALARM, {
+  delayInMinutes: 8,
+  periodInMinutes: 8
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== KEEP_ALIVE_ALARM) return;
+
+  const connected = await hello();
+  if (connected) {
+    await maybeKeepSessionAlive();
+  }
+});
 
 
 async function runGisCommand(command) {
