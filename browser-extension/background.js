@@ -358,6 +358,46 @@ async function runGisCommand(command) {
       return response?.guid || null;
     }
 
+    function compactReference(value) {
+      if (!value) return null;
+      return {
+        code: value.code ?? null,
+        guid: value.guid ?? null
+      };
+    }
+
+    function approvalPayloadFromDraft(draft) {
+      // The search API returns a rich WorkList object. The approve endpoint accepts
+      // WorkListAlter and rejects extra fields such as houseTypeCode, summary,
+      // organizationName and the expanded directory objects. This shape mirrors
+      // the payload sent by the GIS ЖКХ web interface.
+      return {
+        guid: draft.guid ?? null,
+        houseGuid: draft.houseGuid ?? null,
+        period: draft.period ?? null,
+        attachmentList: Array.isArray(draft.attachmentList)
+          ? draft.attachmentList
+          : [],
+        lastUpdateDate: draft.lastUpdateDate ?? null,
+        createDate: draft.createDate ?? null,
+        workListItems: (draft.workListItems || []).map((item) => ({
+          work: compactReference(item.work),
+          count: item.count ?? null,
+          price: item.price ?? null,
+          amount: item.amount ?? null,
+          totalCost: item.totalCost ?? null,
+          costPerMeter: item.costPerMeter ?? null,
+          sortIndex: item.sortIndex ?? null,
+          // The GIS web form sends an empty display unit here and the OKEI
+          // reference separately.
+          unit: "",
+          workType: compactReference(item.workType),
+          okei: compactReference(item.okei),
+          isPlannedWork: item.isPlannedWork ?? null
+        }))
+      };
+    }
+
     const payload = command?.payload || {};
 
     if (command.type === "ping") {
@@ -418,10 +458,12 @@ async function runGisCommand(command) {
         );
       }
 
+      const approvalWorkList = approvalPayloadFromDraft(draft);
+
       await request(
         "PUT",
         "/workplanning/api/rest/services/approve/worklist",
-        { workList: draft },
+        { workList: approvalWorkList },
         STATE_WORKPLANNING
       );
 
