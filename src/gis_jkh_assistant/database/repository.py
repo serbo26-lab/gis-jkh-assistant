@@ -887,6 +887,17 @@ class Repository:
         )
         self.connection.commit()
 
+    def clear_work_list_gis_project_guid(self, work_list_id: str) -> None:
+        self.connection.execute(
+            """
+            UPDATE work_lists
+            SET gis_work_list_guid = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (_now(), work_list_id),
+        )
+        self.connection.commit()
+
     def clear_work_list_gis_error(self, work_list_id: str) -> None:
         self.connection.execute(
             """
