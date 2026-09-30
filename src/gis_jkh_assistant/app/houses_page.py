@@ -437,7 +437,7 @@ class HousesPage(QWidget):
             self.tariffs_table.setItem(
                 row,
                 1,
-                QTableWidgetItem(f"{tariff.end_month:02d}.{tariff.end_year}"),
+                QTableWidgetItem(tariff.effective_to_label),
             )
             self.tariffs_table.setItem(row, 2, QTableWidgetItem(tariff.amount))
 
