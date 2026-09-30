@@ -8,6 +8,7 @@ from .lazy_distribution import (
     calculate_distribution,
     period_months,
     preview_cost,
+    validate_quantity,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "calculate_distribution",
     "period_months",
     "preview_cost",
+    "validate_quantity",
 ]
