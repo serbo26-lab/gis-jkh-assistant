@@ -556,18 +556,29 @@ class Repository:
         amount: str,
         start_year: int,
         start_month: int,
-        end_year: int,
-        end_month: int,
+        end_year: int | None = None,
+        end_month: int | None = None,
     ) -> None:
-        _validate_period(start_year, start_month, end_year, end_month)
+        del end_year, end_month
+        _validate_month_point(start_year, start_month)
+
+        existing = self.get_house_tariff(tariff_id)
+        if existing is None:
+            raise ValueError("Тариф не найден.")
+
+        self._assert_unique_tariff_start(
+            existing.house_id,
+            start_year=start_year,
+            start_month=start_month,
+            exclude_id=tariff_id,
+        )
+
         self.connection.execute(
             """
             UPDATE house_tariffs
             SET amount = ?,
                 start_year = ?,
                 start_month = ?,
-                end_year = ?,
-                end_month = ?,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -575,13 +586,12 @@ class Repository:
                 _required_text(amount, "Тариф"),
                 int(start_year),
                 int(start_month),
-                int(end_year),
-                int(end_month),
                 _now(),
                 tariff_id,
             ),
         )
         self.connection.commit()
+        self._recalculate_house_tariff_periods(existing.house_id)
 
     def delete_house_tariff(self, tariff_id: str) -> None:
         self.connection.execute(
