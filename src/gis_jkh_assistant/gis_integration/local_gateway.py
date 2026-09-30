@@ -163,9 +163,7 @@ class LocalIntegrationGateway:
                 try:
                     command = state.commands.get(timeout=15.0)
                 except queue.Empty:
-                    self.send_response(HTTPStatus.NO_CONTENT)
-                    self._headers()
-                    self.end_headers()
+                    self._send_json(HTTPStatus.OK, {"idle": True})
                     return
                 self._send_json(HTTPStatus.OK, command)
 
