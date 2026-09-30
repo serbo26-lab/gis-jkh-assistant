@@ -128,6 +128,9 @@ class Repository:
                 end_year INTEGER NOT NULL,
                 end_month INTEGER NOT NULL,
                 planned_total TEXT,
+                planned_tariff TEXT,
+                planned_area TEXT,
+                planned_months TEXT,
                 status TEXT NOT NULL DEFAULT 'local',
                 gis_work_list_guid TEXT,
                 gis_file_guid TEXT,
@@ -176,6 +179,9 @@ class Repository:
         )
         self._ensure_column("work_templates", "source_file_path", "TEXT")
         self._ensure_column("work_lists", "planned_total", "TEXT")
+        self._ensure_column("work_lists", "planned_tariff", "TEXT")
+        self._ensure_column("work_lists", "planned_area", "TEXT")
+        self._ensure_column("work_lists", "planned_months", "TEXT")
         self._ensure_column("work_lists", "gis_work_list_guid", "TEXT")
         self._ensure_column("work_lists", "gis_file_guid", "TEXT")
         self._ensure_column("work_lists", "gis_import_job_guid", "TEXT")
@@ -634,9 +640,10 @@ class Repository:
                 """
                 INSERT INTO work_lists (
                     id, house_id, template_id, base_year,
-                    start_year, start_month, end_year, end_month, planned_total,
+                    start_year, start_month, end_year, end_month,
+                    planned_total, planned_tariff, planned_area, planned_months,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 1, ?, 12, NULL, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, 12, NULL, NULL, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     work_list_id,
@@ -699,9 +706,10 @@ class Repository:
                 """
                 INSERT INTO work_lists (
                     id, house_id, template_id, base_year,
-                    start_year, start_month, end_year, end_month, planned_total,
+                    start_year, start_month, end_year, end_month,
+                    planned_total, planned_tariff, planned_area, planned_months,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     work_list_id,
@@ -713,6 +721,9 @@ class Repository:
                     source.end_year + year_shift,
                     source.end_month,
                     source.planned_total,
+                    source.planned_tariff,
+                    source.planned_area,
+                    source.planned_months,
                     str(WorkListStatus.LOCAL),
                     timestamp,
                     timestamp,
@@ -806,6 +817,9 @@ class Repository:
         work_list_id: str,
         *,
         planned_total: str,
+        planned_tariff: str | None = None,
+        planned_area: str | None = None,
+        planned_months: str | None = None,
         rows: Iterable[object],
     ) -> None:
         """Atomically persist one calculated quantity+cost distribution."""
@@ -815,10 +829,21 @@ class Repository:
             self.connection.execute(
                 """
                 UPDATE work_lists
-                SET planned_total = ?, updated_at = ?
+                SET planned_total = ?,
+                    planned_tariff = ?,
+                    planned_area = ?,
+                    planned_months = ?,
+                    updated_at = ?
                 WHERE id = ?
                 """,
-                (_clean(planned_total), timestamp, work_list_id),
+                (
+                    _clean(planned_total),
+                    _clean(planned_tariff),
+                    _clean(planned_area),
+                    _clean(planned_months),
+                    timestamp,
+                    work_list_id,
+                ),
             )
             for row in rows:
                 item_id = str(getattr(row, "item_id"))
