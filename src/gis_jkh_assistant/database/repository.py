@@ -719,8 +719,8 @@ class Repository:
                     """
                     INSERT INTO work_list_items (
                         id, work_list_id, position, work_code, work_name, work_guid,
-                        price, volume, quantity, cost
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
