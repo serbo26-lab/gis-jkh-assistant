@@ -1378,6 +1378,9 @@ class WorkListsPage(QWidget):
             self.create_from_current_button,
             self.export_button,
             self.lazy_fill_button,
+            self.upload_to_gis_button,
+            self.sync_gis_button,
+            self.approve_gis_button,
         ):
             widget.setEnabled(enabled)
 
@@ -1410,6 +1413,9 @@ class WorkListsPage(QWidget):
 
             self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
             self.gis_actions.addWidget(self.export_button, 0, 2)
+            self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
+            self.gis_actions.addWidget(self.sync_gis_button, 1, 1)
+            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
         elif mode == "compact":
@@ -1429,6 +1435,9 @@ class WorkListsPage(QWidget):
 
             self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
             self.gis_actions.addWidget(self.export_button, 0, 2)
+            self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
+            self.gis_actions.addWidget(self.sync_gis_button, 1, 1)
+            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
         else:
@@ -1452,6 +1461,9 @@ class WorkListsPage(QWidget):
 
             self.gis_actions.addWidget(self.load_export_template_button, 0, 0, 1, 2)
             self.gis_actions.addWidget(self.export_button, 1, 0, 1, 2)
+            self.gis_actions.addWidget(self.upload_to_gis_button, 2, 0, 1, 2)
+            self.gis_actions.addWidget(self.sync_gis_button, 3, 0)
+            self.gis_actions.addWidget(self.approve_gis_button, 3, 1)
             self.gis_actions.setColumnStretch(0, 1)
             self.gis_actions.setColumnStretch(1, 1)
 
