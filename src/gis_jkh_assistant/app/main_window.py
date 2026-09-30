@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from gis_jkh_assistant.database import Repository
 
 from .houses_page import HousesPage
-from .styles import COMPACT_WINDOW_STYLESHEET
+from .styles import COMPACT_WINDOW_STYLESHEET, NARROW_WINDOW_STYLESHEET
 from .work_lists_page import WorkListsPage
 
 
@@ -28,8 +28,8 @@ class MainWindow(QMainWindow):
         self.repository = repository
         self.setWindowTitle("GIS ЖКХ Assistant")
         self.resize(1360, 820)
-        self.setMinimumSize(880, 600)
-        self._compact_mode = False
+        self.setMinimumSize(720, 520)
+        self._view_mode = "normal"
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -72,13 +72,32 @@ class MainWindow(QMainWindow):
             self.work_lists_page.refresh_organizations()
 
     def resizeEvent(self, event) -> None:
-        compact = event.size().width() < 1120
-        if compact != self._compact_mode:
-            self._compact_mode = compact
-            self.sidebar.setFixedWidth(180 if compact else 220)
-            self.houses_page.set_compact_mode(compact)
-            self.work_lists_page.set_compact_mode(compact)
-            self.setStyleSheet(COMPACT_WINDOW_STYLESHEET if compact else "")
+        width = event.size().width()
+        height = event.size().height()
+
+        if width < 980 or height < 600:
+            mode = "narrow"
+        elif width < 1180 or height < 720:
+            mode = "compact"
+        else:
+            mode = "normal"
+
+        if mode != self._view_mode:
+            self._view_mode = mode
+
+            if mode == "normal":
+                self.sidebar.setFixedWidth(220)
+                self.setStyleSheet("")
+            elif mode == "compact":
+                self.sidebar.setFixedWidth(180)
+                self.setStyleSheet(COMPACT_WINDOW_STYLESHEET)
+            else:
+                self.sidebar.setFixedWidth(155)
+                self.setStyleSheet(NARROW_WINDOW_STYLESHEET)
+
+            self.houses_page.set_compact_mode(mode != "normal")
+            self.work_lists_page.set_view_mode(mode)
+
         super().resizeEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
