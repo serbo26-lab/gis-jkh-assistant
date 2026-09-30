@@ -457,7 +457,14 @@ class HousesPage(QWidget):
     def _add_tariff(self) -> None:
         if not self._current_house_id:
             return
-        dialog = HouseTariffDialog(self)
+
+        tariffs = self.repository.list_house_tariffs(self._current_house_id)
+        latest = tariffs[-1] if tariffs else None
+        dialog = HouseTariffDialog(
+            self,
+            default_start_year=(latest.start_year + 1) if latest else None,
+            default_start_month=latest.start_month if latest else None,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
