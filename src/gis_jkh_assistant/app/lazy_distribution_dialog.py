@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QDialog,
     QGridLayout,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -26,10 +28,62 @@ from gis_jkh_assistant.work_lists import (
     AllocationInput,
     LazyDistributionError,
     calculate_distribution,
+    calculate_planned_total,
     period_months,
     preview_cost,
     validate_quantity,
 )
+
+
+class _PercentEntryDelegate(QStyledItemDelegate):
+    """Keep corrections in place, but advance after filling a previously empty cell."""
+
+    def __init__(self, table: QTableWidget) -> None:
+        super().__init__(table)
+        self.table = table
+
+    def createEditor(self, parent, option, index):  # noqa: ANN001
+        editor = super().createEditor(parent, option, index)
+        if editor is not None:
+            editor.setProperty("percent_row", index.row())
+            editor.setProperty(
+                "percent_started_empty",
+                not str(index.data() or "").strip(),
+            )
+        return editor
+
+    def eventFilter(self, editor, event) -> bool:  # noqa: ANN001
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        ):
+            row = int(editor.property("percent_row") or 0)
+            started_empty = bool(editor.property("percent_started_empty"))
+            new_text = editor.text().strip() if hasattr(editor, "text") else ""
+
+            self.commitData.emit(editor)
+            self.closeEditor.emit(
+                editor,
+                QAbstractItemDelegate.EndEditHint.NoHint,
+            )
+            QTimer.singleShot(
+                0,
+                lambda: self._after_enter(row, started_empty, new_text),
+            )
+            return True
+
+        return super().eventFilter(editor, event)
+
+    def _after_enter(self, row: int, started_empty: bool, new_text: str) -> None:
+        if started_empty and new_text:
+            for next_row in range(row + 1, self.table.rowCount()):
+                item = self.table.item(next_row, 1)
+                if item is not None and not item.text().strip():
+                    self.table.setCurrentCell(next_row, 1)
+                    self.table.scrollToItem(item)
+                    return
+
+        self.table.setCurrentCell(row, 1)
 
 
 class LazyDistributionDialog(QDialog):
@@ -47,8 +101,8 @@ class LazyDistributionDialog(QDialog):
         self.items = repository.list_work_list_items(work_list.id)
 
         self.setWindowTitle("Заполнение от планируемой суммы")
-        self.resize(940, 680)
-        self.setMinimumSize(740, 540)
+        self.resize(980, 720)
+        self.setMinimumSize(780, 560)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -69,8 +123,8 @@ class LazyDistributionDialog(QDialog):
             f"Период: {work_list.period_label}. По умолчанию количество равно числу "
             f"месяцев периода: {self.period_month_count}. Это только предзаполнение: "
             "количество можно изменить сразу для всех позиций или отдельно в каждой строке. "
-            "Введите общую планируемую сумму и процент каждой работы. "
-            "Сумма процентов должна составлять 100%."
+            "Планируемую сумму можно ввести готовой или рассчитать как "
+            "«тариф × площадь × месяцы». Сумма процентов должна составлять 100%."
         )
         description.setWordWrap(True)
         description.setObjectName("Muted")
@@ -90,24 +144,57 @@ class LazyDistributionDialog(QDialog):
 
         controls.addWidget(QLabel("Планируемая сумма, руб."), 0, 0)
         self.total_edit = QLineEdit(work_list.planned_total or "")
-        self.total_edit.setPlaceholderText("Например: 100000")
+        self.total_edit.setPlaceholderText("Например: 118869,89")
         self.total_edit.setMinimumWidth(220)
-        controls.addWidget(self.total_edit, 0, 1)
+        controls.addWidget(self.total_edit, 0, 1, 1, 3)
 
-        controls.addWidget(QLabel("Количество по умолчанию"), 1, 0)
-        self.default_quantity_edit = QLineEdit(str(self.period_month_count))
+        calculator_label = QLabel("Рассчитать сумму")
+        calculator_label.setObjectName("Muted")
+        controls.addWidget(calculator_label, 1, 0)
+
+        self.tariff_edit = QLineEdit(work_list.planned_tariff or "")
+        self.tariff_edit.setPlaceholderText("Тариф")
+        self.tariff_edit.setToolTip("Тариф, руб. за м² в месяц")
+        controls.addWidget(self.tariff_edit, 1, 1)
+
+        multiply_1 = QLabel("×")
+        multiply_1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        controls.addWidget(multiply_1, 1, 2)
+
+        self.area_edit = QLineEdit(work_list.planned_area or "")
+        self.area_edit.setPlaceholderText("Площадь, м²")
+        controls.addWidget(self.area_edit, 1, 3)
+
+        multiply_2 = QLabel("×")
+        multiply_2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        controls.addWidget(multiply_2, 1, 4)
+
+        initial_calc_months = work_list.planned_months or str(self.period_month_count)
+        self.months_edit = QLineEdit(initial_calc_months)
+        self.months_edit.setPlaceholderText("Месяцы")
+        self.months_edit.setMaximumWidth(100)
+        controls.addWidget(self.months_edit, 1, 5)
+
+        self.calculate_total_button = QPushButton("Рассчитать")
+        controls.addWidget(self.calculate_total_button, 1, 6)
+
+        initial_default_quantity = work_list.planned_months or str(self.period_month_count)
+        controls.addWidget(QLabel("Количество по умолчанию"), 2, 0)
+        self.default_quantity_edit = QLineEdit(initial_default_quantity)
         self.default_quantity_edit.setMinimumWidth(120)
         self.default_quantity_edit.setMaximumWidth(180)
         self.default_quantity_edit.setToolTip(
             "Например, для полного года обычно 12. "
             "Значение можно применить ко всем строкам, а затем отдельные строки изменить."
         )
-        controls.addWidget(self.default_quantity_edit, 1, 1)
+        controls.addWidget(self.default_quantity_edit, 2, 1)
 
         self.apply_quantity_to_all_button = QPushButton("Применить количество ко всем")
-        controls.addWidget(self.apply_quantity_to_all_button, 1, 2)
+        controls.addWidget(self.apply_quantity_to_all_button, 2, 3, 1, 2)
         controls.setColumnStretch(3, 1)
         layout.addLayout(controls)
+
+        self._last_applied_default_quantity = initial_default_quantity
 
         self.table = QTableWidget(len(self.items), 4)
         self.table.setHorizontalHeaderLabels(
@@ -115,6 +202,7 @@ class LazyDistributionDialog(QDialog):
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
+        self.table.setItemDelegateForColumn(1, _PercentEntryDelegate(self.table))
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -143,13 +231,13 @@ class LazyDistributionDialog(QDialog):
             if item.allocation_percent and item.quantity:
                 initial_quantity = item.quantity
             else:
-                initial_quantity = str(self.period_month_count)
+                initial_quantity = initial_default_quantity
             quantity = QTableWidgetItem(initial_quantity)
             quantity.setTextAlignment(
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
             )
             quantity.setToolTip(
-                "Предзаполнено числом месяцев периода. "
+                "Предзаполнено количеством по умолчанию. "
                 "Можно изменить для конкретной работы, например покос травы — 3."
             )
             self.table.setItem(row, 3, quantity)
@@ -176,6 +264,8 @@ class LazyDistributionDialog(QDialog):
         layout.addLayout(buttons)
 
         self.total_edit.textChanged.connect(self._refresh_preview)
+        self.calculate_total_button.clicked.connect(self._calculate_total)
+        self.months_edit.returnPressed.connect(self._calculate_total)
         self.default_quantity_edit.returnPressed.connect(self._apply_quantity_to_all)
         self.apply_quantity_to_all_button.clicked.connect(self._apply_quantity_to_all)
         self.table.itemChanged.connect(self._table_item_changed)
@@ -188,6 +278,29 @@ class LazyDistributionDialog(QDialog):
         if item.column() in (1, 3):
             self._refresh_preview()
 
+    def _calculate_total(self) -> None:
+        try:
+            total = calculate_planned_total(
+                tariff=self.tariff_edit.text(),
+                area=self.area_edit.text(),
+                months=self.months_edit.text(),
+            )
+            months = validate_quantity(self.months_edit.text())
+        except LazyDistributionError as exc:
+            QMessageBox.warning(self, "Проверьте расчет", str(exc))
+            return
+
+        previous_default = self._last_applied_default_quantity
+        self.total_edit.setText(total)
+        self.default_quantity_edit.setText(months)
+
+        self._apply_quantity_to_rows(
+            months,
+            only_if_matches=previous_default,
+        )
+        self._last_applied_default_quantity = months
+        self._refresh_preview()
+
     def _apply_quantity_to_all(self) -> None:
         try:
             quantity = validate_quantity(self.default_quantity_edit.text())
@@ -195,21 +308,33 @@ class LazyDistributionDialog(QDialog):
             QMessageBox.warning(self, "Проверьте количество", str(exc))
             return
 
+        self._apply_quantity_to_rows(quantity, only_if_matches=None)
+        self._last_applied_default_quantity = quantity
+        self._refresh_preview()
+
+    def _apply_quantity_to_rows(
+        self,
+        quantity: str,
+        *,
+        only_if_matches: str | None,
+    ) -> None:
         self.table.blockSignals(True)
         try:
             for row in range(self.table.rowCount()):
                 quantity_item = self.table.item(row, 3)
-                if quantity_item:
-                    quantity_item.setText(quantity)
-                    quantity_item.setBackground(QBrush())
-                    quantity_item.setToolTip(
-                        "Массово предзаполнено. При необходимости измените количество "
-                        "для этой позиции отдельно."
-                    )
+                if quantity_item is None:
+                    continue
+                current = quantity_item.text().strip()
+                if only_if_matches is not None and current not in {"", only_if_matches}:
+                    continue
+                quantity_item.setText(quantity)
+                quantity_item.setBackground(QBrush())
+                quantity_item.setToolTip(
+                    "Предзаполнено массово. При необходимости измените количество "
+                    "для этой позиции отдельно."
+                )
         finally:
             self.table.blockSignals(False)
-
-        self._refresh_preview()
 
     def _refresh_preview(self) -> None:
         total_text = self.total_edit.text().strip()
@@ -258,7 +383,7 @@ class LazyDistributionDialog(QDialog):
                         else:
                             quantity_item.setToolTip(
                                 "Позиция с 0% не будет заполняться. "
-                                "Количество сохранится только как предзаполнение формы."
+                                "Количество останется только предзаполнением формы."
                             )
                 except (InvalidOperation, LazyDistributionError):
                     valid = False
@@ -321,6 +446,9 @@ class LazyDistributionDialog(QDialog):
         self.repository.apply_lazy_distribution(
             self.work_list.id,
             planned_total=result.planned_total,
+            planned_tariff=self.tariff_edit.text().strip() or None,
+            planned_area=self.area_edit.text().strip() or None,
+            planned_months=self.months_edit.text().strip() or None,
             rows=result.rows,
         )
         self.accept()
