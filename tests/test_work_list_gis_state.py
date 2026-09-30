@@ -55,6 +55,15 @@ def test_not_found_does_not_destroy_previous_local_lifecycle(tmp_path) -> None:
 
     repository.update_work_list_gis_state(
         work_list.id,
+        gis_work_list_guid="deleted-project-guid",
+        gis_status="DRAFT",
+    )
+    draft = repository.get_work_list(work_list.id)
+    assert draft is not None
+    assert draft.status == WorkListStatus.GIS_DRAFT
+
+    repository.update_work_list_gis_state(
+        work_list.id,
         gis_status="NOT_FOUND",
         gis_last_error=None,
     )
@@ -62,5 +71,6 @@ def test_not_found_does_not_destroy_previous_local_lifecycle(tmp_path) -> None:
     assert updated is not None
     assert updated.status == WorkListStatus.LOCAL
     assert updated.gis_status == "NOT_FOUND"
+    assert updated.gis_work_list_guid is None
 
     repository.close()
