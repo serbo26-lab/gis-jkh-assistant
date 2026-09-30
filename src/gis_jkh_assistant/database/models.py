@@ -50,6 +50,7 @@ class House:
     fias_house_guid: str | None = None
     gis_unique_house_number: str | None = None
     cadastral_number: str | None = None
+    charge_area: str | None = None
     residential_premises_count: int = 0
     non_residential_premises_count: int = 0
     source: RecordSource = RecordSource.MANUAL
@@ -60,6 +61,26 @@ class House:
     @property
     def total_premises_count(self) -> int:
         return self.residential_premises_count + self.non_residential_premises_count
+
+
+@dataclass(frozen=True, slots=True)
+class HouseTariff:
+    id: str
+    house_id: str
+    amount: str
+    start_year: int
+    start_month: int
+    end_year: int
+    end_month: int
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @property
+    def period_label(self) -> str:
+        return (
+            f"{self.start_month:02d}.{self.start_year} — "
+            f"{self.end_month:02d}.{self.end_year}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
