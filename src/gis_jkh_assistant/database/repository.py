@@ -594,11 +594,14 @@ class Repository:
         self._recalculate_house_tariff_periods(existing.house_id)
 
     def delete_house_tariff(self, tariff_id: str) -> None:
+        existing = self.get_house_tariff(tariff_id)
         self.connection.execute(
             "DELETE FROM house_tariffs WHERE id = ?",
             (tariff_id,),
         )
         self.connection.commit()
+        if existing is not None:
+            self._recalculate_house_tariff_periods(existing.house_id)
 
     def find_house_tariff_covering_period(
         self,
