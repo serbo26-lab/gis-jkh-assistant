@@ -510,10 +510,17 @@ class Repository:
         amount: str,
         start_year: int,
         start_month: int,
-        end_year: int,
-        end_month: int,
+        end_year: int | None = None,
+        end_month: int | None = None,
     ) -> HouseTariff:
-        _validate_period(start_year, start_month, end_year, end_month)
+        del end_year, end_month
+        _validate_month_point(start_year, start_month)
+        self._assert_unique_tariff_start(
+            house_id,
+            start_year=start_year,
+            start_month=start_month,
+        )
+
         tariff_id = str(uuid.uuid4())
         timestamp = _now()
         self.connection.execute(
@@ -530,13 +537,14 @@ class Repository:
                 _required_text(amount, "Тариф"),
                 int(start_year),
                 int(start_month),
-                int(end_year),
-                int(end_month),
+                9999,
+                12,
                 timestamp,
                 timestamp,
             ),
         )
         self.connection.commit()
+        self._recalculate_house_tariff_periods(house_id)
         result = self.get_house_tariff(tariff_id)
         assert result is not None
         return result
