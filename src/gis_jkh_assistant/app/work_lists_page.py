@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -89,9 +90,27 @@ class WorkListsPage(QWidget):
         self.refresh_organizations()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.page_scroll = QScrollArea()
+        self.page_scroll.setObjectName("PageScroll")
+        self.page_scroll.setWidgetResizable(True)
+        self.page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self.page_content = QWidget()
+        self.page_content.setObjectName("PageContent")
+        self.page_scroll.setWidget(self.page_content)
+        outer.addWidget(self.page_scroll)
+
+        root = QVBoxLayout(self.page_content)
         root.setContentsMargins(20, 18, 20, 20)
         root.setSpacing(14)
+
+        self.page_layout = root
 
         title_row = QHBoxLayout()
         title = QLabel("Перечни работ и услуг")
@@ -105,7 +124,9 @@ class WorkListsPage(QWidget):
 
         context = QFrame()
         context.setObjectName("Card")
+        self.context_card = context
         context_layout = QGridLayout(context)
+        self.context_layout = context_layout
         context_layout.setContentsMargins(14, 12, 14, 12)
         context_layout.setHorizontalSpacing(10)
         context_layout.setVerticalSpacing(8)
@@ -145,12 +166,14 @@ class WorkListsPage(QWidget):
         self.create_button = QPushButton("Создать новый перечень")
         self.create_button.setObjectName("PrimaryButton")
 
-        creation_actions = QHBoxLayout()
-        creation_actions.setSpacing(8)
-        creation_actions.addWidget(self.templates_button)
-        creation_actions.addStretch(1)
-        creation_actions.addWidget(self.create_from_current_button)
-        creation_actions.addWidget(self.create_button)
+        creation_actions = QGridLayout()
+        self.creation_actions = creation_actions
+        creation_actions.setHorizontalSpacing(8)
+        creation_actions.setVerticalSpacing(6)
+        creation_actions.addWidget(self.templates_button, 0, 0)
+        creation_actions.addWidget(self.create_from_current_button, 0, 2)
+        creation_actions.addWidget(self.create_button, 0, 3)
+        creation_actions.setColumnStretch(1, 1)
         context_layout.addLayout(creation_actions, 5, 0, 1, 4)
 
         gis_title = QLabel("Обмен с ГИС ЖКХ")
@@ -165,11 +188,13 @@ class WorkListsPage(QWidget):
         self.load_export_template_button = QPushButton("Загрузить / обновить шаблон экспорта")
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
 
-        gis_actions = QHBoxLayout()
-        gis_actions.setSpacing(8)
-        gis_actions.addWidget(self.load_export_template_button)
-        gis_actions.addStretch(1)
-        gis_actions.addWidget(self.export_button)
+        gis_actions = QGridLayout()
+        self.gis_actions = gis_actions
+        gis_actions.setHorizontalSpacing(8)
+        gis_actions.setVerticalSpacing(6)
+        gis_actions.addWidget(self.load_export_template_button, 0, 0)
+        gis_actions.addWidget(self.export_button, 0, 2)
+        gis_actions.setColumnStretch(1, 1)
         context_layout.addLayout(gis_actions, 8, 0, 1, 4)
 
         context_layout.setColumnStretch(1, 1)
@@ -296,6 +321,8 @@ class WorkListsPage(QWidget):
             widget.valueChanged.connect(self._queue_period_save)
         self.items_table.itemChanged.connect(self._item_changed)
 
+        self._view_mode = "normal"
+        self._apply_view_mode("normal")
         self._set_editor_enabled(False)
 
     def refresh_organizations(self) -> None:
@@ -932,8 +959,84 @@ class WorkListsPage(QWidget):
         ):
             widget.setEnabled(enabled)
 
+    def set_view_mode(self, mode: str) -> None:
+        """Switch between normal, compact and narrow responsive layouts."""
+
+        if mode not in {"normal", "compact", "narrow"}:
+            mode = "normal"
+        if mode == self._view_mode:
+            return
+        self._apply_view_mode(mode)
+
+    def _apply_view_mode(self, mode: str) -> None:
+        self._view_mode = mode
+
+        if mode == "normal":
+            self.page_content.setMinimumSize(1040, 700)
+            self.page_layout.setContentsMargins(20, 18, 20, 20)
+            self.page_layout.setSpacing(14)
+            self.context_layout.setContentsMargins(14, 12, 14, 12)
+            self.context_layout.setHorizontalSpacing(10)
+            self.context_layout.setVerticalSpacing(8)
+            self.splitter.setOrientation(Qt.Orientation.Horizontal)
+            self.splitter.setSizes([340, 840])
+
+            self.creation_actions.addWidget(self.templates_button, 0, 0)
+            self.creation_actions.addWidget(self.create_from_current_button, 0, 2)
+            self.creation_actions.addWidget(self.create_button, 0, 3)
+            self.creation_actions.setColumnStretch(1, 1)
+
+            self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
+            self.gis_actions.addWidget(self.export_button, 0, 2)
+            self.gis_actions.setColumnStretch(1, 1)
+
+        elif mode == "compact":
+            self.page_content.setMinimumSize(760, 660)
+            self.page_layout.setContentsMargins(14, 12, 14, 14)
+            self.page_layout.setSpacing(10)
+            self.context_layout.setContentsMargins(10, 9, 10, 9)
+            self.context_layout.setHorizontalSpacing(8)
+            self.context_layout.setVerticalSpacing(6)
+            self.splitter.setOrientation(Qt.Orientation.Horizontal)
+            self.splitter.setSizes([280, 540])
+
+            self.creation_actions.addWidget(self.templates_button, 0, 0)
+            self.creation_actions.addWidget(self.create_from_current_button, 0, 2)
+            self.creation_actions.addWidget(self.create_button, 0, 3)
+            self.creation_actions.setColumnStretch(1, 1)
+
+            self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
+            self.gis_actions.addWidget(self.export_button, 0, 2)
+            self.gis_actions.setColumnStretch(1, 1)
+
+        else:
+            # On a narrow window the two work areas are stacked vertically instead
+            # of being squeezed into unusable columns. The whole page remains
+            # scrollable, so no controls disappear below the viewport.
+            self.page_content.setMinimumSize(620, 980)
+            self.page_layout.setContentsMargins(10, 8, 10, 10)
+            self.page_layout.setSpacing(8)
+            self.context_layout.setContentsMargins(9, 8, 9, 8)
+            self.context_layout.setHorizontalSpacing(6)
+            self.context_layout.setVerticalSpacing(5)
+            self.splitter.setOrientation(Qt.Orientation.Vertical)
+            self.splitter.setSizes([330, 560])
+
+            self.creation_actions.addWidget(self.templates_button, 0, 0, 1, 2)
+            self.creation_actions.addWidget(self.create_from_current_button, 1, 0)
+            self.creation_actions.addWidget(self.create_button, 1, 1)
+            self.creation_actions.setColumnStretch(0, 1)
+            self.creation_actions.setColumnStretch(1, 1)
+
+            self.gis_actions.addWidget(self.load_export_template_button, 0, 0, 1, 2)
+            self.gis_actions.addWidget(self.export_button, 1, 0, 1, 2)
+            self.gis_actions.setColumnStretch(0, 1)
+            self.gis_actions.setColumnStretch(1, 1)
+
     def set_compact_mode(self, compact: bool) -> None:
-        self.splitter.setSizes([290, 610] if compact else [340, 840])
+        """Compatibility shim for older callers."""
+
+        self.set_view_mode("compact" if compact else "normal")
 
     def flush_pending_changes(self) -> None:
         self._save_period()
