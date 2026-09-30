@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -22,6 +23,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -33,7 +36,7 @@ from gis_jkh_assistant.gis_files.housing_objects import (
     parse_housing_objects_export,
 )
 
-from .dialogs import HouseDialog, OrganizationDialog
+from .dialogs import HouseDialog, HouseTariffDialog, OrganizationDialog
 from .widgets import SafeSpinBox
 
 
@@ -208,6 +211,49 @@ class HousesPage(QWidget):
         premises_form.addRow("Итого", self.total_label)
         self.card_layout.addLayout(premises_form)
 
+        billing_title = QLabel("Начисления")
+        billing_title.setObjectName("SectionTitle")
+        self.card_layout.addWidget(billing_title)
+
+        self.charge_area_edit = QLineEdit()
+        self.charge_area_edit.setPlaceholderText("Например: 395,6")
+        billing_form = QFormLayout()
+        billing_form.addRow("Площадь к начислению, м²", self.charge_area_edit)
+        self.card_layout.addLayout(billing_form)
+
+        tariff_header = QHBoxLayout()
+        tariff_header.addWidget(QLabel("Тарифы по периодам"))
+        tariff_header.addStretch(1)
+        self.add_tariff_button = QPushButton("+ Добавить тариф")
+        self.edit_tariff_button = QPushButton("Изменить")
+        self.delete_tariff_button = QPushButton("Удалить")
+        self.delete_tariff_button.setObjectName("DangerButton")
+        tariff_header.addWidget(self.add_tariff_button)
+        tariff_header.addWidget(self.edit_tariff_button)
+        tariff_header.addWidget(self.delete_tariff_button)
+        self.card_layout.addLayout(tariff_header)
+
+        self.tariffs_table = QTableWidget(0, 3)
+        self.tariffs_table.setHorizontalHeaderLabels(
+            ["Период с", "Период по", "Тариф, руб./м² в месяц"]
+        )
+        self.tariffs_table.verticalHeader().setVisible(False)
+        self.tariffs_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tariffs_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.tariffs_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tariffs_table.setAlternatingRowColors(True)
+        self.tariffs_table.setMinimumHeight(150)
+        tariff_header_view = self.tariffs_table.horizontalHeader()
+        tariff_header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        tariff_header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        tariff_header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.card_layout.addWidget(self.tariffs_table)
+
+        self.add_tariff_button.clicked.connect(self._add_tariff)
+        self.edit_tariff_button.clicked.connect(self._edit_tariff)
+        self.delete_tariff_button.clicked.connect(self._delete_tariff)
+        self.tariffs_table.itemDoubleClicked.connect(lambda _item: self._edit_tariff())
+
         service_title = QLabel("Служебное")
         service_title.setObjectName("SectionTitle")
         self.card_layout.addWidget(service_title)
@@ -230,6 +276,7 @@ class HousesPage(QWidget):
             self.fias_guid_edit: "fias_house_guid",
             self.unique_number_edit: "gis_unique_house_number",
             self.cadastral_edit: "cadastral_number",
+            self.charge_area_edit: "charge_area",
         }
         for widget, field in field_bindings.items():
             widget.textEdited.connect(
@@ -330,6 +377,7 @@ class HousesPage(QWidget):
     def _load_house(self, house_id: str | None) -> None:
         self._current_house_id = house_id
         if not house_id:
+            self.tariffs_table.setRowCount(0)
             self._set_card_enabled(False)
             return
         house = self.repository.get_house(house_id)
@@ -346,6 +394,7 @@ class HousesPage(QWidget):
             self.fias_guid_edit.setText(house.fias_house_guid or "")
             self.unique_number_edit.setText(house.gis_unique_house_number or "")
             self.cadastral_edit.setText(house.cadastral_number or "")
+            self.charge_area_edit.setText(house.charge_area or "")
             self.residential_spin.setValue(house.residential_premises_count)
             self.non_residential_spin.setValue(house.non_residential_premises_count)
             self.total_label.setText(str(house.total_premises_count))
@@ -360,7 +409,94 @@ class HousesPage(QWidget):
                 self.card_org_combo.setCurrentIndex(index)
         finally:
             self._loading_card = False
+        self._refresh_tariffs()
         self._set_save_status("Сохранено")
+
+    def _refresh_tariffs(self, select_id: str | None = None) -> None:
+        self.tariffs_table.setRowCount(0)
+        if not self._current_house_id:
+            return
+
+        tariffs = self.repository.list_house_tariffs(self._current_house_id)
+        for tariff in tariffs:
+            row = self.tariffs_table.rowCount()
+            self.tariffs_table.insertRow(row)
+
+            start_item = QTableWidgetItem(
+                f"{tariff.start_month:02d}.{tariff.start_year}"
+            )
+            start_item.setData(Qt.UserRole, tariff.id)
+            self.tariffs_table.setItem(row, 0, start_item)
+            self.tariffs_table.setItem(
+                row,
+                1,
+                QTableWidgetItem(f"{tariff.end_month:02d}.{tariff.end_year}"),
+            )
+            self.tariffs_table.setItem(row, 2, QTableWidgetItem(tariff.amount))
+
+            if select_id == tariff.id:
+                self.tariffs_table.selectRow(row)
+
+        if self.tariffs_table.rowCount() and self.tariffs_table.currentRow() < 0:
+            self.tariffs_table.selectRow(0)
+
+    def _selected_tariff_id(self) -> str | None:
+        row = self.tariffs_table.currentRow()
+        if row < 0:
+            return None
+        item = self.tariffs_table.item(row, 0)
+        return str(item.data(Qt.UserRole)) if item else None
+
+    def _add_tariff(self) -> None:
+        if not self._current_house_id:
+            return
+        dialog = HouseTariffDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            tariff = self.repository.create_house_tariff(
+                house_id=self._current_house_id,
+                **dialog.values(),
+            )
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.critical(self, "Не удалось добавить тариф", str(exc))
+            return
+        self._refresh_tariffs(select_id=tariff.id)
+
+    def _edit_tariff(self) -> None:
+        tariff_id = self._selected_tariff_id()
+        if not tariff_id:
+            return
+        tariff = self.repository.get_house_tariff(tariff_id)
+        if not tariff:
+            return
+        dialog = HouseTariffDialog(self, tariff)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.repository.update_house_tariff(tariff_id, **dialog.values())
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.critical(self, "Не удалось изменить тариф", str(exc))
+            return
+        self._refresh_tariffs(select_id=tariff_id)
+
+    def _delete_tariff(self) -> None:
+        tariff_id = self._selected_tariff_id()
+        if not tariff_id:
+            return
+        tariff = self.repository.get_house_tariff(tariff_id)
+        if not tariff:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Удалить тариф?",
+            f"Удалить тариф {tariff.amount} руб./м² в месяц "
+            f"за период {tariff.period_label}?",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.repository.delete_house_tariff(tariff_id)
+        self._refresh_tariffs()
 
     def _set_card_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -371,9 +507,14 @@ class HousesPage(QWidget):
             self.fias_guid_edit,
             self.unique_number_edit,
             self.cadastral_edit,
+            self.charge_area_edit,
             self.residential_spin,
             self.non_residential_spin,
             self.comment_edit,
+            self.tariffs_table,
+            self.add_tariff_button,
+            self.edit_tariff_button,
+            self.delete_tariff_button,
             self.delete_house_button,
         ):
             widget.setEnabled(enabled)
