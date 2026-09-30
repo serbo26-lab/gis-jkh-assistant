@@ -6,6 +6,7 @@ from gis_jkh_assistant.work_lists import (
     AllocationInput,
     LazyDistributionError,
     calculate_distribution,
+    calculate_planned_total,
     period_months,
 )
 
@@ -144,4 +145,21 @@ def test_positive_percent_requires_positive_quantity_when_explicitly_set() -> No
             allocations=[
                 AllocationInput("a", "100", "0"),
             ],
+        )
+
+
+def test_planned_total_can_be_calculated_from_tariff_area_and_months() -> None:
+    assert calculate_planned_total(
+        tariff="25,04",
+        area="395,6",
+        months="12",
+    ) == "118869.89"
+
+
+def test_planned_total_calculator_requires_integer_months() -> None:
+    with pytest.raises(LazyDistributionError, match="целым числом"):
+        calculate_planned_total(
+            tariff="25.04",
+            area="395.6",
+            months="12.5",
         )
