@@ -234,6 +234,14 @@ class HousesPage(QWidget):
         tariff_header.addWidget(self.delete_tariff_button)
         self.card_layout.addLayout(tariff_header)
 
+        tariff_hint = QLabel(
+            "Добавляйте новую строку только когда тариф меняется. "
+            "Последнее указанное значение действует до следующего изменения."
+        )
+        tariff_hint.setWordWrap(True)
+        tariff_hint.setObjectName("Muted")
+        self.card_layout.addWidget(tariff_hint)
+
         self.tariffs_table = QTableWidget(0, 3)
         self.tariffs_table.setHorizontalHeaderLabels(
             ["Действует с", "Действует до", "Тариф, руб./м² в месяц"]
