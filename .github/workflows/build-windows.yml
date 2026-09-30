@@ -47,7 +47,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GIS-JKH-Assistant-0.1.0.dev12-windows
+          name: GIS-JKH-Assistant-0.1.0.dev13-windows
           path: |
             dist/GIS-JKH-Assistant.exe
             dist/VERSION.txt
