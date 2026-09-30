@@ -236,7 +236,7 @@ class HousesPage(QWidget):
 
         self.tariffs_table = QTableWidget(0, 3)
         self.tariffs_table.setHorizontalHeaderLabels(
-            ["Период с", "Период по", "Тариф, руб./м² в месяц"]
+            ["Действует с", "Действует до", "Тариф, руб./м² в месяц"]
         )
         self.tariffs_table.verticalHeader().setVisible(False)
         self.tariffs_table.setSelectionBehavior(
