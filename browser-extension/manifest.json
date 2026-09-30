@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "GIS ЖКХ Assistant Helper",
+  "version": "0.1.0",
+  "description": "Связывает GIS ЖКХ Assistant с уже открытым личным кабинетом ГИС ЖКХ.",
+  "permissions": [
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://lk.dom.gosuslugi.ru/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "GIS ЖКХ Assistant Helper"
+  }
+}
