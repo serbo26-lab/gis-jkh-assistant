@@ -2,6 +2,7 @@
 
 from .models import (
     House,
+    HouseTariff,
     ManagementOrganization,
     RecordSource,
     TemplateSource,
@@ -15,6 +16,7 @@ from .repository import Repository
 
 __all__ = [
     "House",
+    "HouseTariff",
     "ManagementOrganization",
     "RecordSource",
     "Repository",
