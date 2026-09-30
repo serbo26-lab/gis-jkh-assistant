@@ -204,8 +204,17 @@ class WorkListsPage(QWidget):
         self.export_template_status.setWordWrap(True)
         context_layout.addWidget(self.export_template_status, 7, 0, 1, 4)
 
+        self.browser_status = QLabel("Браузер: проверка подключения…")
+        self.browser_status.setObjectName("Muted")
+        self.browser_status.setWordWrap(True)
+        context_layout.addWidget(self.browser_status, 8, 0, 1, 4)
+
         self.load_export_template_button = QPushButton("Загрузить / обновить шаблон экспорта")
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
+        self.upload_to_gis_button = QPushButton("Загрузить в ГИС ЖКХ")
+        self.sync_gis_button = QPushButton("Проверить статус в ГИС")
+        self.approve_gis_button = QPushButton("Разместить информацию")
+        self.approve_gis_button.setObjectName("PrimaryButton")
 
         gis_actions = QGridLayout()
         self.gis_actions = gis_actions
@@ -213,8 +222,11 @@ class WorkListsPage(QWidget):
         gis_actions.setVerticalSpacing(6)
         gis_actions.addWidget(self.load_export_template_button, 0, 0)
         gis_actions.addWidget(self.export_button, 0, 2)
+        gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
+        gis_actions.addWidget(self.sync_gis_button, 1, 1)
+        gis_actions.addWidget(self.approve_gis_button, 1, 2)
         gis_actions.setColumnStretch(1, 1)
-        context_layout.addLayout(gis_actions, 8, 0, 1, 4)
+        context_layout.addLayout(gis_actions, 9, 0, 1, 4)
 
         context_layout.setColumnStretch(1, 1)
         context_layout.setColumnStretch(3, 3)
@@ -336,6 +348,9 @@ class WorkListsPage(QWidget):
         self.templates_button.clicked.connect(self._manage_templates)
         self.load_export_template_button.clicked.connect(self._load_or_update_export_template)
         self.export_button.clicked.connect(self._export_current_work_list)
+        self.upload_to_gis_button.clicked.connect(self._upload_current_work_list_to_gis)
+        self.sync_gis_button.clicked.connect(self._sync_current_work_list_from_gis)
+        self.approve_gis_button.clicked.connect(self._approve_current_work_list_in_gis)
         self.create_button.clicked.connect(self._create_work_list)
         self.create_from_current_button.clicked.connect(self._clone_current_work_list)
         self.delete_button.clicked.connect(self._delete_work_list)
