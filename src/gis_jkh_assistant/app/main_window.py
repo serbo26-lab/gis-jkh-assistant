@@ -28,6 +28,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.repository = repository
         self.integration_gateway = LocalIntegrationGateway()
+        self.integration_gateway.start()
         self.setWindowTitle("GIS ЖКХ Assistant")
         self.resize(1360, 820)
         self.setMinimumSize(720, 520)
