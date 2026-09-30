@@ -129,6 +129,12 @@ class Repository:
                 end_month INTEGER NOT NULL,
                 planned_total TEXT,
                 status TEXT NOT NULL DEFAULT 'local',
+                gis_work_list_guid TEXT,
+                gis_file_guid TEXT,
+                gis_import_job_guid TEXT,
+                gis_status TEXT,
+                gis_last_sync_at TEXT,
+                gis_last_error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (house_id)
@@ -170,6 +176,12 @@ class Repository:
         )
         self._ensure_column("work_templates", "source_file_path", "TEXT")
         self._ensure_column("work_lists", "planned_total", "TEXT")
+        self._ensure_column("work_lists", "gis_work_list_guid", "TEXT")
+        self._ensure_column("work_lists", "gis_file_guid", "TEXT")
+        self._ensure_column("work_lists", "gis_import_job_guid", "TEXT")
+        self._ensure_column("work_lists", "gis_status", "TEXT")
+        self._ensure_column("work_lists", "gis_last_sync_at", "TEXT")
+        self._ensure_column("work_lists", "gis_last_error", "TEXT")
         self._ensure_column("work_list_items", "allocation_percent", "TEXT")
         self.connection.commit()
 
@@ -831,6 +843,60 @@ class Repository:
                         work_list_id,
                     ),
                 )
+
+    def update_work_list_gis_state(
+        self,
+        work_list_id: str,
+        *,
+        gis_work_list_guid: str | None = None,
+        gis_file_guid: str | None = None,
+        gis_import_job_guid: str | None = None,
+        gis_status: str | None = None,
+        gis_last_error: str | None = None,
+        sync_time: str | None = None,
+    ) -> None:
+        """Persist the last known GIS ЖКХ state for one local work list."""
+
+        updates: dict[str, object] = {
+            "gis_last_sync_at": sync_time or _now(),
+            "gis_last_error": _clean(gis_last_error),
+            "updated_at": _now(),
+        }
+
+        if gis_work_list_guid is not None:
+            updates["gis_work_list_guid"] = _clean(gis_work_list_guid)
+        if gis_file_guid is not None:
+            updates["gis_file_guid"] = _clean(gis_file_guid)
+        if gis_import_job_guid is not None:
+            updates["gis_import_job_guid"] = _clean(gis_import_job_guid)
+        if gis_status is not None:
+            normalized = str(gis_status).strip().upper()
+            updates["gis_status"] = normalized
+            if normalized == "DRAFT":
+                updates["status"] = str(WorkListStatus.GIS_DRAFT)
+            elif normalized == "APPROVED":
+                updates["status"] = str(WorkListStatus.PLACED)
+
+        clause = ", ".join(f"{key} = ?" for key in updates)
+        values = [updates[key] for key in updates]
+        values.append(work_list_id)
+
+        self.connection.execute(
+            f"UPDATE work_lists SET {clause} WHERE id = ?",
+            values,
+        )
+        self.connection.commit()
+
+    def clear_work_list_gis_error(self, work_list_id: str) -> None:
+        self.connection.execute(
+            """
+            UPDATE work_lists
+            SET gis_last_error = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (_now(), work_list_id),
+        )
+        self.connection.commit()
 
     def delete_work_list(self, work_list_id: str) -> None:
         self.connection.execute("DELETE FROM work_lists WHERE id = ?", (work_list_id,))
