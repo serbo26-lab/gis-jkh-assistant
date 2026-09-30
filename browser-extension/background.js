@@ -89,11 +89,13 @@ async function pollLoop() {
     const response = await localFetch("/next");
     if (response.status === 200) {
       const command = await response.json();
-      try {
-        const result = await executeInGisTab(command);
-        await sendResult(command.id, true, result, null);
-      } catch (error) {
-        await sendResult(command.id, false, null, String(error?.message || error));
+      if (command?.id && command?.type) {
+        try {
+          const result = await executeInGisTab(command);
+          await sendResult(command.id, true, result, null);
+        } catch (error) {
+          await sendResult(command.id, false, null, String(error?.message || error));
+        }
       }
     }
   } catch (_) {
