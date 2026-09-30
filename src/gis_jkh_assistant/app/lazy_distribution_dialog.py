@@ -119,6 +119,23 @@ class LazyDistributionDialog(QDialog):
             work_list.end_month,
         )
 
+        house = repository.get_house(work_list.house_id)
+        house_tariff = repository.find_house_tariff_covering_period(
+            work_list.house_id,
+            start_year=work_list.start_year,
+            start_month=work_list.start_month,
+            end_year=work_list.end_year,
+            end_month=work_list.end_month,
+        )
+        initial_tariff = (
+            work_list.planned_tariff
+            or (house_tariff.amount if house_tariff else "")
+        )
+        initial_area = (
+            work_list.planned_area
+            or (house.charge_area if house and house.charge_area else "")
+        )
+
         description = QLabel(
             f"Период: {work_list.period_label}. По умолчанию количество равно числу "
             f"месяцев периода: {self.period_month_count}. Это только предзаполнение: "
@@ -152,17 +169,24 @@ class LazyDistributionDialog(QDialog):
         calculator_label.setObjectName("Muted")
         controls.addWidget(calculator_label, 1, 0)
 
-        self.tariff_edit = QLineEdit(work_list.planned_tariff or "")
+        self.tariff_edit = QLineEdit(initial_tariff)
         self.tariff_edit.setPlaceholderText("Тариф")
-        self.tariff_edit.setToolTip("Тариф, руб. за м² в месяц")
+        tariff_tooltip = "Тариф, руб. за м² в месяц"
+        if not work_list.planned_tariff and house_tariff:
+            tariff_tooltip += (
+                f". Подставлен из карточки дома за период {house_tariff.period_label}"
+            )
+        self.tariff_edit.setToolTip(tariff_tooltip)
         controls.addWidget(self.tariff_edit, 1, 1)
 
         multiply_1 = QLabel("×")
         multiply_1.setAlignment(Qt.AlignmentFlag.AlignCenter)
         controls.addWidget(multiply_1, 1, 2)
 
-        self.area_edit = QLineEdit(work_list.planned_area or "")
+        self.area_edit = QLineEdit(initial_area)
         self.area_edit.setPlaceholderText("Площадь, м²")
+        if not work_list.planned_area and house and house.charge_area:
+            self.area_edit.setToolTip("Подставлено из поля «Площадь к начислению» карточки дома.")
         controls.addWidget(self.area_edit, 1, 3)
 
         multiply_2 = QLabel("×")
