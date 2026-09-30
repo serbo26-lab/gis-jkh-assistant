@@ -752,6 +752,69 @@ class WorkListsPage(QWidget):
                         "Очистите цену и объем, чтобы вводить стоимость."
                     )
 
+    @staticmethod
+    def _work_list_status_text(work_list) -> str:
+        value = work_list.status.value
+        if value == "local":
+            return "Локальный"
+        if value == "gis_draft":
+            return "Проект в ГИС ЖКХ"
+        if value == "placed":
+            return "Размещен в ГИС ЖКХ"
+        return value
+
+    @staticmethod
+    def _gis_state_text(work_list) -> str:
+        if work_list.gis_status == "DRAFT":
+            text = "Проект"
+        elif work_list.gis_status == "APPROVED":
+            text = "Размещен"
+        elif work_list.gis_status == "IMPORT_SENT":
+            text = "Файл отправлен на обработку"
+        elif work_list.gis_status == "NOT_FOUND":
+            text = "Не найден при последней проверке"
+        elif work_list.gis_status:
+            text = work_list.gis_status
+        else:
+            text = "Не загружен"
+
+        details = []
+        if work_list.gis_work_list_guid:
+            details.append(f"GUID: {work_list.gis_work_list_guid}")
+        if work_list.gis_last_sync_at:
+            details.append(f"проверено {work_list.gis_last_sync_at}")
+        if work_list.gis_last_error:
+            details.append(f"ошибка: {work_list.gis_last_error}")
+        return text + (f" • {' • '.join(details)}" if details else "")
+
+    def _refresh_integration_status(self) -> None:
+        status = self.integration_gateway.status()
+        if not status.running:
+            text = "Браузер: локальная интеграция не запущена"
+            if status.error:
+                text += f" ({status.error})"
+            self.browser_status.setText(text)
+            self.browser_status.setStyleSheet("color: #b42318;")
+            return
+
+        if not status.helper_connected:
+            self.browser_status.setText(
+                "Браузер: помощник не подключен. Установите расширение из папки "
+                "browser-extension и откройте личный кабинет ГИС ЖКХ."
+            )
+            self.browser_status.setStyleSheet("color: #8a5b00;")
+            return
+
+        if not status.gis_page_ready:
+            self.browser_status.setText(
+                "Браузер: помощник подключен, но вкладка ГИС ЖКХ не открыта."
+            )
+            self.browser_status.setStyleSheet("color: #8a5b00;")
+            return
+
+        self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
+        self.browser_status.setStyleSheet("color: #107c10;")
+
     def _refresh_export_template_status(self) -> None:
         path_text = self.repository.get_setting(_EXPORT_TEMPLATE_PATH_KEY)
         source_name = self.repository.get_setting(_EXPORT_TEMPLATE_NAME_KEY)
