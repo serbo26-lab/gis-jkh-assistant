@@ -127,6 +127,7 @@ class Repository:
                 start_month INTEGER NOT NULL,
                 end_year INTEGER NOT NULL,
                 end_month INTEGER NOT NULL,
+                planned_total TEXT,
                 status TEXT NOT NULL DEFAULT 'local',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -152,6 +153,7 @@ class Repository:
                 volume TEXT,
                 quantity TEXT,
                 cost TEXT,
+                allocation_percent TEXT,
                 FOREIGN KEY (work_list_id)
                     REFERENCES work_lists(id)
                     ON DELETE CASCADE
@@ -167,6 +169,8 @@ class Repository:
             """
         )
         self._ensure_column("work_templates", "source_file_path", "TEXT")
+        self._ensure_column("work_lists", "planned_total", "TEXT")
+        self._ensure_column("work_list_items", "allocation_percent", "TEXT")
         self.connection.commit()
 
     def _ensure_column(self, table: str, column: str, declaration: str) -> None:
@@ -524,8 +528,8 @@ class Repository:
                     """
                     INSERT INTO work_template_items (
                         id, template_id, position, work_code, work_name, work_guid,
-                        price, volume, quantity, cost
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -618,9 +622,9 @@ class Repository:
                 """
                 INSERT INTO work_lists (
                     id, house_id, template_id, base_year,
-                    start_year, start_month, end_year, end_month,
+                    start_year, start_month, end_year, end_month, planned_total,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 1, ?, 12, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, 12, NULL, ?, ?, ?)
                 """,
                 (
                     work_list_id,
@@ -648,8 +652,8 @@ class Repository:
                         """
                         INSERT INTO work_list_items (
                             id, work_list_id, position, work_code, work_name, work_guid,
-                            price, volume, quantity, cost
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            price, volume, quantity, cost, allocation_percent
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                         """,
                         (
                             str(uuid.uuid4()),
@@ -683,9 +687,9 @@ class Repository:
                 """
                 INSERT INTO work_lists (
                     id, house_id, template_id, base_year,
-                    start_year, start_month, end_year, end_month,
+                    start_year, start_month, end_year, end_month, planned_total,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     work_list_id,
@@ -696,6 +700,7 @@ class Repository:
                     source.start_month,
                     source.end_year + year_shift,
                     source.end_month,
+                    source.planned_total,
                     str(WorkListStatus.LOCAL),
                     timestamp,
                     timestamp,
@@ -728,6 +733,7 @@ class Repository:
                         row["volume"],
                         row["quantity"],
                         row["cost"],
+                        row["allocation_percent"],
                     ),
                 )
 
@@ -762,7 +768,16 @@ class Repository:
         self.connection.commit()
 
     def update_work_list_item(self, item_id: str, **fields: object) -> None:
-        allowed = {"work_code", "work_name", "work_guid", "price", "volume", "quantity", "cost"}
+        allowed = {
+            "work_code",
+            "work_name",
+            "work_guid",
+            "price",
+            "volume",
+            "quantity",
+            "cost",
+            "allocation_percent",
+        }
         updates = {key: value for key, value in fields.items() if key in allowed}
         if not updates:
             return
@@ -773,6 +788,49 @@ class Repository:
             f"UPDATE work_list_items SET {clause} WHERE id = ?", values
         )
         self.connection.commit()
+
+    def apply_lazy_distribution(
+        self,
+        work_list_id: str,
+        *,
+        planned_total: str,
+        rows: Iterable[object],
+    ) -> None:
+        """Atomically persist one calculated quantity+cost distribution."""
+
+        timestamp = _now()
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE work_lists
+                SET planned_total = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_clean(planned_total), timestamp, work_list_id),
+            )
+            for row in rows:
+                item_id = str(getattr(row, "item_id"))
+                allocation_percent = _clean(getattr(row, "allocation_percent", None))
+                quantity = _clean(getattr(row, "quantity", None))
+                cost = _clean(getattr(row, "cost", None))
+                self.connection.execute(
+                    """
+                    UPDATE work_list_items
+                    SET price = NULL,
+                        volume = NULL,
+                        quantity = ?,
+                        cost = ?,
+                        allocation_percent = ?
+                    WHERE id = ? AND work_list_id = ?
+                    """,
+                    (
+                        quantity,
+                        cost,
+                        allocation_percent,
+                        item_id,
+                        work_list_id,
+                    ),
+                )
 
     def delete_work_list(self, work_list_id: str) -> None:
         self.connection.execute("DELETE FROM work_lists WHERE id = ?", (work_list_id,))
