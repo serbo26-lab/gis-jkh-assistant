@@ -88,6 +88,7 @@ class WorkListsPage(QWidget):
         self.repository = repository
         self.integration_gateway = integration_gateway
         self._integration_worker: GisIntegrationWorker | None = None
+        self._integration_busy = False
         self._current_work_list_id: str | None = None
         self._loading = False
         self._period_dirty = False
@@ -537,6 +538,7 @@ class WorkListsPage(QWidget):
             self.gis_state_label.setText("—")
             self.selected_label.setText("Выбранный перечень: —")
             self.save_status.setText("Сохранено")
+            self._refresh_gis_action_buttons()
             return
 
         work_list = self.repository.get_work_list(work_list_id)
@@ -571,6 +573,7 @@ class WorkListsPage(QWidget):
             self.gis_state_label.setText(self._gis_state_text(work_list))
             self.selected_label.setText(f"Выбранный перечень: {work_list.period_label}")
             self._load_items(work_list_id)
+            self._refresh_gis_action_buttons()
         finally:
             self._loading = False
 
@@ -795,25 +798,40 @@ class WorkListsPage(QWidget):
                 text += f" ({status.error})"
             self.browser_status.setText(text)
             self.browser_status.setStyleSheet("color: #b42318;")
-            return
-
-        if not status.helper_connected:
+        elif not status.helper_connected:
             self.browser_status.setText(
                 "Браузер: помощник не подключен. Установите расширение из папки "
                 "browser-extension и откройте личный кабинет ГИС ЖКХ."
             )
             self.browser_status.setStyleSheet("color: #8a5b00;")
-            return
-
-        if not status.gis_page_ready:
+        elif not status.gis_page_ready:
             self.browser_status.setText(
                 "Браузер: помощник подключен, но вкладка ГИС ЖКХ не открыта."
             )
             self.browser_status.setStyleSheet("color: #8a5b00;")
-            return
+        else:
+            self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
+            self.browser_status.setStyleSheet("color: #107c10;")
 
-        self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
-        self.browser_status.setStyleSheet("color: #107c10;")
+        self._refresh_gis_action_buttons()
+
+    def _refresh_gis_action_buttons(self) -> None:
+        status = self.integration_gateway.status()
+        ready = status.running and status.helper_connected and status.gis_page_ready
+        selected = self._current_work_list_id is not None
+        work_list = (
+            self.repository.get_work_list(self._current_work_list_id)
+            if selected
+            else None
+        )
+        gis_status = work_list.gis_status if work_list else None
+
+        enabled = ready and selected and not self._integration_busy
+        self.sync_gis_button.setEnabled(enabled)
+        self.upload_to_gis_button.setEnabled(
+            enabled and gis_status in {None, "", "NOT_FOUND"}
+        )
+        self.approve_gis_button.setEnabled(enabled and gis_status == "DRAFT")
 
     def _refresh_export_template_status(self) -> None:
         path_text = self.repository.get_setting(_EXPORT_TEMPLATE_PATH_KEY)
@@ -1114,12 +1132,8 @@ class WorkListsPage(QWidget):
                 temporary_path.unlink(missing_ok=True)
 
     def _set_integration_busy(self, busy: bool, text: str | None = None) -> None:
-        for button in (
-            self.upload_to_gis_button,
-            self.sync_gis_button,
-            self.approve_gis_button,
-        ):
-            button.setEnabled(not busy and self._current_work_list_id is not None)
+        self._integration_busy = busy
+        self._refresh_gis_action_buttons()
         if busy and text:
             self.save_status.setText(text)
         elif not busy:
@@ -1378,11 +1392,9 @@ class WorkListsPage(QWidget):
             self.create_from_current_button,
             self.export_button,
             self.lazy_fill_button,
-            self.upload_to_gis_button,
-            self.sync_gis_button,
-            self.approve_gis_button,
         ):
             widget.setEnabled(enabled)
+        self._refresh_gis_action_buttons()
 
     def set_view_mode(self, mode: str) -> None:
         """Switch between normal, compact and narrow responsive layouts."""
