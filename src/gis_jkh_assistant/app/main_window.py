@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
 
         self.pages = QStackedWidget()
         self.houses_page = HousesPage(repository)
-        self.work_lists_page = WorkListsPage(repository)
+        self.work_lists_page = WorkListsPage(repository, self.integration_gateway)
         self.pages.addWidget(self.houses_page)
         self.pages.addWidget(self.work_lists_page)
         for title in ("Планирование", "Выполнение", "Настройки"):
