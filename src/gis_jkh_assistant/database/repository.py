@@ -876,6 +876,9 @@ class Repository:
                 updates["status"] = str(WorkListStatus.GIS_DRAFT)
             elif normalized == "APPROVED":
                 updates["status"] = str(WorkListStatus.PLACED)
+            elif normalized == "NOT_FOUND":
+                updates["status"] = str(WorkListStatus.LOCAL)
+                updates["gis_work_list_guid"] = None
 
         clause = ", ".join(f"{key} = ?" for key in updates)
         values = [updates[key] for key in updates]
