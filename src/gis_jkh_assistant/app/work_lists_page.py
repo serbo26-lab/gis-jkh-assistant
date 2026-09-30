@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import shutil
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database.paths import gis_export_template_dir
 from gis_jkh_assistant.database.repository import Repository
+from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 from gis_jkh_assistant.gis_files.work_lists import (
     WorkListExportError,
     WorkTemplateImportError,
@@ -41,6 +44,7 @@ from gis_jkh_assistant.gis_files.work_lists import (
     parse_work_template,
 )
 
+from .gis_integration_worker import GisIntegrationWorker
 from .lazy_distribution_dialog import LazyDistributionDialog
 from .widgets import SafeComboBox, SafeSpinBox
 from .work_row_rules import editable_columns_for_mode, infer_work_row_mode
@@ -74,9 +78,16 @@ _EXPORT_TEMPLATE_UPDATED_KEY = "gis_work_list_export_template_updated_at"
 class WorkListsPage(QWidget):
     """Local work-list registry grouped by organization and house."""
 
-    def __init__(self, repository: Repository, parent=None) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        integration_gateway: LocalIntegrationGateway,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.repository = repository
+        self.integration_gateway = integration_gateway
+        self._integration_worker: GisIntegrationWorker | None = None
         self._current_work_list_id: str | None = None
         self._loading = False
         self._period_dirty = False
@@ -87,8 +98,14 @@ class WorkListsPage(QWidget):
         self._period_timer.setInterval(650)
         self._period_timer.timeout.connect(self._save_period)
 
+        self._integration_status_timer = QTimer(self)
+        self._integration_status_timer.setInterval(1500)
+        self._integration_status_timer.timeout.connect(self._refresh_integration_status)
+
         self._build_ui()
         self._refresh_export_template_status()
+        self._refresh_integration_status()
+        self._integration_status_timer.start()
         self.refresh_organizations()
 
     def _build_ui(self) -> None:
