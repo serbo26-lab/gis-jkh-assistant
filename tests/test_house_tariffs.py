@@ -116,3 +116,44 @@ def test_house_delete_cascades_tariffs(tmp_path) -> None:
 
     assert repository.list_house_tariffs(house.id) == []
     repository.close()
+
+
+def test_last_tariff_continues_until_next_explicit_change(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    organization = repository.create_organization(
+        name="УК Пример",
+        ogrn="1022600000000",
+    )
+    house = repository.create_house(
+        organization_id=organization.id,
+        address="г Ставрополь, ул Примерная, д. 4",
+    )
+
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="22",
+        start_year=2020,
+        start_month=8,
+    )
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="23",
+        start_year=2021,
+        start_month=8,
+    )
+
+    tariffs = repository.list_house_tariffs(house.id)
+    assert tariffs[0].period_label == "08.2020 — 07.2021"
+    assert tariffs[1].period_label == "с 08.2021"
+
+    selected = repository.find_house_tariff_covering_period(
+        house.id,
+        start_year=2024,
+        start_month=1,
+        end_year=2024,
+        end_month=12,
+    )
+    assert selected is not None
+    assert selected.amount == "23"
+
+    repository.close()
