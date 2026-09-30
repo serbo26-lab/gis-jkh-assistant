@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .models import (
     House,
+    HouseTariff,
     ManagementOrganization,
     RecordSource,
     TemplateSource,
@@ -62,6 +63,7 @@ class Repository:
                 fias_house_guid TEXT,
                 gis_unique_house_number TEXT,
                 cadastral_number TEXT,
+                charge_area TEXT,
                 residential_premises_count INTEGER NOT NULL DEFAULT 0,
                 non_residential_premises_count INTEGER NOT NULL DEFAULT 0,
                 source TEXT NOT NULL DEFAULT 'manual',
@@ -80,6 +82,24 @@ class Repository:
             CREATE UNIQUE INDEX IF NOT EXISTS ux_house_gis_guid
                 ON houses(organization_id, gis_house_guid)
                 WHERE gis_house_guid IS NOT NULL AND gis_house_guid <> '';
+
+            CREATE TABLE IF NOT EXISTS house_tariffs (
+                id TEXT PRIMARY KEY,
+                house_id TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                start_year INTEGER NOT NULL,
+                start_month INTEGER NOT NULL,
+                end_year INTEGER NOT NULL,
+                end_month INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (house_id)
+                    REFERENCES houses(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_house_tariffs_period
+                ON house_tariffs(house_id, start_year, start_month, end_year, end_month);
 
             CREATE TABLE IF NOT EXISTS work_templates (
                 id TEXT PRIMARY KEY,
@@ -177,6 +197,7 @@ class Repository:
             );
             """
         )
+        self._ensure_column("houses", "charge_area", "TEXT")
         self._ensure_column("work_templates", "source_file_path", "TEXT")
         self._ensure_column("work_lists", "planned_total", "TEXT")
         self._ensure_column("work_lists", "planned_tariff", "TEXT")
@@ -338,6 +359,7 @@ class Repository:
         fias_house_guid: str | None = None,
         gis_unique_house_number: str | None = None,
         cadastral_number: str | None = None,
+        charge_area: str | None = None,
         residential_premises_count: int = 0,
         non_residential_premises_count: int = 0,
         source: RecordSource = RecordSource.MANUAL,
@@ -349,10 +371,10 @@ class Repository:
             """
             INSERT INTO houses (
                 id, organization_id, address, house_object_guid, gis_house_guid,
-                fias_house_guid, gis_unique_house_number, cadastral_number,
+                fias_house_guid, gis_unique_house_number, cadastral_number, charge_area,
                 residential_premises_count, non_residential_premises_count,
                 source, comment, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 house_id,
@@ -363,6 +385,7 @@ class Repository:
                 _clean(fias_house_guid),
                 _clean(gis_unique_house_number),
                 _clean(cadastral_number),
+                _clean(charge_area),
                 max(0, int(residential_premises_count)),
                 max(0, int(non_residential_premises_count)),
                 str(source),
@@ -385,6 +408,7 @@ class Repository:
             "fias_house_guid",
             "gis_unique_house_number",
             "cadastral_number",
+            "charge_area",
             "residential_premises_count",
             "non_residential_premises_count",
             "comment",
@@ -455,6 +479,136 @@ class Repository:
         self.connection.execute("DELETE FROM houses WHERE id = ?", (house_id,))
         self.connection.commit()
 
+
+    @staticmethod
+    def _house_tariff_from_row(row: sqlite3.Row) -> HouseTariff:
+        return HouseTariff(**dict(row))
+
+    def list_house_tariffs(self, house_id: str) -> list[HouseTariff]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM house_tariffs
+            WHERE house_id = ?
+            ORDER BY start_year, start_month, end_year, end_month, created_at
+            """,
+            (house_id,),
+        ).fetchall()
+        return [self._house_tariff_from_row(row) for row in rows]
+
+    def get_house_tariff(self, tariff_id: str) -> HouseTariff | None:
+        row = self.connection.execute(
+            "SELECT * FROM house_tariffs WHERE id = ?",
+            (tariff_id,),
+        ).fetchone()
+        return self._house_tariff_from_row(row) if row else None
+
+    def create_house_tariff(
+        self,
+        *,
+        house_id: str,
+        amount: str,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+    ) -> HouseTariff:
+        _validate_period(start_year, start_month, end_year, end_month)
+        tariff_id = str(uuid.uuid4())
+        timestamp = _now()
+        self.connection.execute(
+            """
+            INSERT INTO house_tariffs (
+                id, house_id, amount,
+                start_year, start_month, end_year, end_month,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tariff_id,
+                house_id,
+                _required_text(amount, "Тариф"),
+                int(start_year),
+                int(start_month),
+                int(end_year),
+                int(end_month),
+                timestamp,
+                timestamp,
+            ),
+        )
+        self.connection.commit()
+        result = self.get_house_tariff(tariff_id)
+        assert result is not None
+        return result
+
+    def update_house_tariff(
+        self,
+        tariff_id: str,
+        *,
+        amount: str,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+    ) -> None:
+        _validate_period(start_year, start_month, end_year, end_month)
+        self.connection.execute(
+            """
+            UPDATE house_tariffs
+            SET amount = ?,
+                start_year = ?,
+                start_month = ?,
+                end_year = ?,
+                end_month = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                _required_text(amount, "Тариф"),
+                int(start_year),
+                int(start_month),
+                int(end_year),
+                int(end_month),
+                _now(),
+                tariff_id,
+            ),
+        )
+        self.connection.commit()
+
+    def delete_house_tariff(self, tariff_id: str) -> None:
+        self.connection.execute(
+            "DELETE FROM house_tariffs WHERE id = ?",
+            (tariff_id,),
+        )
+        self.connection.commit()
+
+    def find_house_tariff_covering_period(
+        self,
+        house_id: str,
+        *,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+    ) -> HouseTariff | None:
+        _validate_period(start_year, start_month, end_year, end_month)
+        start_key = int(start_year) * 12 + int(start_month)
+        end_key = int(end_year) * 12 + int(end_month)
+
+        candidates = self.list_house_tariffs(house_id)
+        matching = [
+            item
+            for item in candidates
+            if (
+                item.start_year * 12 + item.start_month <= start_key
+                and item.end_year * 12 + item.end_month >= end_key
+            )
+        ]
+        if not matching:
+            return None
+        return max(
+            matching,
+            key=lambda item: (item.start_year, item.start_month, item.updated_at or ""),
+        )
 
     @staticmethod
     def _template_from_row(row: sqlite3.Row) -> WorkTemplate:
@@ -941,6 +1095,27 @@ class Repository:
         self.connection.execute("DELETE FROM work_lists WHERE id = ?", (work_list_id,))
         self.connection.commit()
 
+
+
+def _validate_period(
+    start_year: int,
+    start_month: int,
+    end_year: int,
+    end_month: int,
+) -> None:
+    start = int(start_year) * 12 + int(start_month)
+    end = int(end_year) * 12 + int(end_month)
+    if not 1 <= int(start_month) <= 12 or not 1 <= int(end_month) <= 12:
+        raise ValueError("Месяц должен быть от 1 до 12.")
+    if end < start:
+        raise ValueError("Окончание периода тарифа не может быть раньше начала.")
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} не может быть пустым.")
+    return text
 
 
 def _clean(value: object) -> str | None:
