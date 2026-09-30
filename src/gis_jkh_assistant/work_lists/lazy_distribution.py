@@ -19,6 +19,7 @@ class LazyDistributionError(ValueError):
 class AllocationInput:
     item_id: str
     allocation_percent: str | None
+    quantity: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,24 +64,38 @@ def calculate_distribution(
         raise LazyDistributionError("Итоговая сумма должна быть больше нуля.")
     total = total.quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
+    months = period_months(start_year, start_month, end_year, end_month)
     inputs = list(allocations)
-    parsed: list[Decimal] = []
-    for allocation in inputs:
-        value = _decimal(allocation.allocation_percent or "0", "Процент")
-        if value < 0:
-            raise LazyDistributionError("Процент распределения не может быть отрицательным.")
-        parsed.append(value)
 
-    percent_sum = sum(parsed, Decimal("0"))
+    parsed_percents: list[Decimal] = []
+    parsed_quantities: list[Decimal | None] = []
+
+    for allocation in inputs:
+        percent = _decimal(allocation.allocation_percent or "0", "Процент")
+        if percent < 0:
+            raise LazyDistributionError("Процент распределения не может быть отрицательным.")
+        parsed_percents.append(percent)
+
+        if percent == 0:
+            parsed_quantities.append(None)
+            continue
+
+        quantity_text = allocation.quantity or str(months)
+        quantity = _decimal(quantity_text, "Количество")
+        if quantity <= 0:
+            raise LazyDistributionError(
+                "Для каждой позиции с процентом больше нуля количество должно быть больше нуля."
+            )
+        parsed_quantities.append(quantity)
+
+    percent_sum = sum(parsed_percents, Decimal("0"))
     if percent_sum != PERCENT_TOTAL:
         raise LazyDistributionError(
             f"Сумма процентов должна быть ровно 100%. Сейчас: {_storage(percent_sum)}%."
         )
 
-    months = period_months(start_year, start_month, end_year, end_month)
-
     costs: list[Decimal] = []
-    for percent in parsed:
+    for percent in parsed_percents:
         if percent == 0:
             costs.append(Decimal("0"))
         else:
@@ -93,14 +108,25 @@ def calculate_distribution(
 
     residual = total - sum(costs, Decimal("0"))
     if residual:
-        positive_indexes = [index for index, percent in enumerate(parsed) if percent > 0]
+        positive_indexes = [
+            index for index, percent in enumerate(parsed_percents) if percent > 0
+        ]
         if not positive_indexes:
             raise LazyDistributionError("Не задано ни одной позиции с процентом больше нуля.")
-        target_index = max(positive_indexes, key=lambda index: parsed[index])
+        target_index = max(
+            positive_indexes,
+            key=lambda index: parsed_percents[index],
+        )
         costs[target_index] += residual
 
     rows: list[AllocationResult] = []
-    for allocation, percent, cost in zip(inputs, parsed, costs, strict=True):
+    for allocation, percent, quantity, cost in zip(
+        inputs,
+        parsed_percents,
+        parsed_quantities,
+        costs,
+        strict=True,
+    ):
         if percent == 0:
             rows.append(
                 AllocationResult(
@@ -111,11 +137,12 @@ def calculate_distribution(
                 )
             )
         else:
+            assert quantity is not None
             rows.append(
                 AllocationResult(
                     item_id=allocation.item_id,
                     allocation_percent=_storage(percent),
-                    quantity=str(months),
+                    quantity=_storage(quantity),
                     cost=_storage(cost),
                 )
             )
@@ -135,12 +162,30 @@ def preview_cost(planned_total: str, percent: str | None) -> str:
     part = _decimal(percent or "0", "Процент")
     if total < 0 or part < 0:
         raise LazyDistributionError("Сумма и процент не могут быть отрицательными.")
-    value = (total * part / PERCENT_TOTAL).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+    value = (total * part / PERCENT_TOTAL).quantize(
+        MONEY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
     return _storage(value)
 
 
+def validate_quantity(value: str | None) -> str:
+    """Normalize a positive quantity entered by the user."""
+
+    quantity = _decimal(value or "0", "Количество")
+    if quantity <= 0:
+        raise LazyDistributionError("Количество должно быть больше нуля.")
+    return _storage(quantity)
+
+
 def _decimal(value: str, label: str) -> Decimal:
-    normalized = str(value).replace("\u00a0", "").replace(" ", "").replace(",", ".").strip()
+    normalized = (
+        str(value)
+        .replace("\u00a0", "")
+        .replace(" ", "")
+        .replace(",", ".")
+        .strip()
+    )
     if not normalized:
         return Decimal("0")
     try:
