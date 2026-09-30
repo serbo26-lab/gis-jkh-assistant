@@ -41,16 +41,17 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          Compress-Archive -Path dist/GIS-JKH-Assistant.exe -DestinationPath dist/GIS-JKH-Assistant-windows.zip -Force
-          "Build version: $version" | Out-File -FilePath dist/VERSION.txt -Encoding utf8
+          New-Item -ItemType Directory -Path dist/package -Force | Out-Null
+          Copy-Item dist/GIS-JKH-Assistant.exe dist/package/GIS-JKH-Assistant.exe -Force
+          Copy-Item browser-extension dist/package/browser-extension -Recurse -Force
+          "Build version: $version" | Out-File -FilePath dist/package/VERSION.txt -Encoding utf8
+          Compress-Archive -Path dist/package/* -DestinationPath dist/GIS-JKH-Assistant-windows.zip -Force
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GIS-JKH-Assistant-0.1.0.dev13-windows
-          path: |
-            dist/GIS-JKH-Assistant.exe
-            dist/VERSION.txt
+          name: GIS-JKH-Assistant-0.1.0.dev14-windows
+          path: dist/GIS-JKH-Assistant-windows.zip
 
       - name: Publish rolling GitHub prerelease
         if: github.ref == 'refs/heads/main'
@@ -68,7 +69,10 @@ jobs:
           Версия: $version
           Коммит: $sha
 
-          Архив содержит GIS-JKH-Assistant.exe.
+          Архив содержит GIS-JKH-Assistant.exe и папку browser-extension.
+          Для автоматического обмена с ГИС ЖКХ установите расширение из этой папки
+          в Chrome или Edge в режиме разработчика.
+
           Эта сборка предназначена для проверки текущей разработки.
           "@
 
