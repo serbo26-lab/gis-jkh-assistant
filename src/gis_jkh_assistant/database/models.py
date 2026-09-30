@@ -103,6 +103,12 @@ class WorkList:
     end_month: int
     planned_total: str | None = None
     status: WorkListStatus = WorkListStatus.LOCAL
+    gis_work_list_guid: str | None = None
+    gis_file_guid: str | None = None
+    gis_import_job_guid: str | None = None
+    gis_status: str | None = None
+    gis_last_sync_at: str | None = None
+    gis_last_error: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
