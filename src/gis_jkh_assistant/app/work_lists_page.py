@@ -304,9 +304,12 @@ class WorkListsPage(QWidget):
         self.template_label = QLabel("—")
         self.status_label = QLabel("—")
         self.planned_total_label = QLabel("—")
+        self.gis_state_label = QLabel("—")
+        self.gis_state_label.setWordWrap(True)
         period_form.addRow("Шаблон", self.template_label)
         period_form.addRow("Статус", self.status_label)
         period_form.addRow("Планируемая сумма", self.planned_total_label)
+        period_form.addRow("ГИС ЖКХ", self.gis_state_label)
         right_layout.addLayout(period_form)
 
         items_header = QHBoxLayout()
@@ -441,7 +444,7 @@ class WorkListsPage(QWidget):
                 else None
             )
             template_name = template.name if template else "Без шаблона"
-            status = "Локальный" if work_list.status.value == "local" else work_list.status.value
+            status = self._work_list_status_text(work_list)
             item = QListWidgetItem(
                 f"{work_list.period_label}\n{template_name} • {status}"
             )
@@ -531,6 +534,7 @@ class WorkListsPage(QWidget):
             self.template_label.setText("—")
             self.status_label.setText("—")
             self.planned_total_label.setText("—")
+            self.gis_state_label.setText("—")
             self.selected_label.setText("Выбранный перечень: —")
             self.save_status.setText("Сохранено")
             return
@@ -560,12 +564,11 @@ class WorkListsPage(QWidget):
                 else None
             )
             self.template_label.setText(template.name if template else "Без шаблона")
-            self.status_label.setText(
-                "Локальный" if work_list.status.value == "local" else work_list.status.value
-            )
+            self.status_label.setText(self._work_list_status_text(work_list))
             self.planned_total_label.setText(
                 f"{work_list.planned_total} руб." if work_list.planned_total else "—"
             )
+            self.gis_state_label.setText(self._gis_state_text(work_list))
             self.selected_label.setText(f"Выбранный перечень: {work_list.period_label}")
             self._load_items(work_list_id)
         finally:
