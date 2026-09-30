@@ -610,24 +610,27 @@ class Repository:
         end_month: int,
     ) -> HouseTariff | None:
         _validate_period(start_year, start_month, end_year, end_month)
-        start_key = int(start_year) * 12 + int(start_month)
-        end_key = int(end_year) * 12 + int(end_month)
+        start_key = _month_key(start_year, start_month)
+        end_key = _month_key(end_year, end_month)
 
         candidates = self.list_house_tariffs(house_id)
-        matching = [
+        active = [
             item
             for item in candidates
-            if (
-                item.start_year * 12 + item.start_month <= start_key
-                and item.end_year * 12 + item.end_month >= end_key
-            )
+            if _month_key(item.start_year, item.start_month) <= start_key
         ]
-        if not matching:
+        if not active:
             return None
-        return max(
-            matching,
-            key=lambda item: (item.start_year, item.start_month, item.updated_at or ""),
-        )
+
+        current = active[-1]
+        later_changes = [
+            item
+            for item in candidates
+            if start_key < _month_key(item.start_year, item.start_month) <= end_key
+        ]
+        if later_changes:
+            return None
+        return current
 
     def _assert_unique_tariff_start(
         self,
