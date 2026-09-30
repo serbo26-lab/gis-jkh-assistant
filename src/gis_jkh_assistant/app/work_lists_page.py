@@ -182,7 +182,7 @@ class WorkListsPage(QWidget):
         context_layout.addWidget(self.template_combo, 4, 3)
 
         self.templates_button = QPushButton("Шаблоны пользователя")
-        self.create_from_current_button = QPushButton("Создать на основе выбранного")
+        self.create_from_current_button = QPushButton("Создать на основе выбранного перечня")
         self.create_button = QPushButton("Создать новый перечень")
         self.create_button.setObjectName("PrimaryButton")
 
@@ -191,9 +191,9 @@ class WorkListsPage(QWidget):
         creation_actions.setHorizontalSpacing(8)
         creation_actions.setVerticalSpacing(6)
         creation_actions.addWidget(self.templates_button, 0, 0)
-        creation_actions.addWidget(self.create_from_current_button, 0, 2)
         creation_actions.addWidget(self.create_button, 0, 3)
         creation_actions.setColumnStretch(1, 1)
+        creation_actions.setColumnStretch(2, 1)
         context_layout.addLayout(creation_actions, 5, 0, 1, 4)
 
         gis_title = QLabel("Обмен с ГИС ЖКХ")
@@ -254,6 +254,11 @@ class WorkListsPage(QWidget):
         self.work_lists.setWordWrap(True)
         self.work_lists.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         left_layout.addWidget(self.work_lists, 1)
+
+        self.create_from_current_button.setToolTip(
+            "Создать новый перечень на основе выбранного в списке выше."
+        )
+        left_layout.addWidget(self.create_from_current_button)
 
         self.delete_button = QPushButton("Удалить перечень")
         self.delete_button.setObjectName("DangerButton")
@@ -1419,9 +1424,9 @@ class WorkListsPage(QWidget):
             self.splitter.setSizes([340, 840])
 
             self.creation_actions.addWidget(self.templates_button, 0, 0)
-            self.creation_actions.addWidget(self.create_from_current_button, 0, 2)
             self.creation_actions.addWidget(self.create_button, 0, 3)
             self.creation_actions.setColumnStretch(1, 1)
+            self.creation_actions.setColumnStretch(2, 1)
 
             self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
             self.gis_actions.addWidget(self.export_button, 0, 2)
@@ -1441,9 +1446,9 @@ class WorkListsPage(QWidget):
             self.splitter.setSizes([280, 540])
 
             self.creation_actions.addWidget(self.templates_button, 0, 0)
-            self.creation_actions.addWidget(self.create_from_current_button, 0, 2)
             self.creation_actions.addWidget(self.create_button, 0, 3)
             self.creation_actions.setColumnStretch(1, 1)
+            self.creation_actions.setColumnStretch(2, 1)
 
             self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
             self.gis_actions.addWidget(self.export_button, 0, 2)
@@ -1465,9 +1470,8 @@ class WorkListsPage(QWidget):
             self.splitter.setOrientation(Qt.Orientation.Vertical)
             self.splitter.setSizes([330, 560])
 
-            self.creation_actions.addWidget(self.templates_button, 0, 0, 1, 2)
-            self.creation_actions.addWidget(self.create_from_current_button, 1, 0)
-            self.creation_actions.addWidget(self.create_button, 1, 1)
+            self.creation_actions.addWidget(self.templates_button, 0, 0)
+            self.creation_actions.addWidget(self.create_button, 0, 1)
             self.creation_actions.setColumnStretch(0, 1)
             self.creation_actions.setColumnStretch(1, 1)
 
