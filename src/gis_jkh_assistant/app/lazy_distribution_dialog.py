@@ -201,8 +201,13 @@ class LazyDistributionDialog(QDialog):
         self.percent_status.setText(f"Распределено: {_display_decimal(percent_sum)}%")
         self.amount_status.setText(f"Предварительно: {_display_money(amount_sum)} руб.")
 
+        try:
+            total_valid = _decimal_or_zero(total_text) > 0
+        except InvalidOperation:
+            total_valid = False
+
         exact = valid and percent_sum == Decimal("100")
-        self.apply_button.setEnabled(exact and _decimal_or_zero(total_text) > 0)
+        self.apply_button.setEnabled(exact and total_valid)
         if exact:
             self.percent_status.setStyleSheet("color: #107c10;")
         else:
