@@ -1175,18 +1175,33 @@ class Repository:
 
 
 
+def _month_key(year: int, month: int) -> int:
+    return int(year) * 12 + (int(month) - 1)
+
+
+def _year_month_from_key(value: int) -> tuple[int, int]:
+    return value // 12, value % 12 + 1
+
+
+def _validate_month_point(year: int, month: int) -> None:
+    if int(year) < 1900:
+        raise ValueError("Год указан некорректно.")
+    if not 1 <= int(month) <= 12:
+        raise ValueError("Месяц должен быть от 1 до 12.")
+
+
 def _validate_period(
     start_year: int,
     start_month: int,
     end_year: int,
     end_month: int,
 ) -> None:
-    start = int(start_year) * 12 + int(start_month)
-    end = int(end_year) * 12 + int(end_month)
-    if not 1 <= int(start_month) <= 12 or not 1 <= int(end_month) <= 12:
-        raise ValueError("Месяц должен быть от 1 до 12.")
+    _validate_month_point(start_year, start_month)
+    _validate_month_point(end_year, end_month)
+    start = _month_key(start_year, start_month)
+    end = _month_key(end_year, end_month)
     if end < start:
-        raise ValueError("Окончание периода тарифа не может быть раньше начала.")
+        raise ValueError("Окончание периода не может быть раньше начала.")
 
 
 def _required_text(value: object, label: str) -> str:
