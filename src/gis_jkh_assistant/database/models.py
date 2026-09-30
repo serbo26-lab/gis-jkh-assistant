@@ -101,6 +101,7 @@ class WorkList:
     start_month: int
     end_year: int
     end_month: int
+    planned_total: str | None = None
     status: WorkListStatus = WorkListStatus.LOCAL
     created_at: str | None = None
     updated_at: str | None = None
@@ -125,3 +126,4 @@ class WorkListItem:
     volume: str | None = None
     quantity: str | None = None
     cost: str | None = None
+    allocation_percent: str | None = None
