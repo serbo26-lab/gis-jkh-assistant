@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database import Repository
+from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 
 from .houses_page import HousesPage
 from .styles import COMPACT_WINDOW_STYLESHEET, NARROW_WINDOW_STYLESHEET
