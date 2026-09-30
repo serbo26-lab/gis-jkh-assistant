@@ -8,6 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -238,9 +239,15 @@ class HousesPage(QWidget):
             ["Период с", "Период по", "Тариф, руб./м² в месяц"]
         )
         self.tariffs_table.verticalHeader().setVisible(False)
-        self.tariffs_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.tariffs_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.tariffs_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tariffs_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.tariffs_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.tariffs_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
         self.tariffs_table.setAlternatingRowColors(True)
         self.tariffs_table.setMinimumHeight(150)
         tariff_header_view = self.tariffs_table.horizontalHeader()
