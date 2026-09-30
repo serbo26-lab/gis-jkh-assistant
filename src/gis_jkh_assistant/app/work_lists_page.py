@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -40,6 +41,7 @@ from gis_jkh_assistant.gis_files.work_lists import (
     parse_work_template,
 )
 
+from .lazy_distribution_dialog import LazyDistributionDialog
 from .widgets import SafeComboBox, SafeSpinBox
 from .work_row_rules import editable_columns_for_mode, infer_work_row_mode
 from .work_templates_dialog import WorkTemplatesDialog
@@ -272,13 +274,20 @@ class WorkListsPage(QWidget):
 
         self.template_label = QLabel("—")
         self.status_label = QLabel("—")
+        self.planned_total_label = QLabel("—")
         period_form.addRow("Шаблон", self.template_label)
         period_form.addRow("Статус", self.status_label)
+        period_form.addRow("Планируемая сумма", self.planned_total_label)
         right_layout.addLayout(period_form)
 
+        items_header = QHBoxLayout()
         items_title = QLabel("Работы и услуги")
         items_title.setObjectName("SectionTitle")
-        right_layout.addWidget(items_title)
+        items_header.addWidget(items_title)
+        items_header.addStretch(1)
+        self.lazy_fill_button = QPushButton("Распределить от итоговой суммы…")
+        items_header.addWidget(self.lazy_fill_button)
+        right_layout.addLayout(items_header)
 
         input_hint = QLabel(
             "Для каждой строки используется один из двух вариантов: "
@@ -313,6 +322,7 @@ class WorkListsPage(QWidget):
         self.create_button.clicked.connect(self._create_work_list)
         self.create_from_current_button.clicked.connect(self._clone_current_work_list)
         self.delete_button.clicked.connect(self._delete_work_list)
+        self.lazy_fill_button.clicked.connect(self._open_lazy_distribution)
         self.work_lists.currentItemChanged.connect(self._work_list_changed)
 
         for widget in (self.start_month, self.end_month):
@@ -488,6 +498,7 @@ class WorkListsPage(QWidget):
             self.items_table.setRowCount(0)
             self.template_label.setText("—")
             self.status_label.setText("—")
+            self.planned_total_label.setText("—")
             self.selected_label.setText("Выбранный перечень: —")
             self.save_status.setText("Сохранено")
             return
@@ -519,6 +530,9 @@ class WorkListsPage(QWidget):
             self.template_label.setText(template.name if template else "Без шаблона")
             self.status_label.setText(
                 "Локальный" if work_list.status.value == "local" else work_list.status.value
+            )
+            self.planned_total_label.setText(
+                f"{work_list.planned_total} руб." if work_list.planned_total else "—"
             )
             self.selected_label.setText(f"Выбранный перечень: {work_list.period_label}")
             self._load_items(work_list_id)
@@ -910,6 +924,37 @@ class WorkListsPage(QWidget):
             f"{result.output_path}",
         )
 
+    def _open_lazy_distribution(self) -> None:
+        self._save_period()
+        if not self._current_work_list_id:
+            return
+
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if not work_list:
+            return
+
+        items = self.repository.list_work_list_items(work_list.id)
+        if not items:
+            QMessageBox.information(
+                self,
+                "Нет позиций для распределения",
+                "В выбранном перечне нет работ и услуг. "
+                "Сначала создайте перечень на основе пользовательского шаблона.",
+            )
+            return
+
+        dialog = LazyDistributionDialog(self.repository, work_list, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        refreshed = self.repository.get_work_list(work_list.id)
+        if refreshed:
+            self.planned_total_label.setText(
+                f"{refreshed.planned_total} руб." if refreshed.planned_total else "—"
+            )
+        self._load_items(work_list.id)
+        self.save_status.setText("Сохранено")
+
     def _manage_templates(self) -> None:
         self._save_period()
         organization_id = self.organization_combo.currentData()
@@ -956,6 +1001,7 @@ class WorkListsPage(QWidget):
             self.delete_button,
             self.create_from_current_button,
             self.export_button,
+            self.lazy_fill_button,
         ):
             widget.setEnabled(enabled)
 
