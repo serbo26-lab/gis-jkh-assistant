@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
@@ -160,10 +161,17 @@ class HouseTariffDialog(QDialog):
         "Декабрь",
     )
 
-    def __init__(self, parent=None, tariff: HouseTariff | None = None) -> None:
+    def __init__(
+        self,
+        parent=None,
+        tariff: HouseTariff | None = None,
+        *,
+        default_start_year: int | None = None,
+        default_start_month: int | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Тариф дома")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
 
         current_year = datetime.now().year
 
@@ -171,26 +179,29 @@ class HouseTariffDialog(QDialog):
         self.amount_edit.setPlaceholderText("Например: 25,04")
 
         self.start_month_combo = QComboBox()
-        self.end_month_combo = QComboBox()
         for number, name in enumerate(self.MONTHS, start=1):
             self.start_month_combo.addItem(f"{number:02d} — {name}", number)
-            self.end_month_combo.addItem(f"{number:02d} — {name}", number)
 
         self.start_year_spin = SafeSpinBox()
-        self.end_year_spin = SafeSpinBox()
-        for spin in (self.start_year_spin, self.end_year_spin):
-            spin.setRange(2010, 2100)
+        self.start_year_spin.setRange(2010, 2100)
 
         if tariff:
-            self.start_month_combo.setCurrentIndex(tariff.start_month - 1)
-            self.end_month_combo.setCurrentIndex(tariff.end_month - 1)
-            self.start_year_spin.setValue(tariff.start_year)
-            self.end_year_spin.setValue(tariff.end_year)
+            start_year = tariff.start_year
+            start_month = tariff.start_month
         else:
-            self.start_month_combo.setCurrentIndex(0)
-            self.end_month_combo.setCurrentIndex(11)
-            self.start_year_spin.setValue(current_year)
-            self.end_year_spin.setValue(current_year)
+            start_year = default_start_year or current_year
+            start_month = default_start_month or 1
+
+        self.start_month_combo.setCurrentIndex(max(0, min(11, start_month - 1)))
+        self.start_year_spin.setValue(start_year)
+
+        explanation = QLabel(
+            "Укажите дату, с которой меняется тариф. Он будет действовать дальше "
+            "автоматически — до следующей добавленной записи об изменении тарифа. "
+            "Если в следующем году тариф не менялся, новую строку добавлять не нужно."
+        )
+        explanation.setWordWrap(True)
+        explanation.setObjectName("Muted")
 
         form = QFormLayout()
         form.addRow("Тариф, руб./м² в месяц *", self.amount_edit)
@@ -198,12 +209,7 @@ class HouseTariffDialog(QDialog):
         start_row = QHBoxLayout()
         start_row.addWidget(self.start_month_combo, 1)
         start_row.addWidget(self.start_year_spin)
-        form.addRow("Период с", start_row)
-
-        end_row = QHBoxLayout()
-        end_row.addWidget(self.end_month_combo, 1)
-        end_row.addWidget(self.end_year_spin)
-        form.addRow("Период по", end_row)
+        form.addRow("Действует с", start_row)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -217,6 +223,7 @@ class HouseTariffDialog(QDialog):
         cancel_button.clicked.connect(self.reject)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(explanation)
         layout.addLayout(form)
         layout.addWidget(buttons)
 
@@ -225,12 +232,15 @@ class HouseTariffDialog(QDialog):
             "amount": self.amount_edit.text().strip(),
             "start_year": self.start_year_spin.value(),
             "start_month": int(self.start_month_combo.currentData()),
-            "end_year": self.end_year_spin.value(),
-            "end_month": int(self.end_month_combo.currentData()),
         }
 
     def _validate_and_accept(self) -> None:
-        raw = self.amount_edit.text().replace("\u00a0", "").replace(" ", "").replace(",", ".")
+        raw = (
+            self.amount_edit.text()
+            .replace("\u00a0", "")
+            .replace(" ", "")
+            .replace(",", ".")
+        )
         try:
             amount = Decimal(raw)
         except InvalidOperation:
@@ -244,15 +254,5 @@ class HouseTariffDialog(QDialog):
             self.amount_edit.setFocus()
             return
 
-        values = self.values()
-        start = int(values["start_year"]) * 12 + int(values["start_month"])
-        end = int(values["end_year"]) * 12 + int(values["end_month"])
-        if end < start:
-            QMessageBox.warning(
-                self,
-                "Проверьте период",
-                "Окончание периода тарифа не может быть раньше начала.",
-            )
-            return
-
         super().accept()
+
