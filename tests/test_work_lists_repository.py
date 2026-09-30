@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from gis_jkh_assistant.database import Repository, TemplateSource
+from gis_jkh_assistant.work_lists import AllocationResult
 
 
 @dataclass
@@ -122,4 +123,48 @@ def test_all_house_lists_are_returned_in_period_order(tmp_path) -> None:
     listed = repository.list_work_lists(house.id)
 
     assert [item.id for item in listed] == [earlier.id, transition.id, later.id]
+    repository.close()
+
+
+def test_lazy_distribution_is_persisted_and_cloned(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _org, house, template = _fixture(repository)
+
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+        template_id=template.id,
+    )
+    item = repository.list_work_list_items(work_list.id)[0]
+
+    repository.apply_lazy_distribution(
+        work_list.id,
+        planned_total="100000",
+        rows=[
+            AllocationResult(
+                item_id=item.id,
+                allocation_percent="100",
+                quantity="12",
+                cost="100000",
+            )
+        ],
+    )
+
+    refreshed = repository.get_work_list(work_list.id)
+    assert refreshed is not None
+    assert refreshed.planned_total == "100000"
+
+    refreshed_item = repository.list_work_list_items(work_list.id)[0]
+    assert refreshed_item.price is None
+    assert refreshed_item.volume is None
+    assert refreshed_item.quantity == "12"
+    assert refreshed_item.cost == "100000"
+    assert refreshed_item.allocation_percent == "100"
+
+    clone = repository.clone_work_list(work_list.id, 2025)
+    assert clone.planned_total == "100000"
+    clone_item = repository.list_work_list_items(clone.id)[0]
+    assert clone_item.allocation_percent == "100"
+    assert clone_item.cost == "100000"
+
     repository.close()
