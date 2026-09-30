@@ -53,7 +53,7 @@ class _GatewayState:
     def status(self, running: bool, error: str | None) -> IntegrationStatus:
         with self.lock:
             age = None if self.last_seen is None else max(0.0, time.monotonic() - self.last_seen)
-            connected = age is not None and age < 8.0
+            connected = age is not None and age < 35.0
             return IntegrationStatus(
                 running=running,
                 helper_connected=connected,
