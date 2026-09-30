@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.houses_page.flush_pending_changes()
         self.work_lists_page.flush_pending_changes()
+        self.integration_gateway.stop()
         self.repository.close()
         super().closeEvent(event)
 
