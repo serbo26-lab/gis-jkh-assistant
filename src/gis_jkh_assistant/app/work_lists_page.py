@@ -1022,6 +1022,284 @@ class WorkListsPage(QWidget):
             f"{result.output_path}",
         )
 
+    def _current_gis_context(self):
+        self._save_period()
+        if not self._current_work_list_id:
+            QMessageBox.information(
+                self,
+                "Не выбран перечень",
+                "Сначала выберите перечень.",
+            )
+            return None
+
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if not work_list:
+            return None
+
+        house = self.repository.get_house(work_list.house_id)
+        if not house:
+            QMessageBox.critical(
+                self,
+                "Дом не найден",
+                "Карточка дома отсутствует в локальной базе.",
+            )
+            return None
+        if not house.house_object_guid:
+            QMessageBox.warning(
+                self,
+                "Нет GUID дома",
+                "Для обмена с ГИС ЖКХ нужен GUID объекта жилищного фонда.",
+            )
+            return None
+
+        return work_list, house
+
+    @staticmethod
+    def _gis_command_payload(work_list, house) -> dict:
+        return {
+            "houseGuid": house.house_object_guid,
+            "startYear": work_list.start_year,
+            "startMonth": work_list.start_month,
+            "endYear": work_list.end_year,
+            "endMonth": work_list.end_month,
+        }
+
+    def _build_xlsx_for_gis(self, work_list, house) -> tuple[str, str] | None:
+        source_path = self._export_template_path()
+        if source_path is None:
+            QMessageBox.information(
+                self,
+                "Не загружен шаблон экспорта",
+                "Сначала загрузите технический шаблон экспорта ГИС ЖКХ.",
+            )
+            return None
+
+        extension = source_path.suffix.lower()
+        if extension not in {".xlsx", ".xlsm"}:
+            extension = ".xlsx"
+
+        safe_house = house.gis_unique_house_number or house.house_object_guid[:8]
+        filename = (
+            f"Перечень_{safe_house}_"
+            f"{work_list.start_month:02d}.{work_list.start_year}-"
+            f"{work_list.end_month:02d}.{work_list.end_year}{extension}"
+        )
+
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="gis-jkh-work-list-",
+                suffix=extension,
+                delete=False,
+            ) as tmp:
+                temporary_path = Path(tmp.name)
+
+            export_work_list_xlsx(
+                source_template_path=source_path,
+                output_path=temporary_path,
+                house_guid=house.house_object_guid,
+                start_year=work_list.start_year,
+                start_month=work_list.start_month,
+                end_year=work_list.end_year,
+                end_month=work_list.end_month,
+                items=self.repository.list_work_list_items(work_list.id),
+            )
+            encoded = base64.b64encode(temporary_path.read_bytes()).decode("ascii")
+            return filename, encoded
+        except (WorkListExportError, OSError, zipfile.BadZipFile) as exc:
+            QMessageBox.critical(self, "Не удалось подготовить XLSX", str(exc))
+            return None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+    def _set_integration_busy(self, busy: bool, text: str | None = None) -> None:
+        for button in (
+            self.upload_to_gis_button,
+            self.sync_gis_button,
+            self.approve_gis_button,
+        ):
+            button.setEnabled(not busy and self._current_work_list_id is not None)
+        if busy and text:
+            self.save_status.setText(text)
+        elif not busy:
+            self.save_status.setText("Сохранено")
+
+    def _run_integration_command(
+        self,
+        *,
+        work_list_id: str,
+        command_type: str,
+        payload: dict,
+        success_callback,
+        busy_text: str,
+        timeout: float = 120.0,
+    ) -> None:
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Операция уже выполняется",
+                "Дождитесь завершения текущей операции с ГИС ЖКХ.",
+            )
+            return
+
+        self._set_integration_busy(True, busy_text)
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            command_type,
+            payload,
+            timeout=timeout,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            success_callback(work_list_id, result)
+
+        def failed(message: str) -> None:
+            self.repository.update_work_list_gis_state(
+                work_list_id,
+                gis_last_error=message,
+            )
+            if self._current_work_list_id == work_list_id:
+                self._load_work_list(work_list_id)
+            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", message)
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._set_integration_busy(False)
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
+    def _apply_gis_result(self, work_list_id: str, result: dict) -> None:
+        self.repository.update_work_list_gis_state(
+            work_list_id,
+            gis_work_list_guid=result.get("workListGuid"),
+            gis_file_guid=result.get("fileGuid"),
+            gis_import_job_guid=result.get("importJobGuid"),
+            gis_status=result.get("gisStatus"),
+            gis_last_error=None,
+        )
+        self.refresh_work_lists(select_id=work_list_id)
+
+    def _upload_current_work_list_to_gis(self) -> None:
+        context = self._current_gis_context()
+        if not context:
+            return
+        work_list, house = context
+
+        prepared = self._build_xlsx_for_gis(work_list, house)
+        if not prepared:
+            return
+        filename, encoded = prepared
+
+        answer = QMessageBox.question(
+            self,
+            "Загрузить перечень в ГИС ЖКХ?",
+            f"Будет загружен перечень {work_list.period_label}\n"
+            f"для дома:\n{house.address}\n\n"
+            "После импорта в ГИС ЖКХ он должен появиться со статусом «Проект». "
+            "Размещение выполняется отдельной кнопкой.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        payload = self._gis_command_payload(work_list, house)
+        payload.update({"fileName": filename, "fileBase64": encoded})
+
+        def on_success(work_list_id: str, result: dict) -> None:
+            self._apply_gis_result(work_list_id, result)
+            if result.get("gisStatus") == "DRAFT":
+                QMessageBox.information(
+                    self,
+                    "Перечень загружен",
+                    "ГИС ЖКХ принял файл. Перечень найден со статусом «Проект».",
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Файл отправлен",
+                    "ГИС ЖКХ принял файл в обработку. Проект пока не найден. "
+                    "Через некоторое время нажмите «Проверить статус в ГИС».",
+                )
+
+        self._run_integration_command(
+            work_list_id=work_list.id,
+            command_type="upload_import_work_list",
+            payload=payload,
+            success_callback=on_success,
+            busy_text="Загрузка в ГИС ЖКХ…",
+            timeout=150.0,
+        )
+
+    def _sync_current_work_list_from_gis(self) -> None:
+        context = self._current_gis_context()
+        if not context:
+            return
+        work_list, house = context
+        payload = self._gis_command_payload(work_list, house)
+
+        def on_success(work_list_id: str, result: dict) -> None:
+            self._apply_gis_result(work_list_id, result)
+            status = result.get("gisStatus")
+            if status == "DRAFT":
+                message = "Перечень найден в ГИС ЖКХ со статусом «Проект»."
+            elif status == "APPROVED":
+                message = "Перечень размещен в ГИС ЖКХ."
+            else:
+                message = "Перечень с таким домом и периодом в ГИС ЖКХ не найден."
+            QMessageBox.information(self, "Статус ГИС ЖКХ", message)
+
+        self._run_integration_command(
+            work_list_id=work_list.id,
+            command_type="sync_work_list",
+            payload=payload,
+            success_callback=on_success,
+            busy_text="Проверка статуса ГИС ЖКХ…",
+            timeout=60.0,
+        )
+
+    def _approve_current_work_list_in_gis(self) -> None:
+        context = self._current_gis_context()
+        if not context:
+            return
+        work_list, house = context
+
+        answer = QMessageBox.warning(
+            self,
+            "Разместить информацию?",
+            f"Разместить перечень {work_list.period_label}\n"
+            f"для дома:\n{house.address}\n\n"
+            "В ГИС ЖКХ проект будет переведен в размещенное состояние.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        payload = self._gis_command_payload(work_list, house)
+
+        def on_success(work_list_id: str, result: dict) -> None:
+            self._apply_gis_result(work_list_id, result)
+            QMessageBox.information(
+                self,
+                "Информация размещена",
+                "Перечень размещен в ГИС ЖКХ.",
+            )
+
+        self._run_integration_command(
+            work_list_id=work_list.id,
+            command_type="approve_work_list",
+            payload=payload,
+            success_callback=on_success,
+            busy_text="Размещение в ГИС ЖКХ…",
+            timeout=90.0,
+        )
+
     def _open_lazy_distribution(self) -> None:
         self._save_period()
         if not self._current_work_list_id:
