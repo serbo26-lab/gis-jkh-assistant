@@ -629,6 +629,65 @@ class Repository:
             key=lambda item: (item.start_year, item.start_month, item.updated_at or ""),
         )
 
+    def _assert_unique_tariff_start(
+        self,
+        house_id: str,
+        *,
+        start_year: int,
+        start_month: int,
+        exclude_id: str | None = None,
+    ) -> None:
+        rows = self.list_house_tariffs(house_id)
+        for item in rows:
+            if exclude_id and item.id == exclude_id:
+                continue
+            if item.start_year == int(start_year) and item.start_month == int(start_month):
+                raise ValueError(
+                    "Для этого дома уже указан тариф, начинающий действовать "
+                    f"с {int(start_month):02d}.{int(start_year)}."
+                )
+
+    def _normalize_all_house_tariff_periods(self) -> None:
+        rows = self.connection.execute(
+            "SELECT DISTINCT house_id FROM house_tariffs"
+        ).fetchall()
+        for row in rows:
+            self._recalculate_house_tariff_periods(str(row["house_id"]))
+
+    def _recalculate_house_tariff_periods(self, house_id: str) -> None:
+        rows = self.connection.execute(
+            """
+            SELECT id, start_year, start_month
+            FROM house_tariffs
+            WHERE house_id = ?
+            ORDER BY start_year, start_month, created_at
+            """,
+            (house_id,),
+        ).fetchall()
+        if not rows:
+            return
+
+        with self.connection:
+            for index, row in enumerate(rows):
+                if index + 1 < len(rows):
+                    next_row = rows[index + 1]
+                    previous_key = _month_key(
+                        int(next_row["start_year"]),
+                        int(next_row["start_month"]),
+                    ) - 1
+                    end_year, end_month = _year_month_from_key(previous_key)
+                else:
+                    end_year, end_month = 9999, 12
+
+                self.connection.execute(
+                    """
+                    UPDATE house_tariffs
+                    SET end_year = ?, end_month = ?
+                    WHERE id = ?
+                    """,
+                    (end_year, end_month, str(row["id"])),
+                )
+
     @staticmethod
     def _template_from_row(row: sqlite3.Row) -> WorkTemplate:
         data = dict(row)
