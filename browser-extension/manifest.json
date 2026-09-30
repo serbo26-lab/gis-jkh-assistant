@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "GIS ЖКХ Assistant Helper",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Связывает GIS ЖКХ Assistant с уже открытым личным кабинетом ГИС ЖКХ.",
   "permissions": [
+    "alarms",
     "scripting",
     "tabs"
   ],
