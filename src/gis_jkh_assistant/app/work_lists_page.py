@@ -815,8 +815,20 @@ class WorkListsPage(QWidget):
             )
             self.browser_status.setStyleSheet("color: #8a5b00;")
         else:
-            self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
-            self.browser_status.setStyleSheet("color: #107c10;")
+            if status.session_keep_alive_error:
+                self.browser_status.setText(
+                    "Браузер: ГИС ЖКХ подключен • автопродление сессии: ошибка — "
+                    f"{status.session_keep_alive_error}"
+                )
+                self.browser_status.setStyleSheet("color: #8a5b00;")
+            elif status.session_keep_alive_enabled:
+                self.browser_status.setText(
+                    "Браузер: ГИС ЖКХ подключен • автопродление сессии: включено"
+                )
+                self.browser_status.setStyleSheet("color: #107c10;")
+            else:
+                self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
+                self.browser_status.setStyleSheet("color: #107c10;")
 
         self._refresh_gis_action_buttons()
 
