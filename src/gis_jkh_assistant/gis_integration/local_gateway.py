@@ -29,6 +29,9 @@ class IntegrationStatus:
     gis_page_ready: bool
     page_url: str | None = None
     helper_version: str | None = None
+    session_keep_alive_enabled: bool = False
+    last_keep_alive_success_at: str | None = None
+    session_keep_alive_error: str | None = None
     last_seen_age: float | None = None
     error: str | None = None
 
@@ -42,6 +45,9 @@ class _GatewayState:
         self.gis_page_ready = False
         self.page_url: str | None = None
         self.helper_version: str | None = None
+        self.session_keep_alive_enabled = False
+        self.last_keep_alive_success_at: str | None = None
+        self.session_keep_alive_error: str | None = None
 
     def update_hello(self, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -49,6 +55,15 @@ class _GatewayState:
             self.gis_page_ready = bool(payload.get("gisPageReady"))
             self.page_url = _optional_text(payload.get("pageUrl"))
             self.helper_version = _optional_text(payload.get("helperVersion"))
+            self.session_keep_alive_enabled = bool(
+                payload.get("sessionKeepAliveEnabled")
+            )
+            self.last_keep_alive_success_at = _optional_text(
+                payload.get("lastKeepAliveSuccessAt")
+            )
+            self.session_keep_alive_error = _optional_text(
+                payload.get("sessionKeepAliveError")
+            )
 
     def status(self, running: bool, error: str | None) -> IntegrationStatus:
         with self.lock:
@@ -60,6 +75,9 @@ class _GatewayState:
                 gis_page_ready=connected and self.gis_page_ready,
                 page_url=self.page_url,
                 helper_version=self.helper_version,
+                session_keep_alive_enabled=self.session_keep_alive_enabled,
+                last_keep_alive_success_at=self.last_keep_alive_success_at,
+                session_keep_alive_error=self.session_keep_alive_error,
                 last_seen_age=age,
                 error=error,
             )
