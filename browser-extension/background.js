@@ -1,6 +1,11 @@
 const LOCAL_BASE = "http://127.0.0.1:8765/api/integration";
 const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
+const KEEP_ALIVE_INTERVAL_MS = 8 * 60 * 1000;
+
+let lastKeepAliveAttemptMs = 0;
+let lastKeepAliveSuccessMs = null;
+let keepAliveError = null;
 
 async function localFetch(path, options = {}) {
   const headers = Object.assign({}, HELPER_HEADER, options.headers || {});
@@ -24,7 +29,12 @@ async function hello() {
       body: JSON.stringify({
         gisPageReady: Boolean(tab && tab.id),
         pageUrl: tab?.url || null,
-        helperVersion: chrome.runtime.getManifest().version
+        helperVersion: chrome.runtime.getManifest().version,
+        sessionKeepAliveEnabled: true,
+        lastKeepAliveSuccessAt: lastKeepAliveSuccessMs
+          ? new Date(lastKeepAliveSuccessMs).toISOString()
+          : null,
+        sessionKeepAliveError: keepAliveError
       })
     });
     return response.ok;
@@ -43,6 +53,27 @@ async function sendResult(id, ok, result = null, error = null) {
     });
   } catch (_) {
     // The desktop app may have been closed while a command was running.
+  }
+}
+
+async function maybeKeepSessionAlive() {
+  const now = Date.now();
+  if (now - lastKeepAliveAttemptMs < KEEP_ALIVE_INTERVAL_MS) {
+    return;
+  }
+
+  const tab = await findGisTab();
+  if (!tab?.id) {
+    return;
+  }
+
+  lastKeepAliveAttemptMs = now;
+  try {
+    await executeInGisTab({ type: "keep_alive", payload: {} });
+    lastKeepAliveSuccessMs = Date.now();
+    keepAliveError = null;
+  } catch (error) {
+    keepAliveError = String(error?.message || error);
   }
 }
 
@@ -84,6 +115,8 @@ async function pollLoop() {
   }
 
   reconnectDelayMs = 1000;
+
+  await maybeKeepSessionAlive();
 
   try {
     const response = await localFetch("/next");
@@ -401,6 +434,33 @@ async function runGisCommand(command) {
     }
 
     const payload = command?.payload || {};
+
+    if (command.type === "keep_alive") {
+      await request(
+        "GET",
+        "/auth/api/rest/services/auth/echo/",
+        undefined,
+        STATE_WORKPLANNING
+      );
+
+      // Fallback for a timeout dialog that may already be visible, for example
+      // after the computer woke from sleep. The exact GIS ЖКХ button simply
+      // performs the same session continuation action.
+      const continueButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => (button.textContent || "").trim() === "Продолжить работу"
+      );
+      if (continueButton) {
+        continueButton.click();
+      }
+
+      return {
+        ok: true,
+        result: {
+          keptAliveAt: new Date().toISOString(),
+          timeoutDialogWasVisible: Boolean(continueButton)
+        }
+      };
+    }
 
     if (command.type === "ping") {
       return {
