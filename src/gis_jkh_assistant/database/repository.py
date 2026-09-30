@@ -528,8 +528,8 @@ class Repository:
                     """
                     INSERT INTO work_template_items (
                         id, template_id, position, work_code, work_name, work_guid,
-                        price, volume, quantity, cost, allocation_percent
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        price, volume, quantity, cost
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
