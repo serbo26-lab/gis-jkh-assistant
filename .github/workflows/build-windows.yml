@@ -11,6 +11,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -34,8 +37,46 @@ jobs:
       - name: Build executable
         run: pyinstaller --clean --noconfirm --onefile --windowed --paths src --name GIS-JKH-Assistant src/gis_jkh_assistant/__main__.py
 
-      - name: Upload artifact
+      - name: Pack Windows build
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          Compress-Archive -Path dist/GIS-JKH-Assistant.exe -DestinationPath dist/GIS-JKH-Assistant-windows.zip -Force
+          "Build version: $version" | Out-File -FilePath dist/VERSION.txt -Encoding utf8
+
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: GIS-JKH-Assistant-0.1.0.dev12-windows
-          path: dist/GIS-JKH-Assistant.exe
+          path: |
+            dist/GIS-JKH-Assistant.exe
+            dist/VERSION.txt
+
+      - name: Publish rolling GitHub prerelease
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $repo = "${{ github.repository }}"
+          $sha = "${{ github.sha }}"
+          $asset = "dist/GIS-JKH-Assistant-windows.zip"
+          $notes = @"
+          Автоматическая тестовая сборка GIS ЖКХ Assistant.
+
+          Версия: $version
+          Коммит: $sha
+
+          Архив содержит GIS-JKH-Assistant.exe.
+          Эта сборка предназначена для проверки текущей разработки.
+          "@
+
+          gh release view dev-latest --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit dev-latest --repo $repo --title "GIS ЖКХ Assistant — актуальная тестовая сборка" --notes $notes --prerelease
+            gh release upload dev-latest $asset --repo $repo --clobber
+          }
+          else {
+            gh release create dev-latest $asset --repo $repo --target $sha --title "GIS ЖКХ Assistant — актуальная тестовая сборка" --notes $notes --prerelease
+          }
