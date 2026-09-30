@@ -181,6 +181,29 @@ QScrollBar::handle:vertical:hover {
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px;
+}
+QScrollBar::handle:horizontal {
+    background: #c9c9c9;
+    border-radius: 5px;
+    min-width: 28px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #aaaaaa;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+QScrollArea#PageScroll {
+    background: transparent;
+    border: none;
+}
+QWidget#PageContent {
+    background: transparent;
+}
 QSplitter::handle {
     background: #e5e5e5;
     width: 1px;
@@ -211,5 +234,42 @@ QSpinBox {
 }
 QListWidget::item {
     padding: 6px;
+}
+"""
+
+
+NARROW_WINDOW_STYLESHEET = """
+QWidget {
+    font-size: 8pt;
+}
+QLabel#Title {
+    font-size: 14pt;
+}
+QLabel#SectionTitle {
+    font-size: 9pt;
+}
+QPushButton {
+    padding: 4px 7px;
+    min-height: 18px;
+}
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
+    padding: 3px 5px;
+    min-height: 18px;
+}
+QComboBox {
+    padding-right: 28px;
+}
+QComboBox::drop-down {
+    width: 25px;
+}
+QSpinBox {
+    padding: 2px 5px;
+    min-height: 22px;
+}
+QListWidget::item {
+    padding: 5px;
+}
+QHeaderView::section {
+    padding: 4px 4px;
 }
 """
