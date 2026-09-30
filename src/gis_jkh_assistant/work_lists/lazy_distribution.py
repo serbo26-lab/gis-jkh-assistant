@@ -50,6 +50,34 @@ def period_months(
     return months
 
 
+def calculate_planned_total(
+    *,
+    tariff: str,
+    area: str,
+    months: str,
+) -> str:
+    """Calculate tariff × area × months and round the planned total to kopecks."""
+
+    tariff_value = _decimal(tariff, "Тариф")
+    area_value = _decimal(area, "Площадь")
+    months_value = _decimal(months, "Месяцы")
+
+    if tariff_value <= 0:
+        raise LazyDistributionError("Тариф должен быть больше нуля.")
+    if area_value <= 0:
+        raise LazyDistributionError("Площадь должна быть больше нуля.")
+    if months_value <= 0:
+        raise LazyDistributionError("Количество месяцев должно быть больше нуля.")
+    if months_value != months_value.to_integral_value():
+        raise LazyDistributionError("Количество месяцев должно быть целым числом.")
+
+    total = (tariff_value * area_value * months_value).quantize(
+        MONEY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    return _storage(total)
+
+
 def calculate_distribution(
     *,
     planned_total: str,
