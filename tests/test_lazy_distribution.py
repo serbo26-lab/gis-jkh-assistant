@@ -97,3 +97,51 @@ def test_percent_sum_must_be_exactly_100() -> None:
                 AllocationInput("b", "30"),
             ],
         )
+
+
+def test_each_position_can_override_default_month_quantity() -> None:
+    result = calculate_distribution(
+        planned_total="100000",
+        start_year=2026,
+        start_month=1,
+        end_year=2026,
+        end_month=12,
+        allocations=[
+            AllocationInput("management", "70", "12"),
+            AllocationInput("grass", "30", "3"),
+        ],
+    )
+
+    assert result.months_count == 12
+    assert [row.quantity for row in result.rows] == ["12", "3"]
+    assert [row.cost for row in result.rows] == ["70000", "30000"]
+
+
+def test_missing_quantity_still_uses_period_months_as_default() -> None:
+    result = calculate_distribution(
+        planned_total="1000",
+        start_year=2026,
+        start_month=5,
+        end_year=2026,
+        end_month=12,
+        allocations=[
+            AllocationInput("a", "100"),
+        ],
+    )
+
+    assert result.months_count == 8
+    assert result.rows[0].quantity == "8"
+
+
+def test_positive_percent_requires_positive_quantity_when_explicitly_set() -> None:
+    with pytest.raises(LazyDistributionError, match="количество должно быть больше нуля"):
+        calculate_distribution(
+            planned_total="1000",
+            start_year=2026,
+            start_month=1,
+            end_year=2026,
+            end_month=12,
+            allocations=[
+                AllocationInput("a", "100", "0"),
+            ],
+        )
