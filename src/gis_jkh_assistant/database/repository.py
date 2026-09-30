@@ -211,6 +211,7 @@ class Repository:
         self._ensure_column("work_lists", "gis_last_error", "TEXT")
         self._ensure_column("work_list_items", "allocation_percent", "TEXT")
         self.connection.commit()
+        self._normalize_all_house_tariff_periods()
 
     def _ensure_column(self, table: str, column: str, declaration: str) -> None:
         columns = {
