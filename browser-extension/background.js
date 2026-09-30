@@ -18,7 +18,7 @@ async function findGisTab() {
 async function hello() {
   try {
     const tab = await findGisTab();
-    await localFetch("/hello", {
+    const response = await localFetch("/hello", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -27,8 +27,10 @@ async function hello() {
         helperVersion: chrome.runtime.getManifest().version
       })
     });
+    return response.ok;
   } catch (_) {
     // Desktop application may be closed. This is expected.
+    return false;
   }
 }
 
@@ -68,8 +70,20 @@ async function executeInGisTab(command) {
   return result.result || {};
 }
 
+let reconnectDelayMs = 1000;
+
 async function pollLoop() {
-  await hello();
+  const connected = await hello();
+
+  if (!connected) {
+    // Do not also call /next when the desktop app is closed. One failed probe is
+    // enough, and a short backoff keeps the extension console/network log quiet.
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, 10000);
+    setTimeout(pollLoop, reconnectDelayMs);
+    return;
+  }
+
+  reconnectDelayMs = 1000;
 
   try {
     const response = await localFetch("/next");
@@ -83,10 +97,10 @@ async function pollLoop() {
       }
     }
   } catch (_) {
-    // Local desktop app is not running yet.
+    reconnectDelayMs = 2000;
   }
 
-  setTimeout(pollLoop, 750);
+  setTimeout(pollLoop, reconnectDelayMs);
 }
 
 pollLoop();
