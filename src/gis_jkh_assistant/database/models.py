@@ -76,11 +76,20 @@ class HouseTariff:
     updated_at: str | None = None
 
     @property
+    def effective_from_label(self) -> str:
+        return f"{self.start_month:02d}.{self.start_year}"
+
+    @property
+    def effective_to_label(self) -> str:
+        if self.end_year >= 9999:
+            return "до следующего изменения"
+        return f"{self.end_month:02d}.{self.end_year}"
+
+    @property
     def period_label(self) -> str:
-        return (
-            f"{self.start_month:02d}.{self.start_year} — "
-            f"{self.end_month:02d}.{self.end_year}"
-        )
+        if self.end_year >= 9999:
+            return f"с {self.effective_from_label}"
+        return f"{self.effective_from_label} — {self.effective_to_label}"
 
 
 @dataclass(frozen=True, slots=True)
