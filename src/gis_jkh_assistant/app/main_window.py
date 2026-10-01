@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 
+from .fixation_page import FixationPage
 from .houses_page import HousesPage
 from .planning_page import PlanningPage
 from .styles import COMPACT_WINDOW_STYLESHEET, NARROW_WINDOW_STYLESHEET
@@ -53,7 +54,7 @@ class MainWindow(QMainWindow):
         self.navigation = QListWidget()
         self.navigation.setFrameShape(QFrame.NoFrame)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        for title in ("Дома", "Перечни работ и услуг", "Планирование", "Выполнение", "Настройки"):
+        for title in ("Дома", "Перечни работ и услуг", "Планирование", "Фиксация работ и услуг", "Настройки"):
             self.navigation.addItem(QListWidgetItem(title))
         sidebar_layout.addWidget(self.navigation, 1)
         layout.addWidget(sidebar)
@@ -62,11 +63,12 @@ class MainWindow(QMainWindow):
         self.houses_page = HousesPage(repository)
         self.work_lists_page = WorkListsPage(repository, self.integration_gateway)
         self.planning_page = PlanningPage(repository, self.integration_gateway)
+        self.fixation_page = FixationPage(repository, self.integration_gateway)
         self.pages.addWidget(self.houses_page)
         self.pages.addWidget(self.work_lists_page)
         self.pages.addWidget(self.planning_page)
-        for title in ("Выполнение", "Настройки"):
-            self.pages.addWidget(_placeholder(title))
+        self.pages.addWidget(self.fixation_page)
+        self.pages.addWidget(_placeholder("Настройки"))
         layout.addWidget(self.pages, 1)
 
         self.navigation.currentRowChanged.connect(self._navigation_changed)
@@ -78,6 +80,8 @@ class MainWindow(QMainWindow):
             self.work_lists_page.refresh_organizations()
         elif index == 2:
             self.planning_page.refresh_organizations()
+        elif index == 3:
+            self.fixation_page.refresh_organizations()
 
     def resizeEvent(self, event) -> None:
         width = event.size().width()
@@ -106,6 +110,7 @@ class MainWindow(QMainWindow):
             self.houses_page.set_compact_mode(mode != "normal")
             self.work_lists_page.set_view_mode(mode)
             self.planning_page.set_view_mode(mode)
+            self.fixation_page.set_view_mode(mode)
 
         super().resizeEvent(event)
 
@@ -113,6 +118,7 @@ class MainWindow(QMainWindow):
         self.houses_page.flush_pending_changes()
         self.work_lists_page.flush_pending_changes()
         self.planning_page.flush_pending_changes()
+        self.fixation_page.flush_pending_changes()
         self.integration_gateway.stop()
         self.repository.close()
         super().closeEvent(event)

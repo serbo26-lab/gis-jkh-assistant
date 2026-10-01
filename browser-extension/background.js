@@ -649,6 +649,201 @@ async function runGisCommand(command) {
       return { workPlan };
     }
 
+    async function getWorkplanningHouseByFias(fiasHouseCode) {
+      const fias = String(fiasHouseCode || "").trim();
+      if (!fias) {
+        throw new Error("Не передан ФИАС GUID дома.");
+      }
+      const data = await request(
+        "GET",
+        "/workplanning/api/rest/services/find/house/by/fias?fiasHouseCode=" +
+          encodeURIComponent(fias),
+        undefined,
+        STATE_WORKPLANNING
+      );
+      if (!data?.guid) {
+        throw new Error("Дом не найден в модуле планирования ГИС ЖКХ.");
+      }
+      return data;
+    }
+
+    async function findReportingPeriod(payload) {
+      const house = await getWorkplanningHouseByFias(payload.fiasHouseCode);
+      const data = await request(
+        "POST",
+        "/workplanning/api/rest/services/search/reportingperiods",
+        { houseGuid: house.guid },
+        STATE_WORKPLANNING
+      );
+      const periods = Array.isArray(data?.periods) ? data.periods : [];
+      const result =
+        periods.find(
+          (period) =>
+            String(period?.workListGuid || "") === String(payload.workListGuid || "") &&
+            Number(period?.period?.year) === Number(payload.year) &&
+            Number(period?.period?.month) === Number(payload.month) &&
+            !period?.archived
+        ) || null;
+      if (!result?.guid) {
+        throw new Error(
+          "В ГИС ЖКХ не найден период фиксации для выбранного перечня, месяца и года."
+        );
+      }
+      return result;
+    }
+
+    async function searchFixedWorks(reportingPeriodGuid) {
+      return request(
+        "POST",
+        "/workplanning/api/rest/services/search/fixedworks",
+        { workFixationPeriodGuid: reportingPeriodGuid },
+        STATE_WORKPLANNING
+      );
+    }
+
+    function fixationLocalItemMatch(localItem, remoteItems, usedIndexes) {
+      const workGuid = String(localItem?.workGuid || "").trim();
+      const workCode = String(localItem?.workCode || "").trim();
+
+      function candidates(predicate) {
+        return remoteItems
+          .map((item, index) => ({ item, index }))
+          .filter(({ index }) => !usedIndexes.has(index))
+          .filter(({ item }) => predicate(item));
+      }
+
+      let matches = [];
+      if (workGuid) {
+        matches = candidates(
+          (item) => String(item?.work?.guid || "") === workGuid
+        );
+      }
+      if (!matches.length && workCode) {
+        matches = candidates(
+          (item) => String(item?.work?.code || "") === workCode
+        );
+      }
+      if (matches.length === 1) {
+        usedIndexes.add(matches[0].index);
+        return matches[0];
+      }
+
+      const position = Number(localItem?.sortIndex);
+      const index = position - 1;
+      if (
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < remoteItems.length &&
+        !usedIndexes.has(index)
+      ) {
+        const item = remoteItems[index];
+        const guidMatches =
+          !workGuid || String(item?.work?.guid || "") === workGuid;
+        const codeMatches =
+          !workCode || String(item?.work?.code || "") === workCode;
+        if (guidMatches && codeMatches) {
+          usedIndexes.add(index);
+          return { item, index };
+        }
+      }
+
+      throw new Error(
+        "Не удалось сопоставить локальную строку фиксации с плановой работой в ГИС ЖКХ."
+      );
+    }
+
+    function buildFixedWorksSavePayload(localPayload, reportingPeriod, remoteData) {
+      const remoteItems = Array.isArray(remoteData?.plannedWorkList)
+        ? remoteData.plannedWorkList
+        : [];
+      const localItems = Array.isArray(localPayload?.items)
+        ? localPayload.items
+        : [];
+
+      if (!remoteItems.length) {
+        throw new Error("В выбранном периоде ГИС ЖКХ нет плановых работ.");
+      }
+      if (remoteItems.length !== localItems.length) {
+        throw new Error(
+          "Состав локальной фиксации отличается от состава периода в ГИС ЖКХ."
+        );
+      }
+
+      const hasUnsupported =
+        (Array.isArray(remoteData?.unplannedWorkList) &&
+          remoteData.unplannedWorkList.length > 0) ||
+        (Array.isArray(remoteData?.acts) && remoteData.acts.length > 0) ||
+        remoteItems.some(
+          (item) =>
+            (Array.isArray(item?.photos) && item.photos.length > 0) ||
+            Boolean(item?.act)
+        );
+      if (hasUnsupported) {
+        throw new Error(
+          "В этом месяце в ГИС ЖКХ уже есть внеплановые работы, акты или фотографии. " +
+            "Автоматическое обновление остановлено, чтобы не потерять эти данные."
+        );
+      }
+
+      const usedIndexes = new Set();
+      const mapping = [];
+      const plannedWorkList = localItems.map((localItem) => {
+        const matched = fixationLocalItemMatch(localItem, remoteItems, usedIndexes);
+        const remote = matched.item;
+        const factCount =
+          localItem?.factCount === null || localItem?.factCount === undefined
+            ? null
+            : Number(localItem.factCount);
+        if (
+          factCount !== null &&
+          (!Number.isInteger(factCount) || factCount < 0)
+        ) {
+          throw new Error("Некорректное фактическое количество.");
+        }
+
+        const monthlyFixedWork =
+          factCount === null
+            ? null
+            : {
+                count: factCount,
+                monthYear: {
+                  month: Number(localPayload.month),
+                  year: Number(localPayload.year)
+                },
+                dates: Array.isArray(remote?.monthlyFixedWork?.dates)
+                  ? remote.monthlyFixedWork.dates
+                  : []
+              };
+
+        const result = {
+          guid: remote?.guid || null,
+          work: compactReference(remote?.work),
+          workType: compactReference(remote?.workType),
+          monthlyFixedWork,
+          workPlanItemGuid: remote?.workPlanItemGuid || null,
+          factPrice: localItem?.factPrice ?? null,
+          factAmount: localItem?.factAmount ?? null,
+          factTotalCost: localItem?.factTotalCost ?? null,
+          photos: []
+        };
+        mapping.push({
+          localItemId: localItem?.localItemId || null,
+          remoteIndex: matched.index
+        });
+        return result;
+      });
+
+      return {
+        body: {
+          reportingPeriodGuid: reportingPeriod.guid,
+          plannedWorkList,
+          unplannedWorkList: [],
+          acts: []
+        },
+        mapping
+      };
+    }
+
     const payload = command?.payload || {};
 
     if (command.type === "keep_alive") {
@@ -721,6 +916,45 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: statusResult(draft, { fileGuid, importJobGuid })
+      };
+    }
+
+    if (command.type === "save_work_fixation") {
+      const reportingPeriod = await findReportingPeriod(payload);
+      const remoteData = await searchFixedWorks(reportingPeriod.guid);
+      const hadExisting = (remoteData?.plannedWorkList || []).some(
+        (item) => Boolean(item?.guid)
+      );
+      const prepared = buildFixedWorksSavePayload(
+        payload,
+        reportingPeriod,
+        remoteData
+      );
+
+      const saved = await request(
+        "PUT",
+        "/workplanning/api/rest/services/save/fixedworks",
+        prepared.body,
+        STATE_WORKPLANNING
+      );
+      const savedItems = Array.isArray(saved?.plannedWorkList)
+        ? saved.plannedWorkList
+        : [];
+      const fixedItems = prepared.mapping.map((item) => ({
+        localItemId: item.localItemId,
+        guid: savedItems[item.remoteIndex]?.guid || null
+      }));
+
+      return {
+        ok: true,
+        result: {
+          reportingPeriodGuid: reportingPeriod.guid,
+          workListGuid: reportingPeriod.workListGuid || payload.workListGuid,
+          year: Number(reportingPeriod?.period?.year ?? payload.year),
+          month: Number(reportingPeriod?.period?.month ?? payload.month),
+          hadExisting,
+          fixedItems
+        }
       };
     }
 

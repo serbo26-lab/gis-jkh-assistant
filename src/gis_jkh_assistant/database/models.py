@@ -228,3 +228,38 @@ class WorkPlanMonth:
     month: int
     count: int = 0
     dates_json: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkFixationPeriod:
+    id: str
+    work_list_id: str
+    year: int
+    month: int
+    reporting_period_guid: str | None = None
+    gis_status: str | None = None
+    gis_last_sync_at: str | None = None
+    gis_last_error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkFixationItem:
+    id: str
+    fixation_period_id: str
+    work_list_item_id: str | None
+    work_plan_item_id: str | None
+    position: int
+    work_code: str | None
+    work_name: str
+    work_guid: str | None = None
+    planned_price: str | None = None
+    planned_amount: str | None = None
+    planned_count: int = 0
+    planned_total_cost: str | None = None
+    fact_price: str | None = None
+    fact_amount: str | None = None
+    fact_count: int | None = None
+    fact_total_cost: str | None = None
+    gis_fixed_work_guid: str | None = None
