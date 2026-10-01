@@ -240,6 +240,7 @@ class WorkFixationPeriod:
     gis_status: str | None = None
     gis_last_sync_at: str | None = None
     gis_last_error: str | None = None
+    managed_unplanned_guids_json: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
