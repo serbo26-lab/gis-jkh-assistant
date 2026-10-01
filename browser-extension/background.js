@@ -752,6 +752,21 @@ async function runGisCommand(command) {
       );
     }
 
+    function fixationNumberForGis(value, label) {
+      if (value === null || value === undefined || String(value).trim() === "") {
+        return null;
+      }
+      const text = String(value)
+        .replace(/\u00a0/g, "")
+        .replace(/\s+/g, "")
+        .replace(",", ".");
+      const number = Number(text);
+      if (!Number.isFinite(number) || number < 0) {
+        throw new Error("Некорректное значение «" + label + "»: " + String(value));
+      }
+      return text;
+    }
+
     function buildFixedWorksSavePayload(localPayload, reportingPeriod, remoteData) {
       const remoteItems = Array.isArray(remoteData?.plannedWorkList)
         ? remoteData.plannedWorkList
@@ -821,9 +836,12 @@ async function runGisCommand(command) {
           workType: compactReference(remote?.workType),
           monthlyFixedWork,
           workPlanItemGuid: remote?.workPlanItemGuid || null,
-          factPrice: localItem?.factPrice ?? null,
-          factAmount: localItem?.factAmount ?? null,
-          factTotalCost: localItem?.factTotalCost ?? null,
+          factPrice: fixationNumberForGis(localItem?.factPrice, "Цена факт"),
+          factAmount: fixationNumberForGis(localItem?.factAmount, "Объем факт"),
+          factTotalCost: fixationNumberForGis(
+            localItem?.factTotalCost,
+            "Стоимость факт"
+          ),
           photos: []
         };
         mapping.push({
