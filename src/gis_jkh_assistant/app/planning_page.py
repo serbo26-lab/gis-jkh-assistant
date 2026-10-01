@@ -483,7 +483,12 @@ class PlanningPage(QWidget):
                     self.table.setItem(row, column, cell)
 
                 plan_quantity.setText(str(total))
-                self._decorate_total(plan_quantity, item.list_quantity, total)
+                comparable_quantity = (
+                    item.list_quantity
+                    if work_list.start_year == work_list.end_year == year
+                    else None
+                )
+                self._decorate_total(plan_quantity, comparable_quantity, total)
         finally:
             self.table.blockSignals(False)
             self._loading = False
@@ -669,11 +674,22 @@ class PlanningPage(QWidget):
         quantity_cell = self.table.item(row, 1)
         if total_cell:
             total_cell.setText(str(total))
-            self._decorate_total(
-                total_cell,
-                quantity_cell.text() if quantity_cell else None,
-                total,
+            work_list = (
+                self.repository.get_work_list(self._current_work_list_id)
+                if self._current_work_list_id
+                else None
             )
+            year = int(self.year_combo.currentData()) if self.year_combo.currentData() else 0
+            comparable_quantity = (
+                quantity_cell.text()
+                if (
+                    quantity_cell
+                    and work_list
+                    and work_list.start_year == work_list.end_year == year
+                )
+                else None
+            )
+            self._decorate_total(total_cell, comparable_quantity, total)
 
     @staticmethod
     def _decode_dates(raw: str | None) -> list[str]:
@@ -722,7 +738,10 @@ class PlanningPage(QWidget):
             )
         else:
             cell.setBackground(QBrush())
-            cell.setToolTip("Количество в перечне не является целым числом.")
+            cell.setToolTip(
+                "Для переходящего периода количество в плане показано только "
+                "за выбранный календарный год."
+            )
 
     def _set_plan_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
