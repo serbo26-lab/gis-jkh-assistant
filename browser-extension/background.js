@@ -895,11 +895,21 @@ async function runGisCommand(command) {
       const localPhotos = [];
       const mappings = [];
       for (const photo of Array.isArray(localItem?.photos) ? localItem.photos : []) {
-        const prepared = await localPhotoForSave(photo);
+        const existingRemote = photo?.remoteContentGuid
+          ? remote.find(
+              (remotePhoto) =>
+                String(remotePhoto?.attachment?.contentGuid || "") ===
+                String(photo.remoteContentGuid)
+            )
+          : null;
+        const prepared = existingRemote || (await localPhotoForSave(photo));
         localPhotos.push(prepared);
         mappings.push({
           localPhotoId: photo?.localPhotoId || null,
-          contentGuid: prepared?.attachment?.contentGuid || null
+          contentGuid:
+            prepared?.attachment?.contentGuid ||
+            photo?.remoteContentGuid ||
+            null
         });
       }
       if (preserved.length + localPhotos.length > 1000) {
