@@ -195,3 +195,36 @@ class WorkListItem:
     quantity: str | None = None
     cost: str | None = None
     allocation_percent: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkPlan:
+    id: str
+    work_list_id: str
+    year: int
+    gis_work_plan_guid: str | None = None
+    gis_status: str | None = None
+    gis_last_sync_at: str | None = None
+    gis_last_error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkPlanItem:
+    id: str
+    work_plan_id: str
+    work_list_item_id: str | None
+    position: int
+    work_code: str | None
+    work_name: str
+    work_guid: str | None = None
+    list_quantity: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkPlanMonth:
+    work_plan_item_id: str
+    month: int
+    count: int = 0
+    dates_json: str | None = None
