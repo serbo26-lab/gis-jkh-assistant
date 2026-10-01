@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from collections.abc import Iterable
@@ -18,6 +19,9 @@ from .models import (
     WorkList,
     WorkListItem,
     WorkListStatus,
+    WorkPlan,
+    WorkPlanItem,
+    WorkPlanMonth,
     WorkTemplate,
     WorkTemplateItem,
 )
@@ -209,6 +213,58 @@ class Repository:
 
             CREATE INDEX IF NOT EXISTS ix_work_list_items
                 ON work_list_items(work_list_id, position);
+
+            CREATE TABLE IF NOT EXISTS work_plans (
+                id TEXT PRIMARY KEY,
+                work_list_id TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                gis_work_plan_guid TEXT,
+                gis_status TEXT,
+                gis_last_sync_at TEXT,
+                gis_last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (work_list_id)
+                    REFERENCES work_lists(id)
+                    ON DELETE CASCADE,
+                UNIQUE (work_list_id, year)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_plans_list_year
+                ON work_plans(work_list_id, year);
+
+            CREATE TABLE IF NOT EXISTS work_plan_items (
+                id TEXT PRIMARY KEY,
+                work_plan_id TEXT NOT NULL,
+                work_list_item_id TEXT,
+                position INTEGER NOT NULL,
+                work_code TEXT,
+                work_name TEXT NOT NULL,
+                work_guid TEXT,
+                list_quantity TEXT,
+                FOREIGN KEY (work_plan_id)
+                    REFERENCES work_plans(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (work_list_item_id)
+                    REFERENCES work_list_items(id)
+                    ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_plan_items
+                ON work_plan_items(work_plan_id, position);
+
+            CREATE TABLE IF NOT EXISTS work_plan_months (
+                work_plan_item_id TEXT NOT NULL,
+                month INTEGER NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                dates_json TEXT,
+                PRIMARY KEY (work_plan_item_id, month),
+                FOREIGN KEY (work_plan_item_id)
+                    REFERENCES work_plan_items(id)
+                    ON DELETE CASCADE,
+                CHECK (month BETWEEN 1 AND 12),
+                CHECK (count >= 0)
+            );
 
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
@@ -835,6 +891,18 @@ class Repository:
     def _work_list_item_from_row(row: sqlite3.Row) -> WorkListItem:
         return WorkListItem(**dict(row))
 
+    @staticmethod
+    def _work_plan_from_row(row: sqlite3.Row) -> WorkPlan:
+        return WorkPlan(**dict(row))
+
+    @staticmethod
+    def _work_plan_item_from_row(row: sqlite3.Row) -> WorkPlanItem:
+        return WorkPlanItem(**dict(row))
+
+    @staticmethod
+    def _work_plan_month_from_row(row: sqlite3.Row) -> WorkPlanMonth:
+        return WorkPlanMonth(**dict(row))
+
     def list_work_templates(self, organization_id: str) -> list[WorkTemplate]:
         rows = self.connection.execute(
             """
@@ -1161,6 +1229,331 @@ class Repository:
         result = self.get_work_list(work_list_id)
         assert result is not None
         return result
+
+    def list_placed_work_lists(self, house_id: str) -> list[WorkList]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_lists
+            WHERE house_id = ?
+              AND (status = ? OR UPPER(COALESCE(gis_status, '')) = 'APPROVED')
+              AND gis_work_list_guid IS NOT NULL
+              AND gis_work_list_guid <> ''
+            ORDER BY start_year, start_month, end_year, end_month, created_at
+            """,
+            (house_id, str(WorkListStatus.PLACED)),
+        ).fetchall()
+        return [self._work_list_from_row(row) for row in rows]
+
+    def get_work_plan(self, work_plan_id: str) -> WorkPlan | None:
+        row = self.connection.execute(
+            "SELECT * FROM work_plans WHERE id = ?",
+            (work_plan_id,),
+        ).fetchone()
+        return self._work_plan_from_row(row) if row else None
+
+    def get_work_plan_for_list_year(
+        self,
+        work_list_id: str,
+        year: int,
+    ) -> WorkPlan | None:
+        row = self.connection.execute(
+            """
+            SELECT * FROM work_plans
+            WHERE work_list_id = ? AND year = ?
+            """,
+            (work_list_id, int(year)),
+        ).fetchone()
+        return self._work_plan_from_row(row) if row else None
+
+    def get_or_create_work_plan(
+        self,
+        *,
+        work_list_id: str,
+        year: int,
+    ) -> WorkPlan:
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень работ и услуг не найден.")
+        if (
+            work_list.status != WorkListStatus.PLACED
+            and str(work_list.gis_status or "").upper() != "APPROVED"
+        ):
+            raise ValueError(
+                "Планирование доступно только после размещения перечня работ и услуг."
+            )
+        if not work_list.gis_work_list_guid:
+            raise ValueError(
+                "У размещенного перечня не сохранен GUID ГИС ЖКХ. "
+                "Сначала проверьте статус перечня в ГИС."
+            )
+
+        year = int(year)
+        if year < work_list.start_year or year > work_list.end_year:
+            raise ValueError("Выбранный год не входит в период перечня.")
+
+        existing = self.get_work_plan_for_list_year(work_list_id, year)
+        if existing is not None:
+            return existing
+
+        plan_id = str(uuid.uuid4())
+        timestamp = _now()
+        items = self.list_work_list_items(work_list_id)
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_plans (
+                    id, work_list_id, year,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (plan_id, work_list_id, year, timestamp, timestamp),
+            )
+            for item in items:
+                self.connection.execute(
+                    """
+                    INSERT INTO work_plan_items (
+                        id, work_plan_id, work_list_item_id, position,
+                        work_code, work_name, work_guid, list_quantity
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        plan_id,
+                        item.id,
+                        item.position,
+                        _clean(item.work_code),
+                        item.work_name,
+                        _clean(item.work_guid),
+                        _clean(item.quantity),
+                    ),
+                )
+
+        result = self.get_work_plan(plan_id)
+        assert result is not None
+        return result
+
+    def list_work_plan_items(self, work_plan_id: str) -> list[WorkPlanItem]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_plan_items
+            WHERE work_plan_id = ?
+            ORDER BY position
+            """,
+            (work_plan_id,),
+        ).fetchall()
+        return [self._work_plan_item_from_row(row) for row in rows]
+
+    def list_work_plan_months(self, work_plan_id: str) -> list[WorkPlanMonth]:
+        rows = self.connection.execute(
+            """
+            SELECT m.*
+            FROM work_plan_months m
+            JOIN work_plan_items i ON i.id = m.work_plan_item_id
+            WHERE i.work_plan_id = ?
+            ORDER BY i.position, m.month
+            """,
+            (work_plan_id,),
+        ).fetchall()
+        return [self._work_plan_month_from_row(row) for row in rows]
+
+    def get_work_plan_month(
+        self,
+        work_plan_item_id: str,
+        month: int,
+    ) -> WorkPlanMonth | None:
+        row = self.connection.execute(
+            """
+            SELECT * FROM work_plan_months
+            WHERE work_plan_item_id = ? AND month = ?
+            """,
+            (work_plan_item_id, int(month)),
+        ).fetchone()
+        return self._work_plan_month_from_row(row) if row else None
+
+    def update_work_plan_month(
+        self,
+        work_plan_item_id: str,
+        *,
+        month: int,
+        count: int,
+        dates: Iterable[str] = (),
+    ) -> None:
+        month = int(month)
+        count = int(count)
+        if not 1 <= month <= 12:
+            raise ValueError("Месяц должен быть от 1 до 12.")
+        if count < 0:
+            raise ValueError("Количество в плане не может быть отрицательным.")
+
+        item_row = self.connection.execute(
+            """
+            SELECT i.id, p.year
+            FROM work_plan_items i
+            JOIN work_plans p ON p.id = i.work_plan_id
+            WHERE i.id = ?
+            """,
+            (work_plan_item_id,),
+        ).fetchone()
+        if item_row is None:
+            raise ValueError("Строка плана не найдена.")
+
+        year = int(item_row["year"])
+        normalized_dates: list[str] = []
+        seen_dates: set[str] = set()
+        for raw in dates:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            try:
+                parsed = date.fromisoformat(text)
+            except ValueError as exc:
+                raise ValueError(f"Некорректная дата плана: {text}.") from exc
+            if parsed.year != year or parsed.month != month:
+                raise ValueError(
+                    "Дата должна относиться к выбранному месяцу и году плана."
+                )
+            iso = parsed.isoformat()
+            if iso not in seen_dates:
+                seen_dates.add(iso)
+                normalized_dates.append(iso)
+        normalized_dates.sort()
+
+        if len(normalized_dates) > count:
+            raise ValueError(
+                "Количество в месяце не может быть меньше числа выбранных дат."
+            )
+
+        plan_row = self.connection.execute(
+            """
+            SELECT p.id
+            FROM work_plans p
+            JOIN work_plan_items i ON i.work_plan_id = p.id
+            WHERE i.id = ?
+            """,
+            (work_plan_item_id,),
+        ).fetchone()
+        assert plan_row is not None
+
+        with self.connection:
+            if count == 0 and not normalized_dates:
+                self.connection.execute(
+                    """
+                    DELETE FROM work_plan_months
+                    WHERE work_plan_item_id = ? AND month = ?
+                    """,
+                    (work_plan_item_id, month),
+                )
+            else:
+                self.connection.execute(
+                    """
+                    INSERT INTO work_plan_months (
+                        work_plan_item_id, month, count, dates_json
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(work_plan_item_id, month)
+                    DO UPDATE SET
+                        count = excluded.count,
+                        dates_json = excluded.dates_json
+                    """,
+                    (
+                        work_plan_item_id,
+                        month,
+                        count,
+                        json.dumps(normalized_dates, ensure_ascii=False)
+                        if normalized_dates
+                        else None,
+                    ),
+                )
+            self.connection.execute(
+                "UPDATE work_plans SET updated_at = ? WHERE id = ?",
+                (_now(), str(plan_row["id"])),
+            )
+
+    def apply_work_plan_distribution(
+        self,
+        work_plan_id: str,
+        rows: Iterable[tuple[str, int, int]],
+    ) -> None:
+        valid_items = {
+            row["id"]
+            for row in self.connection.execute(
+                "SELECT id FROM work_plan_items WHERE work_plan_id = ?",
+                (work_plan_id,),
+            ).fetchall()
+        }
+        timestamp = _now()
+        with self.connection:
+            for item_id, month, count in rows:
+                if item_id not in valid_items:
+                    raise ValueError("Строка не относится к выбранному плану.")
+                month = int(month)
+                count = int(count)
+                if not 1 <= month <= 12 or count < 0:
+                    raise ValueError("Некорректное количество или месяц плана.")
+                if count == 0:
+                    self.connection.execute(
+                        """
+                        DELETE FROM work_plan_months
+                        WHERE work_plan_item_id = ? AND month = ?
+                        """,
+                        (item_id, month),
+                    )
+                else:
+                    existing = self.connection.execute(
+                        """
+                        SELECT dates_json FROM work_plan_months
+                        WHERE work_plan_item_id = ? AND month = ?
+                        """,
+                        (item_id, month),
+                    ).fetchone()
+                    dates_json = existing["dates_json"] if existing else None
+                    if dates_json:
+                        dates_count = len(json.loads(dates_json))
+                        if dates_count > count:
+                            dates_json = None
+                    self.connection.execute(
+                        """
+                        INSERT INTO work_plan_months (
+                            work_plan_item_id, month, count, dates_json
+                        ) VALUES (?, ?, ?, ?)
+                        ON CONFLICT(work_plan_item_id, month)
+                        DO UPDATE SET
+                            count = excluded.count,
+                            dates_json = excluded.dates_json
+                        """,
+                        (item_id, month, count, dates_json),
+                    )
+            self.connection.execute(
+                "UPDATE work_plans SET updated_at = ? WHERE id = ?",
+                (timestamp, work_plan_id),
+            )
+
+    def update_work_plan_gis_state(
+        self,
+        work_plan_id: str,
+        *,
+        gis_work_plan_guid: str | None = None,
+        gis_status: str | None = None,
+        gis_last_error: str | None = None,
+        sync_time: str | None = None,
+    ) -> None:
+        updates: dict[str, object] = {
+            "gis_last_sync_at": sync_time or _now(),
+            "gis_last_error": _clean(gis_last_error),
+            "updated_at": _now(),
+        }
+        if gis_work_plan_guid is not None:
+            updates["gis_work_plan_guid"] = _clean(gis_work_plan_guid)
+        if gis_status is not None:
+            updates["gis_status"] = _clean(gis_status)
+
+        clause = ", ".join(f"{key} = ?" for key in updates)
+        values = [updates[key] for key in updates]
+        values.append(work_plan_id)
+        self.connection.execute(
+            f"UPDATE work_plans SET {clause} WHERE id = ?",
+            values,
+        )
+        self.connection.commit()
 
     def update_work_list_period(
         self,
