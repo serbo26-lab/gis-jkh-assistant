@@ -205,3 +205,25 @@ def test_integral_quantity_accepts_localized_integer_values() -> None:
     assert integral_quantity("12,00") == 12
     assert integral_quantity("1 200") == 1200
     assert integral_quantity("3,5") is None
+
+
+def test_multi_year_distribution_supports_more_than_twelve_months(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _placed_fixture(repository)
+    assert work_list is not None
+
+    repository.update_work_list_period(
+        work_list.id,
+        start_year=2025,
+        start_month=1,
+        end_year=2027,
+        end_month=12,
+    )
+    work_list = repository.get_work_list(work_list.id)
+    assert work_list is not None
+
+    distribution = balanced_period_distribution(36, work_list)
+    assert len(distribution) == 36
+    assert set(distribution.values()) == {1}
+
+    repository.close()
