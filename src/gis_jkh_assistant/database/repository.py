@@ -1498,29 +1498,17 @@ class Repository:
                         (item_id, month),
                     )
                 else:
-                    existing = self.connection.execute(
-                        """
-                        SELECT dates_json FROM work_plan_months
-                        WHERE work_plan_item_id = ? AND month = ?
-                        """,
-                        (item_id, month),
-                    ).fetchone()
-                    dates_json = existing["dates_json"] if existing else None
-                    if dates_json:
-                        dates_count = len(json.loads(dates_json))
-                        if dates_count > count:
-                            dates_json = None
                     self.connection.execute(
                         """
                         INSERT INTO work_plan_months (
                             work_plan_item_id, month, count, dates_json
-                        ) VALUES (?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, NULL)
                         ON CONFLICT(work_plan_item_id, month)
                         DO UPDATE SET
                             count = excluded.count,
-                            dates_json = excluded.dates_json
+                            dates_json = NULL
                         """,
-                        (item_id, month, count, dates_json),
+                        (item_id, month, count),
                     )
             self.connection.execute(
                 "UPDATE work_plans SET updated_at = ? WHERE id = ?",
