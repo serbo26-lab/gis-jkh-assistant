@@ -245,6 +245,43 @@ class WorkFixationPeriod:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkFixationPhoto:
+    id: str
+    fixation_period_id: str
+    fixation_item_id: str | None
+    unplanned_item_id: str | None
+    file_name: str
+    description: str | None
+    content_type: str
+    file_size: int
+    content: bytes | None = None
+    remote_content_guid: str | None = None
+    remote_photo_guid: str | None = None
+    created_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkFixationUnplannedItem:
+    id: str
+    fixation_period_id: str
+    position: int
+    work_code: str
+    work_name: str
+    work_guid: str
+    work_type_code: str | None = None
+    work_type_guid: str | None = None
+    unit_name: str | None = None
+    fact_price: str | None = None
+    fact_amount: str | None = None
+    fact_count: int | None = None
+    fact_total_cost: str | None = None
+    comment: str | None = None
+    gis_fixed_work_guid: str | None = None
+    managed_photo_content_guids_json: str | None = None
+    managed_photo_content_guids_json: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WorkFixationItem:
     id: str
     fixation_period_id: str
