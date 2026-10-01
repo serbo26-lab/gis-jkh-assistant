@@ -13,6 +13,19 @@ from gis_jkh_assistant.database.models import (
 )
 
 
+MIN_WORK_PLAN_HELPER_VERSION = (0, 1, 5)
+
+
+def helper_supports_work_plans(version: str | None) -> bool:
+    """Return whether the browser helper supports direct work-plan publishing."""
+
+    try:
+        parts = tuple(int(part) for part in str(version or "").split("."))
+    except ValueError:
+        return False
+    return parts >= MIN_WORK_PLAN_HELPER_VERSION
+
+
 def build_gis_work_plan_command_payload(
     *,
     work_list_guid: str,
