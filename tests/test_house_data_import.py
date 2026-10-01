@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from openpyxl import load_workbook
 
 from gis_jkh_assistant.database import Repository
@@ -52,7 +54,8 @@ def test_house_data_template_roundtrip(tmp_path) -> None:
     areas["C2"] = "3 956,40"
     tariffs["C2"] = "08.2025"
     tariffs["D2"] = "22,00"
-    tariffs.append([first.id, first.address, "10.08.2026", "24.50"])
+    tariffs["E2"] = "10.08.2026"
+    tariffs["F2"] = "24.50"
     workbook.save(path)
     workbook.close()
 
@@ -109,6 +112,94 @@ def test_export_keeps_existing_tariff_precision(tmp_path) -> None:
     assert [row.start.input_label for row in result.tariffs] == [
         "08.2025",
         "10.08.2026",
+    ]
+
+    repository.close()
+
+
+def test_wide_tariff_rows_allow_gaps_and_excel_month_dates(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    organization = repository.create_organization(
+        name="УК Пример",
+        ogrn="1022600000101",
+    )
+    house = repository.create_house(
+        organization_id=organization.id,
+        address="г Ставрополь, ул Братская, д. 9",
+    )
+
+    path = tmp_path / "wide-house-data.xlsx"
+    write_house_data_template(
+        path,
+        houses=[house],
+        tariffs_by_house={house.id: []},
+    )
+
+    workbook = load_workbook(path)
+    tariffs = workbook["Тарифы"]
+
+    tariffs["C2"] = datetime(2020, 8, 1)
+    tariffs["C2"].number_format = r"mm\.yyyy"
+    tariffs["D2"] = 18.43
+
+    # Одна пара пропущена целиком — это допустимо.
+    tariffs["G2"] = datetime(2022, 8, 10)
+    tariffs["G2"].number_format = "dd.mm.yyyy"
+    tariffs["H2"] = 20.59
+
+    tariffs["K2"] = "08.2024"
+    tariffs["L2"] = "22,33"
+
+    workbook.save(path)
+    workbook.close()
+
+    result = parse_house_data_template(path)
+
+    assert [(row.start.input_label, row.amount) for row in result.tariffs] == [
+        ("08.2020", "18,43"),
+        ("10.08.2022", "20,59"),
+        ("08.2024", "22,33"),
+    ]
+
+    repository.close()
+
+
+def test_old_vertical_tariff_rows_still_import(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    organization = repository.create_organization(
+        name="УК Пример",
+        ogrn="1022600000102",
+    )
+    house = repository.create_house(
+        organization_id=organization.id,
+        address="г Ставрополь, ул Братская, д. 10",
+    )
+
+    path = tmp_path / "vertical-house-data.xlsx"
+    write_house_data_template(
+        path,
+        houses=[house],
+        tariffs_by_house={house.id: []},
+    )
+
+    workbook = load_workbook(path)
+    tariffs = workbook["Тарифы"]
+
+    # Сводим заголовок к старому формату dev23 из одной пары.
+    for column in range(tariffs.max_column, 4, -1):
+        tariffs.delete_cols(column)
+    tariffs["C2"] = "08.2025"
+    tariffs["D2"] = "22"
+    tariffs.append([house.id, house.address, "08.2026", "23"])
+
+    workbook.save(path)
+    workbook.close()
+
+    result = parse_house_data_template(path)
+
+    assert [(row.start.input_label, row.amount) for row in result.tariffs] == [
+        ("08.2025", "22"),
+        ("08.2026", "23"),
     ]
 
     repository.close()
