@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 import json
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QTimer, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,12 +29,15 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database import Repository
+from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 from gis_jkh_assistant.work_planning import (
     active_months_for_work_list,
     balanced_period_distribution,
+    build_gis_work_plan_command_payload,
     integral_quantity,
 )
 
+from .gis_integration_worker import GisIntegrationWorker
 from .widgets import SafeComboBox
 
 
@@ -55,6 +59,19 @@ _MONTH_HEADERS = (
 _PLAN_ITEM_ID_ROLE = Qt.ItemDataRole.UserRole
 _DATES_ROLE = Qt.ItemDataRole.UserRole + 1
 _ORIGINAL_COUNT_ROLE = Qt.ItemDataRole.UserRole + 2
+
+
+class PlanningTable(QTableWidget):
+    """Monthly table with spreadsheet-like Delete handling."""
+
+    delete_requested = Signal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.key() == Qt.Key.Key_Delete:
+            self.delete_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class MonthDatesDialog(QDialog):
@@ -163,14 +180,29 @@ class MonthDatesDialog(QDialog):
 class PlanningPage(QWidget):
     """Plan monthly work counts for already placed work lists."""
 
-    def __init__(self, repository: Repository, parent=None) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        integration_gateway: LocalIntegrationGateway,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.repository = repository
+        self.integration_gateway = integration_gateway
+        self._integration_worker: GisIntegrationWorker | None = None
+        self._integration_busy = False
         self._loading = False
         self._current_plan_id: str | None = None
         self._current_work_list_id: str | None = None
+
+        self._integration_status_timer = QTimer(self)
+        self._integration_status_timer.setInterval(1500)
+        self._integration_status_timer.timeout.connect(self._refresh_integration_status)
+
         self._build_ui()
         self.refresh_organizations()
+        self._refresh_integration_status()
+        self._integration_status_timer.start()
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -235,17 +267,30 @@ class PlanningPage(QWidget):
         self.plan_status.setWordWrap(True)
         context_layout.addWidget(self.plan_status, 3, 2, 1, 2)
 
+        self.browser_status = QLabel("Браузер: проверка подключения…")
+        self.browser_status.setObjectName("Muted")
+        self.browser_status.setWordWrap(True)
+        context_layout.addWidget(self.browser_status, 4, 0, 1, 4)
+
         self.distribute_button = QPushButton("Распределить количество по месяцам")
         self.distribute_button.setToolTip(
             "Распределить количество из размещенного перечня по всему его периоду. "
             "Для полного года и количества 12 получится по 1 в каждый месяц."
         )
         self.clear_button = QPushButton("Очистить план за выбранный год")
+        self.publish_button = QPushButton("Разместить / обновить план в ГИС ЖКХ")
+        self.publish_button.setObjectName("PrimaryButton")
+        self.publish_button.setToolTip(
+            "Создать новый план в ГИС ЖКХ или полностью обновить уже существующий "
+            "план этого перечня и года локальными значениями."
+        )
+
         actions = QHBoxLayout()
         actions.addWidget(self.distribute_button)
         actions.addWidget(self.clear_button)
         actions.addStretch(1)
-        context_layout.addLayout(actions, 4, 0, 1, 4)
+        actions.addWidget(self.publish_button)
+        context_layout.addLayout(actions, 5, 0, 1, 4)
 
         context_layout.setColumnStretch(1, 2)
         context_layout.setColumnStretch(3, 1)
@@ -256,8 +301,12 @@ class PlanningPage(QWidget):
             "Сначала разместите перечень в разделе «Перечни работ и услуг» "
             "и при необходимости нажмите «Проверить статус в ГИС»."
         )
-        self.empty_hint.setObjectName("Muted")
         self.empty_hint.setWordWrap(True)
+        self.empty_hint.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
+        self.empty_hint.setStyleSheet("color: #1f1f1f; font-weight: 600;")
         root.addWidget(self.empty_hint)
 
         table_card = QFrame()
@@ -269,19 +318,21 @@ class PlanningPage(QWidget):
             "«Количество в плане» считается автоматически как сумма месяцев. "
             "Ячейки вне периода выбранного перечня недоступны. "
             "Автораспределение заменяет месячные количества и очищает ранее "
-            "выбранные конкретные даты."
+            "выбранные конкретные даты. Выделенные месячные ячейки можно очистить "
+            "клавишей Del — удалятся и количество, и выбранные даты."
         )
         table_hint.setObjectName("Muted")
         table_hint.setWordWrap(True)
         table_layout.addWidget(table_hint)
 
-        self.table = QTableWidget(0, 15)
+        self.table = PlanningTable(0, 15)
         self.table.setHorizontalHeaderLabels(
             ["Работа / услуга", "В перечне", "В плане", *_MONTH_HEADERS]
         )
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(
             QAbstractItemView.EditTrigger.SelectedClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
@@ -303,8 +354,10 @@ class PlanningPage(QWidget):
         self.year_combo.currentIndexChanged.connect(self._year_changed)
         self.distribute_button.clicked.connect(self._distribute)
         self.clear_button.clicked.connect(self._clear_year)
+        self.publish_button.clicked.connect(self._publish_to_gis)
         self.table.itemChanged.connect(self._cell_changed)
         self.table.cellDoubleClicked.connect(self._open_dates)
+        self.table.delete_requested.connect(self._clear_selected_cells)
 
         self._set_plan_enabled(False)
 
@@ -405,16 +458,10 @@ class PlanningPage(QWidget):
             return
 
         self._current_plan_id = plan.id
-        if plan.gis_work_plan_guid:
-            self.plan_status.setText(
-                f"План ГИС ЖКХ: {plan.gis_work_plan_guid} • локальные данные сохранены"
-            )
-        else:
-            self.plan_status.setText(
-                "План: локально. Размещение в ГИС ЖКХ будет подключено следующим этапом."
-            )
+        self._update_plan_status(plan)
         self._set_plan_enabled(True)
         self._load_table()
+        self._refresh_gis_action_button()
 
     def _load_table(self) -> None:
         if not self._current_plan_id or not self._current_work_list_id:
@@ -593,6 +640,59 @@ class PlanningPage(QWidget):
         self.table.blockSignals(False)
         self._refresh_row_total(row)
 
+    def _clear_selected_cells(self) -> None:
+        if not self._current_plan_id:
+            return
+
+        rows: list[tuple[str, int, int]] = []
+        affected_rows: set[int] = set()
+        seen: set[tuple[str, int]] = set()
+
+        for index in self.table.selectedIndexes():
+            if index.column() < 3:
+                continue
+            cell = self.table.item(index.row(), index.column())
+            if cell is None or not (cell.flags() & Qt.ItemFlag.ItemIsEditable):
+                continue
+            item_id = cell.data(_PLAN_ITEM_ID_ROLE)
+            if not item_id:
+                continue
+            month = index.column() - 2
+            key = (str(item_id), month)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append((str(item_id), month, 0))
+            affected_rows.add(index.row())
+
+        if not rows:
+            return
+
+        try:
+            self.repository.apply_work_plan_distribution(self._current_plan_id, rows)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Не удалось очистить ячейки", str(exc))
+            return
+
+        self.table.blockSignals(True)
+        try:
+            for item_id, month, _count in rows:
+                column = month + 2
+                for row in range(self.table.rowCount()):
+                    cell = self.table.item(row, column)
+                    if cell and str(cell.data(_PLAN_ITEM_ID_ROLE) or "") == item_id:
+                        cell.setText("")
+                        cell.setData(_DATES_ROLE, [])
+                        cell.setData(_ORIGINAL_COUNT_ROLE, 0)
+                        self._apply_dates_decoration(cell, [])
+                        break
+        finally:
+            self.table.blockSignals(False)
+
+        for row in affected_rows:
+            self._refresh_row_total(row)
+
+
     def _distribute(self) -> None:
         if not self._current_plan_id or not self._current_work_list_id:
             return
@@ -747,6 +847,203 @@ class PlanningPage(QWidget):
         self.table.setEnabled(enabled)
         self.distribute_button.setEnabled(enabled)
         self.clear_button.setEnabled(enabled)
+        self._refresh_gis_action_button()
+
+    def _update_plan_status(self, plan=None) -> None:
+        if plan is None and self._current_plan_id:
+            plan = self.repository.get_work_plan(self._current_plan_id)
+        if plan is None:
+            self.plan_status.setText("План: —")
+            return
+
+        if plan.gis_work_plan_guid:
+            text = f"План ГИС ЖКХ: {plan.gis_work_plan_guid}"
+            if plan.gis_status:
+                text += f" • {plan.gis_status}"
+            if plan.gis_last_sync_at:
+                text += f" • синхронизировано {plan.gis_last_sync_at}"
+            if plan.gis_last_error:
+                text += f" • ошибка: {plan.gis_last_error}"
+            self.plan_status.setText(text)
+        else:
+            text = "План: локально, еще не размещен через приложение."
+            if plan.gis_last_error:
+                text += f" Последняя ошибка: {plan.gis_last_error}"
+            self.plan_status.setText(text)
+
+    def _refresh_integration_status(self) -> None:
+        status = self.integration_gateway.status()
+        if not status.running:
+            text = "Браузер: локальная интеграция не запущена"
+            if status.error:
+                text += f" ({status.error})"
+            self.browser_status.setText(text)
+            self.browser_status.setStyleSheet("color: #b42318;")
+        elif not status.helper_connected:
+            self.browser_status.setText(
+                "Браузер: помощник не подключен. Установите расширение из папки "
+                "browser-extension и откройте личный кабинет ГИС ЖКХ."
+            )
+            self.browser_status.setStyleSheet("color: #8a5b00;")
+        elif not status.gis_page_ready:
+            self.browser_status.setText(
+                "Браузер: помощник подключен, но вкладка ГИС ЖКХ не открыта."
+            )
+            self.browser_status.setStyleSheet("color: #8a5b00;")
+        else:
+            self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
+            self.browser_status.setStyleSheet("color: #107c10;")
+        self._refresh_gis_action_button()
+
+    def _refresh_gis_action_button(self) -> None:
+        if not hasattr(self, "publish_button"):
+            return
+        status = self.integration_gateway.status()
+        ready = status.running and status.helper_connected and status.gis_page_ready
+        self.publish_button.setEnabled(
+            bool(self._current_plan_id)
+            and bool(self._current_work_list_id)
+            and ready
+            and not self._integration_busy
+        )
+
+    def _set_integration_busy(self, busy: bool) -> None:
+        self._integration_busy = busy
+        self._refresh_gis_action_button()
+        if busy:
+            self.plan_status.setText("План: отправка в ГИС ЖКХ…")
+        else:
+            self._update_plan_status()
+
+    def _run_integration_command(
+        self,
+        *,
+        plan_id: str,
+        payload: dict,
+        success_callback,
+    ) -> None:
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Операция уже выполняется",
+                "Дождитесь завершения текущей операции с ГИС ЖКХ.",
+            )
+            return
+
+        self._set_integration_busy(True)
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "save_work_plan",
+            payload,
+            timeout=90.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            success_callback(plan_id, result)
+
+        def failed(message: str) -> None:
+            self.repository.update_work_plan_gis_state(
+                plan_id,
+                gis_last_error=message,
+            )
+            if self._current_plan_id == plan_id:
+                self._update_plan_status()
+            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", message)
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._set_integration_busy(False)
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
+    def _publish_to_gis(self) -> None:
+        if not self._current_plan_id or not self._current_work_list_id:
+            return
+
+        plan = self.repository.get_work_plan(self._current_plan_id)
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if not plan or not work_list:
+            return
+        if not work_list.gis_work_list_guid:
+            QMessageBox.warning(
+                self,
+                "Нет GUID размещенного перечня",
+                "Сначала проверьте статус перечня в разделе «Перечни работ и услуг».",
+            )
+            return
+
+        house = self.repository.get_house(work_list.house_id)
+        if not house:
+            QMessageBox.critical(
+                self,
+                "Дом не найден",
+                "Карточка дома отсутствует в локальной базе.",
+            )
+            return
+
+        items = self.repository.list_work_plan_items(plan.id)
+        months = self.repository.list_work_plan_months(plan.id)
+        try:
+            payload = build_gis_work_plan_command_payload(
+                work_list_guid=work_list.gis_work_list_guid,
+                year=plan.year,
+                items=items,
+                months=months,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Нельзя разместить план", str(exc))
+            return
+
+        total_count = sum(int(row.count) for row in months)
+        operation = "обновлен" if plan.gis_work_plan_guid else "создан или обновлен"
+        answer = QMessageBox.warning(
+            self,
+            "Разместить / обновить план?",
+            f"Дом:\n{house.address}\n\n"
+            f"Перечень: {work_list.period_label}\n"
+            f"Год плана: {plan.year}\n"
+            f"Суммарное количество по месяцам: {total_count}\n\n"
+            f"План в ГИС ЖКХ будет {operation} локальными значениями. "
+            "Если план этого года уже существует в ГИС ЖКХ, его месячные значения "
+            "будут полностью заменены текущими значениями из приложения.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def on_success(plan_id: str, result: dict) -> None:
+            self.repository.update_work_plan_gis_state(
+                plan_id,
+                gis_work_plan_guid=result.get("workPlanGuid"),
+                gis_status=result.get("gisStatus") or "SAVED",
+                gis_last_error=None,
+            )
+            if self._current_plan_id == plan_id:
+                self._update_plan_status()
+
+            created = bool(result.get("created"))
+            QMessageBox.information(
+                self,
+                "План размещен" if created else "План обновлен",
+                (
+                    "План работ и услуг создан в ГИС ЖКХ."
+                    if created
+                    else "План работ и услуг обновлен в ГИС ЖКХ."
+                ),
+            )
+
+        self._run_integration_command(
+            plan_id=plan.id,
+            payload=payload,
+            success_callback=on_success,
+        )
 
     def set_view_mode(self, _mode: str) -> None:
         """Keep the same public resize hook as other main pages."""
