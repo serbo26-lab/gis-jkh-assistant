@@ -224,7 +224,7 @@ class HouseTariffDialog(QDialog):
     def _validate_and_accept(self) -> None:
         raw = (
             self.amount_edit.text()
-            .replace("\\u00a0", "")
+            .replace("\u00a0", "")
             .replace(" ", "")
             .replace(",", ".")
         )
