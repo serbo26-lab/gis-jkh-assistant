@@ -1341,6 +1341,29 @@ def _validate_month_point(year: int, month: int) -> None:
         raise ValueError("Месяц должен быть от 1 до 12.")
 
 
+def _validate_date_point(year: int, month: int, day: int) -> None:
+    _validate_month_point(year, month)
+    try:
+        date(int(year), int(month), int(day))
+    except ValueError as exc:
+        raise ValueError("День месяца указан некорректно.") from exc
+
+
+def _validate_date_precision(value: str) -> str:
+    precision = str(value or "month").strip().lower()
+    if precision not in {"month", "day"}:
+        raise ValueError("Точность даты должна быть month или day.")
+    return precision
+
+
+def _last_day_of_month(year: int, month: int) -> int:
+    if int(month) == 12:
+        first_next = date(int(year) + 1, 1, 1)
+    else:
+        first_next = date(int(year), int(month) + 1, 1)
+    return (first_next - timedelta(days=1)).day
+
+
 def _validate_period(
     start_year: int,
     start_month: int,
