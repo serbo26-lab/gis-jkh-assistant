@@ -1118,7 +1118,8 @@ async function runGisCommand(command) {
         newUnplanned.push(unplannedRow);
         unplannedMappings.push({
           localItemId: localItem?.localItemId || null,
-          resultIndex: preservedUnplanned.length + newUnplanned.length - 1
+          workGuid: work.guid,
+          existingGuid: existing?.guid || null
         });
       }
 
@@ -1247,10 +1248,23 @@ async function runGisCommand(command) {
         localItemId: item.localItemId,
         guid: savedItems[item.remoteIndex]?.guid || null
       }));
-      const unplannedItems = prepared.unplannedMappings.map((item) => ({
-        localItemId: item.localItemId,
-        guid: savedUnplanned[item.resultIndex]?.guid || null
-      }));
+      const unplannedItems = prepared.unplannedMappings.map((item) => {
+        const matched =
+          savedUnplanned.find(
+            (row) =>
+              item.existingGuid &&
+              String(row?.guid || "") === String(item.existingGuid)
+          ) ||
+          savedUnplanned.find(
+            (row) =>
+              String(row?.work?.guid || "") === String(item.workGuid || "")
+          ) ||
+          null;
+        return {
+          localItemId: item.localItemId,
+          guid: matched?.guid || null
+        };
+      });
 
       const photoResults = [];
       function collectPhotoResults(source) {
