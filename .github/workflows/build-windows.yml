@@ -50,7 +50,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GIS-JKH-Assistant-0.1.0.dev26-windows
+          name: GIS-JKH-Assistant-0.1.0.dev27-windows
           path: dist/GIS-JKH-Assistant-windows.zip
 
       - name: Publish rolling GitHub prerelease
