@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import mimetypes
+
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
@@ -681,11 +683,23 @@ class FixationPage(QWidget):
             if dialog.exec() != dialog.DialogCode.Accepted:
                 return
             try:
-                self.repository.add_work_fixation_unplanned_item(
+                added = self.repository.add_work_fixation_unplanned_item(
                     self._current_period_id,
                     **dialog.values(),
                 )
-            except ValueError as exc:
+                for path in dialog.photo_paths():
+                    content_type = (
+                        mimetypes.guess_type(path.name)[0]
+                        or "application/octet-stream"
+                    )
+                    self.repository.add_work_fixation_photo(
+                        unplanned_item_id=added.id,
+                        file_name=path.name,
+                        description=path.name,
+                        content_type=content_type,
+                        content=path.read_bytes(),
+                    )
+            except (OSError, ValueError) as exc:
                 QMessageBox.warning(self, "Не удалось добавить работу", str(exc))
                 return
             self._load_unplanned_table()
