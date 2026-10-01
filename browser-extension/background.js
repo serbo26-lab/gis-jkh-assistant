@@ -1093,7 +1093,7 @@ async function runGisCommand(command) {
             factCount === null
               ? null
               : {
-                  count: factCount,
+                  count: String(factCount),
                   monthYear: {
                     month: Number(localPayload.month),
                     year: Number(localPayload.year)
