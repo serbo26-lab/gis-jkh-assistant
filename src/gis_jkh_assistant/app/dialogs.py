@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from PySide6.QtWidgets import (
@@ -172,7 +173,8 @@ class HouseTariffDialog(QDialog):
             else:
                 start_text = f"{int(default_start_month):02d}.{int(default_start_year)}"
         else:
-            start_text = ""
+            today = date.today()
+            start_text = f"{today.month:02d}.{today.year}"
 
         self.start_date_edit = QLineEdit(start_text)
         self.start_date_edit.setPlaceholderText("08.2025 или 10.08.2025")
