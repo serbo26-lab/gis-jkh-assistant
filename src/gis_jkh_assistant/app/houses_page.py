@@ -32,6 +32,12 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database import RecordSource, Repository
+from gis_jkh_assistant.gis_files.house_data import (
+    HouseDataImportError,
+    normalize_positive_decimal,
+    parse_house_data_template,
+    write_house_data_template,
+)
 from gis_jkh_assistant.gis_files.housing_objects import (
     HousingObjectsImportError,
     parse_housing_objects_export,
@@ -103,12 +109,16 @@ class HousesPage(QWidget):
             "распакуйте его и выберите XLSX внутри."
         )
         self.add_house_button = QPushButton("Добавить дом")
+        self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
+        self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
 
         self.add_org_button.clicked.connect(self._add_organization)
         self.edit_org_button.clicked.connect(self._edit_organization)
         self.delete_org_button.clicked.connect(self._delete_organization)
         self.import_button.clicked.connect(self._import_file)
         self.add_house_button.clicked.connect(self._add_house)
+        self.export_house_data_button.clicked.connect(self._export_house_data_template)
+        self.import_house_data_button.clicked.connect(self._import_house_data)
 
         actions_row = QHBoxLayout()
         actions_row.setSpacing(8)
@@ -131,6 +141,22 @@ class HousesPage(QWidget):
         import_hint.setWordWrap(True)
         import_hint.setObjectName("Muted")
         toolbar_layout.addWidget(import_hint)
+
+        house_data_row = QHBoxLayout()
+        house_data_row.setSpacing(8)
+        house_data_row.addWidget(self.export_house_data_button)
+        house_data_row.addWidget(self.import_house_data_button)
+        house_data_row.addStretch(1)
+        toolbar_layout.addLayout(house_data_row)
+
+        house_data_hint = QLabel(
+            "Для площадей и тарифов приложение формирует свой простой XLSX-шаблон "
+            "по домам выбранной УО. Даты тарифов можно вводить как 08.2025 "
+            "(с 01.08.2025) или как точную дату 10.08.2025."
+        )
+        house_data_hint.setWordWrap(True)
+        house_data_hint.setObjectName("Muted")
+        toolbar_layout.addWidget(house_data_hint)
 
         root.addWidget(toolbar)
 
@@ -252,7 +278,8 @@ class HousesPage(QWidget):
 
         tariff_hint = QLabel(
             "Добавляйте новую строку только когда тариф меняется. "
-            "Последнее указанное значение действует до следующего изменения."
+            "Можно указать месяц (08.2025 = с 01.08.2025) или точную дату "
+            "(10.08.2025). Последнее значение действует до следующего изменения."
         )
         tariff_hint.setWordWrap(True)
         tariff_hint.setObjectName("Muted")
@@ -488,6 +515,8 @@ class HousesPage(QWidget):
             self,
             default_start_year=(latest.start_year + 1) if latest else None,
             default_start_month=latest.start_month if latest else None,
+            default_start_day=latest.start_day if latest else 1,
+            default_start_precision=latest.start_precision if latest else "month",
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -704,6 +733,227 @@ class HousesPage(QWidget):
         self.repository.delete_house(house.id)
         self._current_house_id = None
         self.refresh_houses()
+
+    def _export_house_data_template(self) -> None:
+        organization_id = self.organization_combo.currentData()
+        if not organization_id:
+            QMessageBox.information(
+                self,
+                "Сначала выберите УО",
+                "Шаблон формируется по домам выбранной управляющей организации.",
+            )
+            return
+
+        houses = self.repository.list_houses(str(organization_id))
+        if not houses:
+            QMessageBox.information(
+                self,
+                "Нет домов",
+                "У выбранной УО пока нет домов для формирования шаблона.",
+            )
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить шаблон площадей и тарифов",
+            "Данные домов.xlsx",
+            "Excel (*.xlsx)",
+        )
+        if not filename:
+            return
+        if not filename.lower().endswith(".xlsx"):
+            filename += ".xlsx"
+
+        tariffs_by_house = {
+            house.id: self.repository.list_house_tariffs(house.id)
+            for house in houses
+        }
+        try:
+            write_house_data_template(
+                Path(filename),
+                houses=houses,
+                tariffs_by_house=tariffs_by_house,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Не удалось создать шаблон", str(exc))
+            return
+
+        QMessageBox.information(
+            self,
+            "Шаблон создан",
+            "Файл содержит листы «Площади» и «Тарифы». "
+            "Адреса уже заполнены. На листе тарифов одна строка — "
+            "одна дата изменения тарифа.",
+        )
+
+    def _import_house_data(self) -> None:
+        organization_id = self.organization_combo.currentData()
+        if not organization_id:
+            QMessageBox.information(
+                self,
+                "Сначала выберите УО",
+                "Импорт площадей и тарифов выполняется для выбранной УО.",
+            )
+            return
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Импорт площадей и тарифов",
+            "",
+            "Excel (*.xlsx)",
+        )
+        if not filename:
+            return
+
+        try:
+            result = parse_house_data_template(Path(filename))
+        except (HouseDataImportError, OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Не удалось прочитать файл", str(exc))
+            return
+
+        houses = self.repository.list_houses(str(organization_id))
+        houses_by_id = {house.id: house for house in houses}
+        houses_by_address: dict[str, list[object]] = defaultdict(list)
+        for house in houses:
+            key = " ".join(house.address.split()).casefold()
+            houses_by_address[key].append(house)
+
+        def resolve(house_id: str | None, address: str, row_label: str):
+            if house_id:
+                house = houses_by_id.get(house_id)
+                if house is not None:
+                    return house
+            key = " ".join(address.split()).casefold()
+            matches = houses_by_address.get(key, [])
+            if len(matches) == 1:
+                return matches[0]
+            if not matches:
+                raise ValueError(f"{row_label}: дом «{address}» не найден у выбранной УО.")
+            raise ValueError(f"{row_label}: адрес «{address}» встречается несколько раз.")
+
+        area_changes: list[tuple[object, str, str | None]] = []
+        tariff_changes: list[tuple[object, object, object | None]] = []
+        unresolved: list[str] = []
+
+        for row in result.areas:
+            try:
+                house = resolve(
+                    row.house_id,
+                    row.address,
+                    f"Площади, строка {row.row_number}",
+                )
+            except ValueError as exc:
+                unresolved.append(str(exc))
+                continue
+            current = house.charge_area
+            try:
+                current_normalized = (
+                    normalize_positive_decimal(current) if current else None
+                )
+            except ValueError:
+                current_normalized = current
+            if current_normalized != row.area:
+                area_changes.append((house, row.area, current))
+
+        for row in result.tariffs:
+            try:
+                house = resolve(
+                    row.house_id,
+                    row.address,
+                    f"Тарифы, строка {row.row_number}",
+                )
+            except ValueError as exc:
+                unresolved.append(str(exc))
+                continue
+
+            existing = next(
+                (
+                    item
+                    for item in self.repository.list_house_tariffs(house.id)
+                    if item.effective_from_date == row.start.value
+                ),
+                None,
+            )
+            same = False
+            if existing is not None:
+                try:
+                    same_amount = normalize_positive_decimal(existing.amount) == row.amount
+                except ValueError:
+                    same_amount = existing.amount == row.amount
+                same = (
+                    same_amount
+                    and existing.start_precision == row.start.precision
+                )
+            if not same:
+                tariff_changes.append((house, row, existing))
+
+        if unresolved:
+            message = (
+                "Импорт не выполнен: не удалось однозначно сопоставить некоторые строки.\n\n"
+                + "\n".join(unresolved[:10])
+            )
+            if len(unresolved) > 10:
+                message += f"\n… еще: {len(unresolved) - 10}"
+            QMessageBox.warning(self, "Проверьте файл", message)
+            return
+
+        tariff_conflicts = [
+            (house, row, existing)
+            for house, row, existing in tariff_changes
+            if existing is not None
+        ]
+        new_tariffs = len(tariff_changes) - len(tariff_conflicts)
+
+        preview = (
+            f"Площади будут обновлены: {len(area_changes)}\n"
+            f"Новых точек тарифа: {new_tariffs}\n"
+            f"Существующих точек тарифа будут изменены: {len(tariff_conflicts)}"
+        )
+        if result.warnings:
+            preview += "\n\n" + "\n".join(result.warnings)
+        if tariff_conflicts:
+            preview += "\n\nПримеры замен:\n"
+            for house, row, existing in tariff_conflicts[:6]:
+                preview += (
+                    f"• {house.address}: {existing.effective_from_label} "
+                    f"{existing.amount} → {row.amount}\n"
+                )
+        if not area_changes and not tariff_changes:
+            QMessageBox.information(
+                self,
+                "Изменений нет",
+                "Все заполненные значения уже совпадают с данными программы.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Применить импорт?",
+            preview + "\n\nПрименить эти изменения?",
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        for house, area, _old in area_changes:
+            self.repository.update_house(house.id, charge_area=area)
+
+        for house, row, _existing in tariff_changes:
+            self.repository.upsert_house_tariff_change(
+                house_id=house.id,
+                amount=row.amount,
+                start_year=row.start.value.year,
+                start_month=row.start.value.month,
+                start_day=row.start.value.day,
+                start_precision=row.start.precision,
+            )
+
+        self.refresh_houses()
+        QMessageBox.information(
+            self,
+            "Импорт завершен",
+            f"Обновлено площадей: {len(area_changes)}\n"
+            f"Изменено или добавлено тарифов: {len(tariff_changes)}",
+        )
 
     def _import_file(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
