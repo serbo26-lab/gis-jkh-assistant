@@ -1,3 +1,5 @@
+import pytest
+
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.work_fixation import (
     build_fixation_command_payload,
@@ -202,6 +204,139 @@ def test_clear_fixation_removes_all_fact_values(tmp_path) -> None:
 
 def test_fixation_helper_version() -> None:
     assert not helper_supports_fixations(None)
-    assert not helper_supports_fixations("0.1.5")
-    assert helper_supports_fixations("0.1.6")
+    assert not helper_supports_fixations("0.1.6")
+    assert helper_supports_fixations("0.1.7")
     assert helper_supports_fixations("0.2.0")
+
+
+def test_unplanned_work_cannot_duplicate_planned_work(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list, _plan = _fixture(repository)
+    period = repository.get_or_create_work_fixation_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    with pytest.raises(ValueError, match="является плановой"):
+        repository.add_work_fixation_unplanned_item(
+            period.id,
+            work_code="12",
+            work_name="Услуга по управлению",
+            work_guid="83592b3d-c928-416b-b6e0-595fa1339821",
+            fact_count=1,
+        )
+    repository.close()
+
+
+def test_unplanned_work_and_photo_are_in_gis_payload(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, house, work_list, _plan = _fixture(repository)
+    period = repository.get_or_create_work_fixation_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    repository.fill_work_fixation_from_plan(period.id)
+    planned = repository.list_work_fixation_items(period.id)
+    repository.add_work_fixation_photo(
+        fixation_item_id=planned[0].id,
+        file_name="plan.jpg",
+        description="plan.jpg",
+        content_type="image/jpeg",
+        content=b"jpeg-bytes",
+    )
+    unplanned = repository.add_work_fixation_unplanned_item(
+        period.id,
+        work_code="20",
+        work_name="Внеплановая работа",
+        work_guid="a63d1b8b-6ca4-439f-8c78-71afe7c004c0",
+        work_type_code="1",
+        unit_name="ед",
+        fact_price="2",
+        fact_amount="2",
+        fact_count=2,
+        fact_total_cost="8.00",
+        comment="комментарий",
+    )
+    repository.add_work_fixation_photo(
+        unplanned_item_id=unplanned.id,
+        file_name="extra.gif",
+        description="extra.gif",
+        content_type="image/gif",
+        content=b"gif-bytes",
+    )
+
+    payload = build_fixation_command_payload(
+        fias_house_code=house.fias_house_guid or "",
+        work_list_guid=work_list.gis_work_list_guid or "",
+        year=2026,
+        month=1,
+        items=repository.list_work_fixation_items(period.id),
+        unplanned_items=repository.list_work_fixation_unplanned_items(period.id),
+        photos_by_planned={
+            item.id: repository.list_work_fixation_photos(fixation_item_id=item.id)
+            for item in repository.list_work_fixation_items(period.id)
+        },
+        photos_by_unplanned={
+            item.id: repository.list_work_fixation_photos(unplanned_item_id=item.id)
+            for item in repository.list_work_fixation_unplanned_items(period.id)
+        },
+        managed_unplanned_guids_json=period.managed_unplanned_guids_json,
+    )
+
+    assert payload["items"][0]["photos"][0]["fileName"] == "plan.jpg"
+    assert payload["items"][0]["photos"][0]["fileBase64"]
+    assert payload["unplannedItems"][0]["workCode"] == "20"
+    assert payload["unplannedItems"][0]["factCount"] == 2
+    assert payload["unplannedItems"][0]["comment"] == "комментарий"
+    assert payload["unplannedItems"][0]["photos"][0]["fileName"] == "extra.gif"
+    repository.close()
+
+
+def test_managed_gis_guids_allow_deleting_published_extras(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list, _plan = _fixture(repository)
+    period = repository.get_or_create_work_fixation_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    planned = repository.list_work_fixation_items(period.id)
+    photo = repository.add_work_fixation_photo(
+        fixation_item_id=planned[0].id,
+        file_name="photo.jpg",
+        description=None,
+        content_type="image/jpeg",
+        content=b"photo",
+    )
+    extra = repository.add_work_fixation_unplanned_item(
+        period.id,
+        work_code="20",
+        work_name="Внеплановая работа",
+        work_guid="a63d1b8b-6ca4-439f-8c78-71afe7c004c0",
+        fact_count=1,
+    )
+    repository.update_work_fixation_gis_state(
+        period.id,
+        gis_status="SAVED",
+        unplanned_item_guids={extra.id: "remote-unplanned-guid"},
+        photo_guids={photo.id: ("remote-content-guid", "remote-photo-guid")},
+    )
+
+    refreshed_item = repository.list_work_fixation_items(period.id)[0]
+    refreshed_period = repository.get_work_fixation_period(period.id)
+    assert refreshed_period is not None
+    assert "remote-unplanned-guid" in (refreshed_period.managed_unplanned_guids_json or "")
+    assert "remote-content-guid" in (
+        refreshed_item.managed_photo_content_guids_json or ""
+    )
+
+    repository.delete_work_fixation_photo(photo.id)
+    repository.delete_work_fixation_unplanned_item(extra.id)
+    period_after_delete = repository.get_work_fixation_period(period.id)
+    assert period_after_delete is not None
+    assert period_after_delete.gis_status == "MODIFIED"
+    assert "remote-unplanned-guid" in (
+        period_after_delete.managed_unplanned_guids_json or ""
+    )
+    repository.close()
