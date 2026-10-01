@@ -1,3 +1,5 @@
+import sqlite3
+
 from gis_jkh_assistant.database import Repository
 
 
@@ -246,5 +248,78 @@ def test_tariffs_can_change_twice_in_one_month_when_dates_differ(tmp_path) -> No
     tariffs = repository.list_house_tariffs(house.id)
     assert len(tariffs) == 2
     assert tariffs[0].effective_to_date.isoformat() == "2025-08-09"
+
+    repository.close()
+
+
+def test_old_month_tariffs_migrate_to_first_day_with_month_precision(tmp_path) -> None:
+    database_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(database_path)
+    connection.executescript(
+        """
+        CREATE TABLE management_organizations (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            ogrn TEXT NOT NULL UNIQUE,
+            kpp TEXT,
+            comment TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE houses (
+            id TEXT PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            address TEXT NOT NULL,
+            house_object_guid TEXT,
+            gis_house_guid TEXT,
+            fias_house_guid TEXT,
+            gis_unique_house_number TEXT,
+            cadastral_number TEXT,
+            charge_area TEXT,
+            residential_premises_count INTEGER NOT NULL DEFAULT 0,
+            non_residential_premises_count INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'manual',
+            comment TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE house_tariffs (
+            id TEXT PRIMARY KEY,
+            house_id TEXT NOT NULL,
+            amount TEXT NOT NULL,
+            start_year INTEGER NOT NULL,
+            start_month INTEGER NOT NULL,
+            end_year INTEGER NOT NULL,
+            end_month INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX ix_house_tariffs_period
+            ON house_tariffs(house_id, start_year, start_month, end_year, end_month);
+        INSERT INTO management_organizations
+            (id, name, ogrn, created_at, updated_at)
+            VALUES ('org', 'УК', '1022600000999', 'now', 'now');
+        INSERT INTO houses
+            (id, organization_id, address, created_at, updated_at)
+            VALUES ('house', 'org', 'Дом 1', 'now', 'now');
+        INSERT INTO house_tariffs
+            (id, house_id, amount, start_year, start_month, end_year, end_month,
+             created_at, updated_at)
+            VALUES
+            ('t1', 'house', '22', 2020, 8, 2020, 12, 'now', 'now'),
+            ('t2', 'house', '23', 2021, 8, 9999, 12, 'now', 'now');
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    repository = Repository(database_path)
+    tariffs = repository.list_house_tariffs("house")
+
+    assert tariffs[0].start_day == 1
+    assert tariffs[0].start_precision == "month"
+    assert tariffs[0].end_day == 31
+    assert tariffs[0].period_full_label == "01.08.2020 — 31.07.2021"
+    assert tariffs[1].effective_from_label == "08.2021"
 
     repository.close()
