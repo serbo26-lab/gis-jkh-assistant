@@ -2,9 +2,83 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal, InvalidOperation
+from typing import Iterable
 
-from gis_jkh_assistant.database.models import WorkList
+from gis_jkh_assistant.database.models import (
+    WorkList,
+    WorkPlanItem,
+    WorkPlanMonth,
+)
+
+
+def build_gis_work_plan_command_payload(
+    *,
+    work_list_guid: str,
+    year: int,
+    items: Iterable[WorkPlanItem],
+    months: Iterable[WorkPlanMonth],
+) -> dict:
+    """Build the compact plan state sent to the browser helper.
+
+    The browser helper enriches these local rows with current GIS work-list
+    references before calling save/workplan. Missing months are intentional:
+    the local plan is the complete desired state for the selected year.
+    """
+
+    guid = str(work_list_guid or "").strip()
+    if not guid:
+        raise ValueError("У размещенного перечня отсутствует GUID ГИС ЖКХ.")
+
+    year = int(year)
+    month_rows = list(months)
+    grouped: dict[str, list[dict]] = {}
+    for row in month_rows:
+        count = int(row.count)
+        if count <= 0:
+            continue
+        dates = _decode_dates_json(row.dates_json)
+        grouped.setdefault(row.work_plan_item_id, []).append(
+            {
+                "month": int(row.month),
+                "count": count,
+                "dates": dates,
+            }
+        )
+
+    result_items: list[dict] = []
+    for item in items:
+        monthly = sorted(
+            grouped.get(item.id, []),
+            key=lambda value: int(value["month"]),
+        )
+        result_items.append(
+            {
+                "workGuid": item.work_guid,
+                "workCode": item.work_code,
+                "sortIndex": int(item.position),
+                "monthlyWorks": monthly,
+            }
+        )
+
+    return {
+        "workListGuid": guid,
+        "year": year,
+        "items": result_items,
+    }
+
+
+def _decode_dates_json(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return sorted(str(item) for item in value if str(item).strip())
 
 
 def active_months_for_work_list(work_list: WorkList, year: int) -> tuple[int, ...]:
