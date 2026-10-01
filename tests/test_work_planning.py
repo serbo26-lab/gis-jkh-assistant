@@ -7,6 +7,7 @@ from gis_jkh_assistant.work_planning import (
     active_months_for_work_list,
     balanced_month_distribution,
     balanced_period_distribution,
+    build_gis_work_plan_command_payload,
     integral_quantity,
 )
 
@@ -225,5 +226,102 @@ def test_multi_year_distribution_supports_more_than_twelve_months(tmp_path) -> N
     distribution = balanced_period_distribution(36, work_list)
     assert len(distribution) == 36
     assert set(distribution.values()) == {1}
+
+    repository.close()
+
+
+def test_gis_work_plan_payload_contains_counts_and_optional_dates(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _placed_fixture(repository)
+    assert work_list is not None
+
+    plan = repository.get_or_create_work_plan(
+        work_list_id=work_list.id,
+        year=2026,
+    )
+    items = repository.list_work_plan_items(plan.id)
+    first = items[0]
+
+    repository.update_work_plan_month(
+        first.id,
+        month=1,
+        count=1,
+        dates=["2026-01-31"],
+    )
+    repository.update_work_plan_month(
+        first.id,
+        month=2,
+        count=1,
+        dates=[],
+    )
+
+    payload = build_gis_work_plan_command_payload(
+        work_list_guid=work_list.gis_work_list_guid or "",
+        year=2026,
+        items=repository.list_work_plan_items(plan.id),
+        months=repository.list_work_plan_months(plan.id),
+    )
+
+    assert payload["workListGuid"] == "placed-list-guid"
+    assert payload["year"] == 2026
+    assert payload["items"][0]["workGuid"] == "work-guid-1"
+    assert payload["items"][0]["monthlyWorks"] == [
+        {"month": 1, "count": 1, "dates": ["2026-01-31"]},
+        {"month": 2, "count": 1, "dates": []},
+    ]
+    assert payload["items"][1]["monthlyWorks"] == []
+
+    repository.close()
+
+
+def test_batch_clear_removes_count_and_concrete_dates(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _placed_fixture(repository)
+    assert work_list is not None
+
+    plan = repository.get_or_create_work_plan(
+        work_list_id=work_list.id,
+        year=2026,
+    )
+    item = repository.list_work_plan_items(plan.id)[0]
+    repository.update_work_plan_month(
+        item.id,
+        month=3,
+        count=2,
+        dates=["2026-03-10", "2026-03-20"],
+    )
+    assert repository.get_work_plan_month(item.id, 3) is not None
+
+    repository.apply_work_plan_distribution(
+        plan.id,
+        [(item.id, 3, 0)],
+    )
+
+    assert repository.get_work_plan_month(item.id, 3) is None
+    repository.close()
+
+
+def test_work_plan_gis_state_is_persisted(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _placed_fixture(repository)
+    assert work_list is not None
+
+    plan = repository.get_or_create_work_plan(
+        work_list_id=work_list.id,
+        year=2026,
+    )
+    repository.update_work_plan_gis_state(
+        plan.id,
+        gis_work_plan_guid="plan-guid",
+        gis_status="SAVED",
+        gis_last_error=None,
+    )
+
+    refreshed = repository.get_work_plan(plan.id)
+    assert refreshed is not None
+    assert refreshed.gis_work_plan_guid == "plan-guid"
+    assert refreshed.gis_status == "SAVED"
+    assert refreshed.gis_last_error is None
+    assert refreshed.gis_last_sync_at
 
     repository.close()
