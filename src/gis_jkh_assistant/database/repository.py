@@ -187,7 +187,6 @@ class Repository:
                 gis_status TEXT,
                 gis_last_sync_at TEXT,
                 gis_last_error TEXT,
-                managed_unplanned_guids_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (house_id)
@@ -282,6 +281,7 @@ class Repository:
                 gis_status TEXT,
                 gis_last_sync_at TEXT,
                 gis_last_error TEXT,
+                managed_unplanned_guids_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (work_list_id)
