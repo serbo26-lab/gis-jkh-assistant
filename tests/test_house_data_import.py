@@ -1,3 +1,10 @@
+from openpyxl import load_workbook
+
+from gis_jkh_assistant.database import Repository
+from gis_jkh_assistant.gis_files.house_data import (
+    parse_house_data_template,
+    write_house_data_template,
+)
 from gis_jkh_assistant.period_dates import parse_period_date
 
 
@@ -8,15 +15,6 @@ def test_period_date_precision() -> None:
     assert month.precision == "month"
     assert exact.value.isoformat() == "2025-08-10"
     assert exact.precision == "day"
-
-
-from openpyxl import load_workbook
-
-from gis_jkh_assistant.database import Repository
-from gis_jkh_assistant.gis_files.house_data import (
-    parse_house_data_template,
-    write_house_data_template,
-)
 
 
 def test_house_data_template_roundtrip(tmp_path) -> None:
