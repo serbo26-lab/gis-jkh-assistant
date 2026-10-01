@@ -837,12 +837,21 @@ async function runGisCommand(command) {
 
     async function localPhotoForSave(photo) {
       if (photo?.remoteContentGuid) {
+        const data = await request(
+          "GET",
+          "/filestore/api/rest/services/filestore/fileDetail?fileUid=" +
+            encodeURIComponent(String(photo.remoteContentGuid)),
+          undefined,
+          STATE_WORKPLANNING
+        );
         return {
           attachment: {
-            fileName: photo.fileName || null,
-            description: photo.description || photo.fileName || null,
-            contentType: photo.contentType || null,
-            fileSize: photo.fileSize ?? null,
+            createDate: gisCreateDate(data?.createDate),
+            fileName: data?.fileName || photo.fileName || null,
+            description:
+              data?.description || photo.description || photo.fileName || null,
+            contentType: data?.contentType || photo.contentType || null,
+            fileSize: data?.fileSize ?? photo.fileSize ?? null,
             contentGuid: photo.remoteContentGuid
           },
           workDate: { date: null }
@@ -1052,8 +1061,7 @@ async function runGisCommand(command) {
           guid: localItem?.workTypeGuid || null
         };
 
-        newUnplanned.push({
-          guid: existing?.guid || null,
+        const unplannedRow = {
           work: { code: work.code, guid: work.guid },
           workType,
           monthlyFixedWork:
@@ -1077,7 +1085,9 @@ async function runGisCommand(command) {
           ),
           photos: mergedPhotos.photos,
           comment: localItem?.comment || null
-        });
+        };
+        if (existing?.guid) unplannedRow.guid = existing.guid;
+        newUnplanned.push(unplannedRow);
         unplannedMappings.push({
           localItemId: localItem?.localItemId || null,
           resultIndex: preservedUnplanned.length + newUnplanned.length - 1
