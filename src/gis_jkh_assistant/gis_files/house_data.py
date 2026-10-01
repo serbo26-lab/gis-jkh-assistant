@@ -92,6 +92,12 @@ def write_house_data_template(
         else:
             tariffs.append([house.id, house.address, "", ""])
 
+    for row in range(2, areas.max_row + 1):
+        areas.cell(row, 3).number_format = "@"
+    for row in range(2, tariffs.max_row + 1):
+        tariffs.cell(row, 3).number_format = "@"
+        tariffs.cell(row, 4).number_format = "@"
+
     for sheet in (areas, tariffs):
         sheet.column_dimensions["A"].hidden = True
         sheet.freeze_panes = "B2"
