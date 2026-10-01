@@ -145,6 +145,7 @@ class AddUnplannedWorkDialog(QDialog):
     def __init__(self, options: list[dict], parent=None) -> None:
         super().__init__(parent)
         self.options = options
+        self._photo_paths: list[Path] = []
         self.setWindowTitle("Добавление внеплановой работы")
         self.resize(700, 500)
 
@@ -178,6 +179,19 @@ class AddUnplannedWorkDialog(QDialog):
         form.addRow("Комментарий", self.comment_edit)
         root.addLayout(form)
 
+        photo_header = QHBoxLayout()
+        photo_header.addWidget(QLabel("Фотографические изображения"))
+        self.add_photo_button = QPushButton("Добавить фото")
+        self.remove_photo_button = QPushButton("Удалить выбранное")
+        photo_header.addStretch(1)
+        photo_header.addWidget(self.add_photo_button)
+        photo_header.addWidget(self.remove_photo_button)
+        root.addLayout(photo_header)
+
+        self.photo_list = QListWidget()
+        self.photo_list.setMaximumHeight(120)
+        root.addWidget(self.photo_list)
+
         hint = QLabel(
             "Стоимость можно оставить пустой — если цена, объем и количество заполнены, "
             "она будет рассчитана автоматически."
@@ -195,9 +209,77 @@ class AddUnplannedWorkDialog(QDialog):
         root.addWidget(buttons)
 
         self.work_combo.currentIndexChanged.connect(self._update_work_type)
+        self.add_photo_button.clicked.connect(self._add_photos)
+        self.remove_photo_button.clicked.connect(self._remove_photo)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         self._update_work_type()
+
+    def _add_photos(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Выберите фото",
+            "",
+            "Изображения (*.jpg *.jpeg *.bmp *.gif)",
+        )
+        for raw in paths:
+            path = Path(raw)
+            if path in self._photo_paths:
+                continue
+            if len(self._photo_paths) >= 1000:
+                QMessageBox.warning(
+                    self,
+                    "Слишком много фото",
+                    "К одной внеплановой работе можно прикрепить не более 1000 фото.",
+                )
+                break
+            if path.suffix.lower() not in _ALLOWED_PHOTO_EXTENSIONS:
+                QMessageBox.warning(
+                    self,
+                    "Неподдерживаемый файл",
+                    f"{path.name}: допустимы только jpg, jpeg, bmp и gif.",
+                )
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError as exc:
+                QMessageBox.warning(self, "Не удалось прочитать файл", str(exc))
+                continue
+            if size > _MAX_PHOTO_SIZE:
+                QMessageBox.warning(
+                    self,
+                    "Файл слишком большой",
+                    f"{path.name}: размер превышает 50 МБ.",
+                )
+                continue
+            if size <= 0:
+                QMessageBox.warning(
+                    self,
+                    "Пустой файл",
+                    f"{path.name}: файл пуст.",
+                )
+                continue
+            self._photo_paths.append(path)
+        self._reload_photo_paths()
+
+    def _remove_photo(self) -> None:
+        row = self.photo_list.currentRow()
+        if row < 0:
+            return
+        self._photo_paths.pop(row)
+        self._reload_photo_paths()
+
+    def _reload_photo_paths(self) -> None:
+        self.photo_list.clear()
+        for path in self._photo_paths:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            self.photo_list.addItem(f"{path.name} • {size / 1024:.1f} КБ")
+
+    def photo_paths(self) -> list[Path]:
+        return list(self._photo_paths)
 
     def _update_work_type(self) -> None:
         option = self.work_combo.currentData() or {}
