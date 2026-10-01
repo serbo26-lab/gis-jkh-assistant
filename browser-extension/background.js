@@ -767,7 +767,162 @@ async function runGisCommand(command) {
       return text;
     }
 
-    function buildFixedWorksSavePayload(localPayload, reportingPeriod, remoteData) {
+    function gisCreateDate(value) {
+      const text = String(value || "").trim();
+      if (!text) return null;
+      if (/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/.test(text)) {
+        return text + ":00:000";
+      }
+      return text;
+    }
+
+    async function uploadAttachmentFile(photo) {
+      const bytes = Uint8Array.from(
+        atob(String(photo?.fileBase64 || "")),
+        (char) => char.charCodeAt(0)
+      );
+      if (!bytes.length) {
+        throw new Error("Передан пустой файл фотографии.");
+      }
+      const fileName = String(photo?.fileName || "photo.jpg");
+      const description = String(photo?.description || fileName);
+      const contentType = String(photo?.contentType || "image/jpeg");
+      const blob = new Blob([bytes], { type: contentType });
+      const size = blob.size;
+      const identifier = size + "-" + fileName.replace(/[^\w-]/g, "");
+
+      const form = new FormData();
+      const values = {
+        context: "homemanagement",
+        description,
+        fileName,
+        chunkNumber: "1",
+        totalChunks: "1",
+        fileSize: String(size),
+        flowChunkNumber: "1",
+        flowChunkSize: "5242880",
+        flowCurrentChunkSize: String(size),
+        flowTotalSize: String(size),
+        flowIdentifier: identifier,
+        flowFilename: fileName,
+        flowRelativePath: fileName,
+        flowTotalChunks: "1"
+      };
+      for (const [key, value] of Object.entries(values)) form.append(key, value);
+      form.append("file", blob, fileName);
+
+      const response = await fetch(
+        "/filestore/api/rest/services/filestore/uploadFile",
+        { method: "POST", body: form, credentials: "include" }
+      );
+      if (!response.ok) {
+        throw new Error("Не удалось загрузить фотографию в файловое хранилище ГИС ЖКХ.");
+      }
+      const uploaded = await response.json();
+      if (!uploaded?.guid) {
+        throw new Error("ГИС ЖКХ не вернул GUID загруженной фотографии.");
+      }
+      return {
+        attachment: {
+          createDate: gisCreateDate(uploaded.createDate),
+          fileName: uploaded.fileName || fileName,
+          description: uploaded.description || description,
+          contentType: uploaded.contentType || contentType,
+          fileSize: Number(uploaded.fileSize ?? size),
+          contentGuid: uploaded.guid
+        },
+        workDate: { date: null }
+      };
+    }
+
+    async function localPhotoForSave(photo) {
+      if (photo?.remoteContentGuid) {
+        return {
+          attachment: {
+            fileName: photo.fileName || null,
+            description: photo.description || photo.fileName || null,
+            contentType: photo.contentType || null,
+            fileSize: photo.fileSize ?? null,
+            contentGuid: photo.remoteContentGuid
+          },
+          workDate: { date: null }
+        };
+      }
+      return uploadAttachmentFile(photo);
+    }
+
+    async function mergeManagedPhotos(localItem, remoteItem) {
+      const managed = new Set(
+        Array.isArray(localItem?.managedPhotoContentGuids)
+          ? localItem.managedPhotoContentGuids.map(String)
+          : []
+      );
+      const remote = Array.isArray(remoteItem?.photos) ? remoteItem.photos : [];
+      const preserved = remote.filter((photo) => {
+        const guid = photo?.attachment?.contentGuid;
+        return !guid || !managed.has(String(guid));
+      });
+      const localPhotos = [];
+      const mappings = [];
+      for (const photo of Array.isArray(localItem?.photos) ? localItem.photos : []) {
+        const prepared = await localPhotoForSave(photo);
+        localPhotos.push(prepared);
+        mappings.push({
+          localPhotoId: photo?.localPhotoId || null,
+          contentGuid: prepared?.attachment?.contentGuid || null
+        });
+      }
+      return { photos: preserved.concat(localPhotos), mappings };
+    }
+
+    async function getOrganizationWork(workCode, workGuid) {
+      const url =
+        "/orgnsi/api/rest/services/organizations/works?&code=" +
+        encodeURIComponent(String(workCode || "")) +
+        "&guid=" +
+        encodeURIComponent(String(workGuid || ""));
+      const data = await request("GET", url, undefined, STATE_WORKPLANNING);
+      const item = Array.isArray(data) ? data[0] : data;
+      if (!item?.guid) {
+        throw new Error("Выбранная внеплановая работа больше не найдена в справочнике.");
+      }
+      return item;
+    }
+
+    async function listUnplannedWorkOptions(payload) {
+      const roots = await request(
+        "POST",
+        "/orgnsi/api/rest/services/organizations/hierarchical/dictionaries/nodes/roots",
+        {
+          nsiObjectName: "OrganizationWork",
+          actual: "ACTIVE",
+          excludedCodes: ["0"]
+        },
+        STATE_WORKPLANNING
+      );
+      const plannedGuids = new Set(
+        (payload?.plannedWorkGuids || []).filter(Boolean).map(String)
+      );
+      const plannedCodes = new Set(
+        (payload?.plannedWorkCodes || []).filter(Boolean).map(String)
+      );
+      return (Array.isArray(roots) ? roots : [])
+        .filter((item) => {
+          const guid = String(item?.guid || "");
+          const code = String(item?.code || item?.fieldValue1 || "");
+          return !plannedGuids.has(guid) && !plannedCodes.has(code);
+        })
+        .map((item) => ({
+          guid: item?.guid || null,
+          code: String(item?.code || item?.fieldValue1 || ""),
+          name: item?.fieldValue2 || "",
+          workTypeName: item?.fieldValue3 || "",
+          unitName: item?.fieldValue4 || ""
+        }))
+        .filter((item) => item.guid && item.code && item.name);
+    }
+
+    async function buildFixedWorksSavePayload(localPayload, reportingPeriod, remoteData) {
       const remoteItems = Array.isArray(remoteData?.plannedWorkList)
         ? remoteData.plannedWorkList
         : [];
@@ -784,25 +939,11 @@ async function runGisCommand(command) {
         );
       }
 
-      const hasUnsupported =
-        (Array.isArray(remoteData?.unplannedWorkList) &&
-          remoteData.unplannedWorkList.length > 0) ||
-        (Array.isArray(remoteData?.acts) && remoteData.acts.length > 0) ||
-        remoteItems.some(
-          (item) =>
-            (Array.isArray(item?.photos) && item.photos.length > 0) ||
-            Boolean(item?.act)
-        );
-      if (hasUnsupported) {
-        throw new Error(
-          "В этом месяце в ГИС ЖКХ уже есть внеплановые работы, акты или фотографии. " +
-            "Автоматическое обновление остановлено, чтобы не потерять эти данные."
-        );
-      }
-
       const usedIndexes = new Set();
-      const mapping = [];
-      const plannedWorkList = localItems.map((localItem) => {
+      const plannedMappings = [];
+      const photoMappings = [];
+      const plannedWorkList = [];
+      for (const localItem of localItems) {
         const matched = fixationLocalItemMatch(localItem, remoteItems, usedIndexes);
         const remote = matched.item;
         const factCount =
@@ -821,16 +962,16 @@ async function runGisCommand(command) {
             ? null
             : {
                 count: factCount,
-                monthYear: {
-                  month: Number(localPayload.month),
-                  year: Number(localPayload.year)
-                },
+                monthYear: remote?.monthlyFixedWork?.monthYear ?? null,
                 dates: Array.isArray(remote?.monthlyFixedWork?.dates)
                   ? remote.monthlyFixedWork.dates
                   : []
               };
 
-        const result = {
+        const mergedPhotos = await mergeManagedPhotos(localItem, remote);
+        photoMappings.push(...mergedPhotos.mappings);
+
+        plannedWorkList.push({
           guid: remote?.guid || null,
           work: compactReference(remote?.work),
           workType: compactReference(remote?.workType),
@@ -842,23 +983,117 @@ async function runGisCommand(command) {
             localItem?.factTotalCost,
             "Стоимость факт"
           ),
-          photos: []
-        };
-        mapping.push({
+          photos: mergedPhotos.photos
+        });
+        plannedMappings.push({
           localItemId: localItem?.localItemId || null,
           remoteIndex: matched.index
         });
-        return result;
-      });
+      }
+
+      const remoteUnplanned = Array.isArray(remoteData?.unplannedWorkList)
+        ? remoteData.unplannedWorkList
+        : [];
+      const managedUnplanned = new Set(
+        Array.isArray(localPayload?.managedUnplannedGuids)
+          ? localPayload.managedUnplannedGuids.map(String)
+          : []
+      );
+      const preservedUnplanned = remoteUnplanned.filter(
+        (item) => !item?.guid || !managedUnplanned.has(String(item.guid))
+      );
+
+      const plannedGuids = new Set(
+        remoteItems.map((item) => String(item?.work?.guid || "")).filter(Boolean)
+      );
+      const plannedCodes = new Set(
+        remoteItems.map((item) => String(item?.work?.code || "")).filter(Boolean)
+      );
+
+      const newUnplanned = [];
+      const unplannedMappings = [];
+      for (const localItem of Array.isArray(localPayload?.unplannedItems)
+        ? localPayload.unplannedItems
+        : []) {
+        if (
+          plannedGuids.has(String(localItem?.workGuid || "")) ||
+          plannedCodes.has(String(localItem?.workCode || ""))
+        ) {
+          throw new Error(
+            "Выбранная работа, услуга является плановой. Укажите другую работу, услугу."
+          );
+        }
+
+        const existing =
+          remoteUnplanned.find(
+            (item) =>
+              localItem?.gisGuid &&
+              String(item?.guid || "") === String(localItem.gisGuid)
+          ) || {};
+        const work = await getOrganizationWork(
+          localItem?.workCode,
+          localItem?.workGuid
+        );
+        const factCount =
+          localItem?.factCount === null || localItem?.factCount === undefined
+            ? null
+            : Number(localItem.factCount);
+        if (
+          factCount !== null &&
+          (!Number.isInteger(factCount) || factCount < 0)
+        ) {
+          throw new Error("Некорректное количество внеплановой работы.");
+        }
+
+        const mergedPhotos = await mergeManagedPhotos(localItem, existing);
+        photoMappings.push(...mergedPhotos.mappings);
+        const workType = compactReference(work?.serviceType) || {
+          code: localItem?.workTypeCode || null,
+          guid: localItem?.workTypeGuid || null
+        };
+
+        newUnplanned.push({
+          guid: existing?.guid || null,
+          work: { code: work.code, guid: work.guid },
+          workType,
+          monthlyFixedWork:
+            factCount === null
+              ? null
+              : {
+                  count: factCount,
+                  monthYear: {
+                    month: Number(localPayload.month),
+                    year: Number(localPayload.year)
+                  },
+                  dates: Array.isArray(existing?.monthlyFixedWork?.dates)
+                    ? existing.monthlyFixedWork.dates
+                    : []
+                },
+          factPrice: fixationNumberForGis(localItem?.factPrice, "Цена факт"),
+          factAmount: fixationNumberForGis(localItem?.factAmount, "Объем факт"),
+          factTotalCost: fixationNumberForGis(
+            localItem?.factTotalCost,
+            "Стоимость факт"
+          ),
+          photos: mergedPhotos.photos,
+          comment: localItem?.comment || null
+        });
+        unplannedMappings.push({
+          localItemId: localItem?.localItemId || null,
+          resultIndex: preservedUnplanned.length + newUnplanned.length - 1
+        });
+      }
 
       return {
         body: {
           reportingPeriodGuid: reportingPeriod.guid,
           plannedWorkList,
-          unplannedWorkList: [],
-          acts: []
+          unplannedWorkList: preservedUnplanned.concat(newUnplanned),
+          acts: Array.isArray(remoteData?.acts) ? remoteData.acts : []
         },
-        mapping
+        plannedMappings,
+        unplannedMappings,
+        photoMappings
       };
     }
 
@@ -937,13 +1172,22 @@ async function runGisCommand(command) {
       };
     }
 
+    if (command.type === "list_unplanned_work_options") {
+      return {
+        ok: true,
+        result: {
+          items: await listUnplannedWorkOptions(payload)
+        }
+      };
+    }
+
     if (command.type === "save_work_fixation") {
       const reportingPeriod = await findReportingPeriod(payload);
       const remoteData = await searchFixedWorks(reportingPeriod.guid);
       const hadExisting = (remoteData?.plannedWorkList || []).some(
         (item) => Boolean(item?.guid)
       );
-      const prepared = buildFixedWorksSavePayload(
+      const prepared = await buildFixedWorksSavePayload(
         payload,
         reportingPeriod,
         remoteData
@@ -958,10 +1202,39 @@ async function runGisCommand(command) {
       const savedItems = Array.isArray(saved?.plannedWorkList)
         ? saved.plannedWorkList
         : [];
-      const fixedItems = prepared.mapping.map((item) => ({
+      const savedUnplanned = Array.isArray(saved?.unplannedWorkList)
+        ? saved.unplannedWorkList
+        : [];
+      const fixedItems = prepared.plannedMappings.map((item) => ({
         localItemId: item.localItemId,
         guid: savedItems[item.remoteIndex]?.guid || null
       }));
+      const unplannedItems = prepared.unplannedMappings.map((item) => ({
+        localItemId: item.localItemId,
+        guid: savedUnplanned[item.resultIndex]?.guid || null
+      }));
+
+      const photoResults = [];
+      function collectPhotoResults(source) {
+        for (const item of source || []) {
+          for (const photo of item?.photos || []) {
+            const contentGuid = photo?.attachment?.contentGuid || null;
+            if (!contentGuid) continue;
+            const mapping = prepared.photoMappings.find(
+              (entry) => String(entry.contentGuid || "") === String(contentGuid)
+            );
+            if (mapping?.localPhotoId) {
+              photoResults.push({
+                localPhotoId: mapping.localPhotoId,
+                contentGuid,
+                photoGuid: photo?.guid || photo?.attachment?.guid || null
+              });
+            }
+          }
+        }
+      }
+      collectPhotoResults(savedItems);
+      collectPhotoResults(savedUnplanned);
 
       return {
         ok: true,
@@ -971,7 +1244,9 @@ async function runGisCommand(command) {
           year: Number(reportingPeriod?.period?.year ?? payload.year),
           month: Number(reportingPeriod?.period?.month ?? payload.month),
           hadExisting,
-          fixedItems
+          fixedItems,
+          unplannedItems,
+          photoResults
         }
       };
     }
