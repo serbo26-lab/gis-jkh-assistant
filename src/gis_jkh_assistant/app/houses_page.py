@@ -823,6 +823,10 @@ class HousesPage(QWidget):
                 house = houses_by_id.get(house_id)
                 if house is not None:
                     return house
+                raise ValueError(
+                    f"{row_label}: служебный идентификатор дома не относится "
+                    "к выбранной УО. Сформируйте шаблон для нужной УО заново."
+                )
             key = " ".join(address.split()).casefold()
             matches = houses_by_address.get(key, [])
             if len(matches) == 1:
