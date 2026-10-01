@@ -733,6 +733,7 @@ class FixationPage(QWidget):
 
         self._integration_busy = True
         self._refresh_gis_buttons()
+        command_succeeded = {"value": False}
         worker = GisIntegrationWorker(
             self.integration_gateway,
             "save_work_fixation",
@@ -743,6 +744,7 @@ class FixationPage(QWidget):
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
+            command_succeeded["value"] = True
             fixed_guids = {
                 str(item.get("localItemId")): str(item.get("guid"))
                 for item in result.get("fixedItems", [])
@@ -792,7 +794,7 @@ class FixationPage(QWidget):
             self._refresh_integration_status()
             if queue_mode and self._queue_failed_period_id is None:
                 QTimer.singleShot(250, self._start_next_queue_item)
-            elif not queue_mode:
+            elif not queue_mode and command_succeeded["value"]:
                 QMessageBox.information(
                     self,
                     "Фиксация размещена",
