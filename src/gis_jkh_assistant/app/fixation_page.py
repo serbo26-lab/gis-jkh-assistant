@@ -32,6 +32,7 @@ from gis_jkh_assistant.work_fixation import (
 )
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
+from .fixation_dialogs import AddUnplannedWorkDialog, FixationPhotoDialog
 from .gis_integration_worker import GisIntegrationWorker
 from .widgets import SafeComboBox
 
@@ -219,15 +220,15 @@ class FixationPage(QWidget):
 
         hint = QLabel(
             "Плановые показатели берутся из локального размещенного перечня и плана. "
-            "Редактируются только фактические цена, объем, количество и стоимость. "
-            "Внеплановые работы, фотографии и акты пока не редактируются приложением; "
-            "при обновлении существующей фиксации они сохраняются в ГИС ЖКХ."
+            "Редактируются фактические цена, объем, количество и стоимость. "
+            "К плановой работе можно прикрепить фото. Акты относятся к следующему "
+            "разделу «Оценка качества» и здесь не редактируются."
         )
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
         table_layout.addWidget(hint)
 
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 11)
         self.table.setHorizontalHeaderLabels(
             [
                 "Работа / услуга",
@@ -239,6 +240,7 @@ class FixationPage(QWidget):
                 "Кол-во факт",
                 "Стоимость план",
                 "Стоимость факт",
+                "Фото",
                 "Статус",
             ]
         )
@@ -248,10 +250,59 @@ class FixationPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 10):
+        for column in range(1, 11):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         table_layout.addWidget(self.table, 1)
         root.addWidget(table_card, 1)
+
+        unplanned_card = QFrame()
+        unplanned_card.setObjectName("Card")
+        unplanned_layout = QVBoxLayout(unplanned_card)
+        unplanned_layout.setContentsMargins(12, 12, 12, 12)
+
+        unplanned_header = QHBoxLayout()
+        unplanned_title = QLabel("Внеплановые работы")
+        unplanned_title.setObjectName("SectionTitle")
+        self.add_unplanned_button = QPushButton("Добавить внеплановую работу")
+        unplanned_header.addWidget(unplanned_title)
+        unplanned_header.addStretch(1)
+        unplanned_header.addWidget(self.add_unplanned_button)
+        unplanned_layout.addLayout(unplanned_header)
+
+        unplanned_hint = QLabel(
+            "Внеплановой может быть только работа, которой нет в плане выбранного периода. "
+            "Справочник работ загружается из ГИС ЖКХ. Для строки можно указать фото и комментарий."
+        )
+        unplanned_hint.setObjectName("Muted")
+        unplanned_hint.setWordWrap(True)
+        unplanned_layout.addWidget(unplanned_hint)
+
+        self.unplanned_table = QTableWidget(0, 9)
+        self.unplanned_table.setHorizontalHeaderLabels(
+            [
+                "Работа / услуга",
+                "Вид / ед.",
+                "Цена",
+                "Объем",
+                "Количество",
+                "Стоимость",
+                "Комментарий",
+                "Фото",
+                "",
+            ]
+        )
+        self.unplanned_table.setAlternatingRowColors(True)
+        self.unplanned_table.verticalHeader().setVisible(False)
+        unplanned_header_view = self.unplanned_table.horizontalHeader()
+        unplanned_header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        unplanned_header_view.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        for column in (1, 2, 3, 4, 5, 7, 8):
+            unplanned_header_view.setSectionResizeMode(
+                column,
+                QHeaderView.ResizeMode.ResizeToContents,
+            )
+        unplanned_layout.addWidget(self.unplanned_table)
+        root.addWidget(unplanned_card)
 
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         self.house_combo.currentIndexChanged.connect(self._house_changed)
@@ -265,6 +316,8 @@ class FixationPage(QWidget):
         self.publish_year_button.clicked.connect(self._publish_year)
         self.continue_queue_button.clicked.connect(self._continue_queue)
         self.table.itemChanged.connect(self._table_item_changed)
+        self.unplanned_table.itemChanged.connect(self._unplanned_item_changed)
+        self.add_unplanned_button.clicked.connect(self._request_add_unplanned)
 
         self._set_enabled(False)
 
