@@ -2108,6 +2108,12 @@ class Repository:
             raise ValueError("Размер одного фото не должен превышать 50 МБ.")
         if len(content) == 0:
             raise ValueError("Файл фото пуст.")
+        existing_photos = self.list_work_fixation_photos(
+            fixation_item_id=fixation_item_id,
+            unplanned_item_id=unplanned_item_id,
+        )
+        if len(existing_photos) >= 1000:
+            raise ValueError("К одной работе можно прикрепить не более 1000 фото.")
         if fixation_item_id:
             row = self.connection.execute(
                 "SELECT fixation_period_id FROM work_fixation_items WHERE id = ?",
