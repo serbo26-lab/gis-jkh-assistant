@@ -130,6 +130,7 @@ class Repository:
                 volume TEXT,
                 quantity TEXT,
                 cost TEXT,
+                allocation_percent TEXT,
                 FOREIGN KEY (template_id)
                     REFERENCES work_templates(id)
                     ON DELETE CASCADE
@@ -199,6 +200,7 @@ class Repository:
         )
         self._ensure_column("houses", "charge_area", "TEXT")
         self._ensure_column("work_templates", "source_file_path", "TEXT")
+        self._ensure_column("work_template_items", "allocation_percent", "TEXT")
         self._ensure_column("work_lists", "planned_total", "TEXT")
         self._ensure_column("work_lists", "planned_tariff", "TEXT")
         self._ensure_column("work_lists", "planned_area", "TEXT")
@@ -742,6 +744,44 @@ class Repository:
         ).fetchall()
         return [self._template_item_from_row(row) for row in rows]
 
+    def save_work_template_allocation_percentages(
+        self,
+        template_id: str,
+        percentages: dict[int, str | None],
+    ) -> None:
+        """Save one reusable percentage distribution for a work template."""
+
+        template_items = self.list_work_template_items(template_id)
+        if not template_items:
+            raise ValueError("В шаблоне нет работ и услуг.")
+
+        expected_positions = {int(item.position) for item in template_items}
+        supplied_positions = {int(position) for position in percentages}
+        if expected_positions != supplied_positions:
+            raise ValueError(
+                "Состав перечня отличается от выбранного шаблона. "
+                "Сохранить проценты для этого шаблона нельзя."
+            )
+
+        with self.connection:
+            for item in template_items:
+                self.connection.execute(
+                    """
+                    UPDATE work_template_items
+                    SET allocation_percent = ?
+                    WHERE id = ? AND template_id = ?
+                    """,
+                    (
+                        _clean(percentages.get(int(item.position))),
+                        item.id,
+                        template_id,
+                    ),
+                )
+            self.connection.execute(
+                "UPDATE work_templates SET updated_at = ? WHERE id = ?",
+                (_now(), template_id),
+            )
+
     def create_work_template(
         self,
         *,
@@ -784,8 +824,8 @@ class Repository:
                     """
                     INSERT INTO work_template_items (
                         id, template_id, position, work_code, work_name, work_guid,
-                        price, volume, quantity, cost
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -798,6 +838,7 @@ class Repository:
                         _clean(getattr(item, "volume", None)),
                         _clean(getattr(item, "quantity", None)),
                         _clean(getattr(item, "cost", None)),
+                        _clean(getattr(item, "allocation_percent", None)),
                     ),
                 )
         result = self.get_work_template(template_id)
