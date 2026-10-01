@@ -9,6 +9,9 @@ from .models import (
     WorkList,
     WorkListItem,
     WorkListStatus,
+    WorkPlan,
+    WorkPlanItem,
+    WorkPlanMonth,
     WorkTemplate,
     WorkTemplateItem,
 )
@@ -24,6 +27,9 @@ __all__ = [
     "WorkList",
     "WorkListItem",
     "WorkListStatus",
+    "WorkPlan",
+    "WorkPlanItem",
+    "WorkPlanMonth",
     "WorkTemplate",
     "WorkTemplateItem",
 ]
