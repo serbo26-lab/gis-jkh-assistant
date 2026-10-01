@@ -184,7 +184,7 @@ class FixationPage(QWidget):
         fill_actions = QHBoxLayout()
         self.fill_month_button = QPushButton("Заполнить по плану этот месяц")
         self.fill_year_button = QPushButton("Заполнить по плану весь год")
-        self.clear_month_button = QPushButton("Очистить факт за месяц")
+        self.clear_month_button = QPushButton("Очистить факт плановых работ")
         fill_actions.addWidget(self.fill_month_button)
         fill_actions.addWidget(self.fill_year_button)
         fill_actions.addWidget(self.clear_month_button)
@@ -808,8 +808,9 @@ class FixationPage(QWidget):
         answer = QMessageBox.question(
             self,
             "Очистить фактические показатели?",
-            "Фактические цена, объем, количество и стоимость за выбранный месяц "
-            "будут очищены. Плановые показатели останутся.",
+            "Фактические цена, объем, количество и стоимость плановых работ "
+            "за выбранный месяц будут очищены. Внеплановые работы и фотографии "
+            "останутся без изменений.",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
