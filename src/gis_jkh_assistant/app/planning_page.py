@@ -59,6 +59,15 @@ _MONTH_HEADERS = (
 _PLAN_ITEM_ID_ROLE = Qt.ItemDataRole.UserRole
 _DATES_ROLE = Qt.ItemDataRole.UserRole + 1
 _ORIGINAL_COUNT_ROLE = Qt.ItemDataRole.UserRole + 2
+_MIN_WORK_PLAN_HELPER_VERSION = (0, 1, 5)
+
+
+def _helper_supports_work_plans(version: str | None) -> bool:
+    try:
+        parts = tuple(int(part) for part in str(version or "").split("."))
+    except ValueError:
+        return False
+    return parts >= _MIN_WORK_PLAN_HELPER_VERSION
 
 
 class PlanningTable(QTableWidget):
@@ -892,8 +901,18 @@ class PlanningPage(QWidget):
                 "Браузер: помощник подключен, но вкладка ГИС ЖКХ не открыта."
             )
             self.browser_status.setStyleSheet("color: #8a5b00;")
+        elif not _helper_supports_work_plans(status.helper_version):
+            version = status.helper_version or "не определена"
+            self.browser_status.setText(
+                "Браузер: ГИС ЖКХ подключен, но версия помощника "
+                f"{version} не поддерживает размещение планов. "
+                "Обновите расширение до версии 0.1.5 из новой сборки."
+            )
+            self.browser_status.setStyleSheet("color: #8a5b00;")
         else:
-            self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
+            self.browser_status.setText(
+                f"Браузер: ГИС ЖКХ подключен • помощник {status.helper_version}"
+            )
             self.browser_status.setStyleSheet("color: #107c10;")
         self._refresh_gis_action_button()
 
@@ -901,7 +920,12 @@ class PlanningPage(QWidget):
         if not hasattr(self, "publish_button"):
             return
         status = self.integration_gateway.status()
-        ready = status.running and status.helper_connected and status.gis_page_ready
+        ready = (
+            status.running
+            and status.helper_connected
+            and status.gis_page_ready
+            and _helper_supports_work_plans(status.helper_version)
+        )
         self.publish_button.setEnabled(
             bool(self._current_plan_id)
             and bool(self._current_work_list_id)
