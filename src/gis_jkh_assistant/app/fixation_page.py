@@ -728,7 +728,26 @@ class FixationPage(QWidget):
                 items=self.repository.list_work_fixation_items(period.id),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Нельзя разместить фиксацию", str(exc))
+            message = str(exc)
+            self.repository.update_work_fixation_gis_state(
+                period_id,
+                gis_status="ERROR",
+                gis_last_error=message,
+            )
+            if queue_mode:
+                self._queue_failed_period_id = period_id
+                self.queue_label.setText(
+                    f"Очередь остановлена на периоде {_MONTHS[period.month - 1]} "
+                    f"{period.year}: {message}"
+                )
+                self.continue_queue_button.setText(
+                    f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"
+                )
+                self.continue_queue_button.setVisible(True)
+                self._refresh_period_status()
+                self._refresh_year_status()
+            else:
+                QMessageBox.warning(self, "Нельзя разместить фиксацию", message)
             return
 
         self._integration_busy = True
