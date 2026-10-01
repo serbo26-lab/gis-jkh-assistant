@@ -844,7 +844,7 @@ async function runGisCommand(command) {
           undefined,
           STATE_WORKPLANNING
         );
-        return {
+        const result = {
           attachment: {
             createDate: gisCreateDate(data?.createDate),
             fileName: data?.fileName || photo.fileName || null,
@@ -856,6 +856,8 @@ async function runGisCommand(command) {
           },
           workDate: { date: null }
         };
+        if (photo?.remotePhotoGuid) result.guid = photo.remotePhotoGuid;
+        return result;
       }
       return uploadAttachmentFile(photo);
     }
@@ -971,7 +973,11 @@ async function runGisCommand(command) {
             ? null
             : {
                 count: factCount,
-                monthYear: remote?.monthlyFixedWork?.monthYear ?? null,
+                monthYear:
+                  remote?.monthlyFixedWork?.monthYear || {
+                    month: Number(localPayload.month),
+                    year: Number(localPayload.year)
+                  },
                 dates: Array.isArray(remote?.monthlyFixedWork?.dates)
                   ? remote.monthlyFixedWork.dates
                   : []
