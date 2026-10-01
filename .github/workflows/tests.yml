@@ -17,6 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check browser helper syntax
+        run: node --check browser-extension/background.js
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
