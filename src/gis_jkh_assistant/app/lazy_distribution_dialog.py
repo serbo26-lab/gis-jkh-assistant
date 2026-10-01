@@ -336,10 +336,10 @@ class LazyDistributionDialog(QDialog):
 
     def _template_percentage_values(self) -> dict[int, str | None]:
         percentages: dict[int, str | None] = {}
-        for row in range(self.table.rowCount()):
+        for row, work_item in enumerate(self.items):
             percent_item = self.table.item(row, 1)
             text = percent_item.text().strip() if percent_item else ""
-            percentages[row + 1] = text or None
+            percentages[int(work_item.position)] = text or None
         return percentages
 
     def _validate_template_percentages(self) -> dict[int, str | None] | None:
@@ -415,7 +415,26 @@ class LazyDistributionDialog(QDialog):
         template_name = template.name if template else "выбранного шаблона"
         template_items = self.repository.list_work_template_items(template_id)
 
-        if len(template_items) != self.table.rowCount():
+        template_by_position = {
+            int(item.position): item
+            for item in template_items
+        }
+        same_composition = len(template_items) == len(self.items)
+        if same_composition:
+            for work_item in self.items:
+                template_item = template_by_position.get(int(work_item.position))
+                if template_item is None:
+                    same_composition = False
+                    break
+                if (
+                    template_item.work_code != work_item.work_code
+                    or template_item.work_name != work_item.work_name
+                    or template_item.work_guid != work_item.work_guid
+                ):
+                    same_composition = False
+                    break
+
+        if not same_composition:
             QMessageBox.warning(
                 self,
                 "Проценты не загружены",
@@ -438,10 +457,12 @@ class LazyDistributionDialog(QDialog):
 
         self.table.blockSignals(True)
         try:
-            for row in range(self.table.rowCount()):
+            for row, work_item in enumerate(self.items):
                 percent_item = self.table.item(row, 1)
                 if percent_item is not None:
-                    percent_item.setText(saved.get(row + 1) or "")
+                    percent_item.setText(
+                        saved.get(int(work_item.position)) or ""
+                    )
         finally:
             self.table.blockSignals(False)
 
