@@ -822,13 +822,32 @@ async function runGisCommand(command) {
       if (!uploaded?.guid) {
         throw new Error("ГИС ЖКХ не вернул GUID загруженной фотографии.");
       }
+      let details = uploaded;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        details = await request(
+          "GET",
+          "/filestore/api/rest/services/filestore/fileDetail?fileUid=" +
+            encodeURIComponent(String(uploaded.guid)),
+          undefined,
+          STATE_WORKPLANNING
+        );
+        if (details?.infected) {
+          throw new Error("ГИС ЖКХ сообщил, что загруженная фотография заражена.");
+        }
+        if (details?.virusChecked && details?.downloadAvailable) break;
+        await sleep(500);
+      }
+      if (!details?.virusChecked || !details?.downloadAvailable) {
+        throw new Error("ГИС ЖКХ слишком долго проверяет загруженную фотографию.");
+      }
+
       return {
         attachment: {
-          createDate: gisCreateDate(uploaded.createDate),
-          fileName: uploaded.fileName || fileName,
-          description: uploaded.description || description,
-          contentType: uploaded.contentType || contentType,
-          fileSize: Number(uploaded.fileSize ?? size),
+          createDate: gisCreateDate(details.createDate),
+          fileName: details.fileName || fileName,
+          description: details.description || description,
+          contentType: details.contentType || contentType,
+          fileSize: Number(details.fileSize ?? size),
           contentGuid: uploaded.guid
         },
         workDate: { date: null }
@@ -978,11 +997,7 @@ async function runGisCommand(command) {
             ? null
             : {
                 count: factCount,
-                monthYear:
-                  remote?.monthlyFixedWork?.monthYear || {
-                    month: Number(localPayload.month),
-                    year: Number(localPayload.year)
-                  },
+                monthYear: remote?.monthlyFixedWork?.monthYear ?? null,
                 dates: Array.isArray(remote?.monthlyFixedWork?.dates)
                   ? remote.monthlyFixedWork.dates
                   : []
@@ -1067,9 +1082,8 @@ async function runGisCommand(command) {
 
         const mergedPhotos = await mergeManagedPhotos(localItem, existing);
         photoMappings.push(...mergedPhotos.mappings);
-        const workType = compactReference(work?.serviceType) || {
-          code: localItem?.workTypeCode || null,
-          guid: localItem?.workTypeGuid || null
+        const workType = {
+          code: work?.serviceType?.code || localItem?.workTypeCode || null
         };
 
         const unplannedRow = {
@@ -1095,6 +1109,9 @@ async function runGisCommand(command) {
             "Стоимость факт"
           ),
           photos: mergedPhotos.photos,
+          accidentObject: {},
+          municipalService: {},
+          municipalResource: {},
           comment: localItem?.comment || null
         };
         if (existing?.guid) unplannedRow.guid = existing.guid;
