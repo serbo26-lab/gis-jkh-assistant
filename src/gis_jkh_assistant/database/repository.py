@@ -23,6 +23,8 @@ from .models import (
     WorkListStatus,
     WorkFixationItem,
     WorkFixationPeriod,
+    WorkFixationPhoto,
+    WorkFixationUnplannedItem,
     WorkPlan,
     WorkPlanItem,
     WorkPlanMonth,
@@ -185,6 +187,7 @@ class Repository:
                 gis_status TEXT,
                 gis_last_sync_at TEXT,
                 gis_last_error TEXT,
+                managed_unplanned_guids_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (house_id)
@@ -309,6 +312,7 @@ class Repository:
                 fact_count INTEGER,
                 fact_total_cost TEXT,
                 gis_fixed_work_guid TEXT,
+                managed_photo_content_guids_json TEXT,
                 FOREIGN KEY (fixation_period_id)
                     REFERENCES work_fixation_periods(id)
                     ON DELETE CASCADE,
@@ -322,6 +326,63 @@ class Repository:
 
             CREATE INDEX IF NOT EXISTS ix_work_fixation_items
                 ON work_fixation_items(fixation_period_id, position);
+
+            CREATE TABLE IF NOT EXISTS work_fixation_unplanned_items (
+                id TEXT PRIMARY KEY,
+                fixation_period_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                work_code TEXT NOT NULL,
+                work_name TEXT NOT NULL,
+                work_guid TEXT NOT NULL,
+                work_type_code TEXT,
+                work_type_guid TEXT,
+                unit_name TEXT,
+                fact_price TEXT,
+                fact_amount TEXT,
+                fact_count INTEGER,
+                fact_total_cost TEXT,
+                comment TEXT,
+                gis_fixed_work_guid TEXT,
+                managed_photo_content_guids_json TEXT,
+                FOREIGN KEY (fixation_period_id)
+                    REFERENCES work_fixation_periods(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_fixation_unplanned
+                ON work_fixation_unplanned_items(fixation_period_id, position);
+
+            CREATE TABLE IF NOT EXISTS work_fixation_photos (
+                id TEXT PRIMARY KEY,
+                fixation_period_id TEXT NOT NULL,
+                fixation_item_id TEXT,
+                unplanned_item_id TEXT,
+                file_name TEXT NOT NULL,
+                description TEXT,
+                content_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                content BLOB,
+                remote_content_guid TEXT,
+                remote_photo_guid TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (fixation_period_id)
+                    REFERENCES work_fixation_periods(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (fixation_item_id)
+                    REFERENCES work_fixation_items(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (unplanned_item_id)
+                    REFERENCES work_fixation_unplanned_items(id)
+                    ON DELETE CASCADE,
+                CHECK (
+                    (fixation_item_id IS NOT NULL AND unplanned_item_id IS NULL)
+                    OR
+                    (fixation_item_id IS NULL AND unplanned_item_id IS NOT NULL)
+                )
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_fixation_photos_period
+                ON work_fixation_photos(fixation_period_id);
 
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
@@ -350,6 +411,8 @@ class Repository:
         self._ensure_column("work_lists", "gis_last_sync_at", "TEXT")
         self._ensure_column("work_lists", "gis_last_error", "TEXT")
         self._ensure_column("work_list_items", "allocation_percent", "TEXT")
+        self._ensure_column("work_fixation_periods", "managed_unplanned_guids_json", "TEXT")
+        self._ensure_column("work_fixation_items", "managed_photo_content_guids_json", "TEXT")
         self.connection.commit()
         self._normalize_all_house_tariff_periods()
 
@@ -967,6 +1030,14 @@ class Repository:
     @staticmethod
     def _work_fixation_item_from_row(row: sqlite3.Row) -> WorkFixationItem:
         return WorkFixationItem(**dict(row))
+
+    @staticmethod
+    def _work_fixation_unplanned_from_row(row: sqlite3.Row) -> WorkFixationUnplannedItem:
+        return WorkFixationUnplannedItem(**dict(row))
+
+    @staticmethod
+    def _work_fixation_photo_from_row(row: sqlite3.Row) -> WorkFixationPhoto:
+        return WorkFixationPhoto(**dict(row))
 
     def list_work_templates(self, organization_id: str) -> list[WorkTemplate]:
         rows = self.connection.execute(
@@ -1864,6 +1935,269 @@ class Repository:
             (fixation_period_id,),
         ).fetchall()
         return [self._work_fixation_item_from_row(row) for row in rows]
+
+    def list_work_fixation_unplanned_items(
+        self,
+        fixation_period_id: str,
+    ) -> list[WorkFixationUnplannedItem]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_fixation_unplanned_items
+            WHERE fixation_period_id = ?
+            ORDER BY position, id
+            """,
+            (fixation_period_id,),
+        ).fetchall()
+        return [self._work_fixation_unplanned_from_row(row) for row in rows]
+
+    def add_work_fixation_unplanned_item(
+        self,
+        fixation_period_id: str,
+        *,
+        work_code: str,
+        work_name: str,
+        work_guid: str,
+        work_type_code: str | None = None,
+        work_type_guid: str | None = None,
+        unit_name: str | None = None,
+        fact_price: str | None = None,
+        fact_amount: str | None = None,
+        fact_count: int | None = None,
+        fact_total_cost: str | None = None,
+        comment: str | None = None,
+    ) -> WorkFixationUnplannedItem:
+        if not self.get_work_fixation_period(fixation_period_id):
+            raise ValueError("Период фиксации не найден.")
+        planned = self.list_work_fixation_items(fixation_period_id)
+        if any(
+            (item.work_guid and item.work_guid == work_guid)
+            or (item.work_code and item.work_code == work_code)
+            for item in planned
+        ):
+            raise ValueError(
+                "Выбранная работа является плановой. Для внеплановой фиксации "
+                "выберите другую работу или услугу."
+            )
+        existing = self.list_work_fixation_unplanned_items(fixation_period_id)
+        if any(item.work_guid == work_guid for item in existing):
+            raise ValueError("Эта внеплановая работа уже добавлена.")
+        item_id = str(uuid.uuid4())
+        position = max((item.position for item in existing), default=0) + 1
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_fixation_unplanned_items (
+                    id, fixation_period_id, position,
+                    work_code, work_name, work_guid,
+                    work_type_code, work_type_guid, unit_name,
+                    fact_price, fact_amount, fact_count, fact_total_cost, comment
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id, fixation_period_id, position,
+                    str(work_code), str(work_name), str(work_guid),
+                    _clean(work_type_code), _clean(work_type_guid), _clean(unit_name),
+                    _clean(fact_price), _clean(fact_amount),
+                    int(fact_count) if fact_count is not None else None,
+                    _clean(fact_total_cost), _clean(comment),
+                ),
+            )
+            self._touch_fixation_period(fixation_period_id)
+        row = self.connection.execute(
+            "SELECT * FROM work_fixation_unplanned_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        assert row is not None
+        return self._work_fixation_unplanned_from_row(row)
+
+    def update_work_fixation_unplanned_item(self, item_id: str, **fields: object) -> None:
+        allowed = {
+            "fact_price", "fact_amount", "fact_count",
+            "fact_total_cost", "comment",
+        }
+        updates = {key: fields[key] for key in fields if key in allowed}
+        if "fact_count" in updates:
+            value = updates["fact_count"]
+            if value is not None and int(value) < 0:
+                raise ValueError("Фактическое количество не может быть отрицательным.")
+            updates["fact_count"] = int(value) if value is not None else None
+        for key in ("fact_price", "fact_amount", "fact_total_cost", "comment"):
+            if key in updates:
+                updates[key] = _clean(updates[key])
+        row = self.connection.execute(
+            "SELECT fixation_period_id FROM work_fixation_unplanned_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Внеплановая работа не найдена.")
+        if updates:
+            clause = ", ".join(f"{key} = ?" for key in updates)
+            with self.connection:
+                self.connection.execute(
+                    f"UPDATE work_fixation_unplanned_items SET {clause} WHERE id = ?",
+                    [updates[key] for key in updates] + [item_id],
+                )
+                self._touch_fixation_period(str(row["fixation_period_id"]))
+
+    def delete_work_fixation_unplanned_item(self, item_id: str) -> None:
+        row = self.connection.execute(
+            """
+            SELECT fixation_period_id, gis_fixed_work_guid
+            FROM work_fixation_unplanned_items WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+        if not row:
+            return
+        period_id = str(row["fixation_period_id"])
+        period = self.get_work_fixation_period(period_id)
+        managed = self._json_string_list(
+            period.managed_unplanned_guids_json if period else None
+        )
+        guid = _clean(row["gis_fixed_work_guid"])
+        if guid and guid not in managed:
+            managed.append(guid)
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM work_fixation_unplanned_items WHERE id = ?",
+                (item_id,),
+            )
+            self.connection.execute(
+                """
+                UPDATE work_fixation_periods
+                SET managed_unplanned_guids_json = ?, updated_at = ?,
+                    gis_status = CASE WHEN gis_status = 'SAVED' THEN 'MODIFIED' ELSE gis_status END
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(managed, ensure_ascii=False) if managed else None,
+                    _now(),
+                    period_id,
+                ),
+            )
+
+    def list_work_fixation_photos(
+        self,
+        *,
+        fixation_item_id: str | None = None,
+        unplanned_item_id: str | None = None,
+    ) -> list[WorkFixationPhoto]:
+        if bool(fixation_item_id) == bool(unplanned_item_id):
+            raise ValueError("Нужно указать ровно одну строку фиксации.")
+        field = "fixation_item_id" if fixation_item_id else "unplanned_item_id"
+        value = fixation_item_id or unplanned_item_id
+        rows = self.connection.execute(
+            f"SELECT * FROM work_fixation_photos WHERE {field} = ? ORDER BY created_at, id",
+            (value,),
+        ).fetchall()
+        return [self._work_fixation_photo_from_row(row) for row in rows]
+
+    def add_work_fixation_photo(
+        self,
+        *,
+        fixation_item_id: str | None = None,
+        unplanned_item_id: str | None = None,
+        file_name: str,
+        description: str | None,
+        content_type: str,
+        content: bytes,
+    ) -> WorkFixationPhoto:
+        if bool(fixation_item_id) == bool(unplanned_item_id):
+            raise ValueError("Фото должно относиться ровно к одной работе.")
+        if len(content) > 50 * 1024 * 1024:
+            raise ValueError("Размер одного фото не должен превышать 50 МБ.")
+        if len(content) == 0:
+            raise ValueError("Файл фото пуст.")
+        if fixation_item_id:
+            row = self.connection.execute(
+                "SELECT fixation_period_id FROM work_fixation_items WHERE id = ?",
+                (fixation_item_id,),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                "SELECT fixation_period_id FROM work_fixation_unplanned_items WHERE id = ?",
+                (unplanned_item_id,),
+            ).fetchone()
+        if not row:
+            raise ValueError("Работа для фотографии не найдена.")
+        period_id = str(row["fixation_period_id"])
+        photo_id = str(uuid.uuid4())
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_fixation_photos (
+                    id, fixation_period_id, fixation_item_id, unplanned_item_id,
+                    file_name, description, content_type, file_size, content, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    photo_id, period_id, fixation_item_id, unplanned_item_id,
+                    file_name, _clean(description), content_type,
+                    len(content), sqlite3.Binary(content), _now(),
+                ),
+            )
+            self._touch_fixation_period(period_id)
+        row = self.connection.execute(
+            "SELECT * FROM work_fixation_photos WHERE id = ?",
+            (photo_id,),
+        ).fetchone()
+        assert row is not None
+        return self._work_fixation_photo_from_row(row)
+
+    def delete_work_fixation_photo(self, photo_id: str) -> None:
+        row = self.connection.execute(
+            """
+            SELECT p.*, i.managed_photo_content_guids_json AS planned_managed,
+                   u.managed_photo_content_guids_json AS unplanned_managed
+            FROM work_fixation_photos p
+            LEFT JOIN work_fixation_items i ON i.id = p.fixation_item_id
+            LEFT JOIN work_fixation_unplanned_items u ON u.id = p.unplanned_item_id
+            WHERE p.id = ?
+            """,
+            (photo_id,),
+        ).fetchone()
+        if not row:
+            return
+        period_id = str(row["fixation_period_id"])
+        remote_guid = _clean(row["remote_content_guid"])
+        owner_table = "work_fixation_items" if row["fixation_item_id"] else "work_fixation_unplanned_items"
+        owner_id = row["fixation_item_id"] or row["unplanned_item_id"]
+        raw_managed = row["planned_managed"] if row["fixation_item_id"] else row["unplanned_managed"]
+        managed = self._json_string_list(raw_managed)
+        if remote_guid and remote_guid not in managed:
+            managed.append(remote_guid)
+        with self.connection:
+            self.connection.execute("DELETE FROM work_fixation_photos WHERE id = ?", (photo_id,))
+            self.connection.execute(
+                f"UPDATE {owner_table} SET managed_photo_content_guids_json = ? WHERE id = ?",
+                (json.dumps(managed, ensure_ascii=False) if managed else None, owner_id),
+            )
+            self._touch_fixation_period(period_id)
+
+    @staticmethod
+    def _json_string_list(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return [str(item) for item in value if str(item).strip()] if isinstance(value, list) else []
+
+    def _touch_fixation_period(self, fixation_period_id: str) -> None:
+        period = self.get_work_fixation_period(fixation_period_id)
+        next_status = (
+            "MODIFIED" if period and str(period.gis_status or "").upper() == "SAVED"
+            else "LOCAL"
+        )
+        self.connection.execute(
+            """
+            UPDATE work_fixation_periods
+            SET gis_status = ?, gis_last_error = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (next_status, _now(), fixation_period_id),
+        )
 
     def update_work_fixation_item(
         self,
