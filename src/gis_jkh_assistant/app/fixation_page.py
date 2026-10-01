@@ -502,6 +502,209 @@ class FixationPage(QWidget):
             self.table.blockSignals(False)
             self._loading = False
 
+    def _load_unplanned_table(self) -> None:
+        if not self._current_period_id:
+            self.unplanned_table.setRowCount(0)
+            return
+        items = self.repository.list_work_fixation_unplanned_items(
+            self._current_period_id
+        )
+        self._loading = True
+        self.unplanned_table.blockSignals(True)
+        self.unplanned_table.setRowCount(len(items))
+        try:
+            for row, item in enumerate(items):
+                values = (
+                    item.work_name,
+                    " / ".join(
+                        value
+                        for value in (item.work_type_code, item.unit_name)
+                        if value
+                    ),
+                    item.fact_price,
+                    item.fact_amount,
+                    str(item.fact_count) if item.fact_count is not None else "",
+                    item.fact_total_cost,
+                    item.comment,
+                )
+                for column, value in enumerate(values):
+                    cell = QTableWidgetItem(value or "")
+                    if column == 0:
+                        cell.setData(_ITEM_ID_ROLE, item.id)
+                    if column in (0, 1):
+                        cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self.unplanned_table.setItem(row, column, cell)
+
+                photos = self.repository.list_work_fixation_photos(
+                    unplanned_item_id=item.id
+                )
+                photo_button = QPushButton(
+                    f"Фото ({len(photos)})" if photos else "Фото"
+                )
+                photo_button.clicked.connect(
+                    lambda _checked=False, item_id=item.id: self._open_unplanned_photos(item_id)
+                )
+                self.unplanned_table.setCellWidget(row, 7, photo_button)
+
+                remove_button = QPushButton("Удалить")
+                remove_button.clicked.connect(
+                    lambda _checked=False, item_id=item.id: self._delete_unplanned(item_id)
+                )
+                self.unplanned_table.setCellWidget(row, 8, remove_button)
+        finally:
+            self.unplanned_table.blockSignals(False)
+            self._loading = False
+
+    def _open_planned_photos(self, item_id: str) -> None:
+        dialog = FixationPhotoDialog(
+            self.repository,
+            fixation_item_id=item_id,
+            parent=self,
+        )
+        dialog.exec()
+        self._load_table()
+        self._refresh_period_status()
+        self._refresh_year_status()
+
+    def _open_unplanned_photos(self, item_id: str) -> None:
+        dialog = FixationPhotoDialog(
+            self.repository,
+            unplanned_item_id=item_id,
+            parent=self,
+        )
+        dialog.exec()
+        self._load_unplanned_table()
+        self._refresh_period_status()
+        self._refresh_year_status()
+
+    def _delete_unplanned(self, item_id: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Удалить внеплановую работу?",
+            "Работа будет удалена из локальной фиксации. Если она уже была размещена "
+            "через приложение, при следующем размещении месяца она будет удалена и из ГИС ЖКХ.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.repository.delete_work_fixation_unplanned_item(item_id)
+        self._load_unplanned_table()
+        self._refresh_period_status()
+        self._refresh_year_status()
+
+    def _unplanned_item_changed(self, cell: QTableWidgetItem) -> None:
+        if self._loading or cell.column() not in (2, 3, 4, 5, 6):
+            return
+        name_cell = self.unplanned_table.item(cell.row(), 0)
+        item_id = name_cell.data(_ITEM_ID_ROLE) if name_cell else None
+        if not item_id:
+            return
+
+        count_text = self.unplanned_table.item(cell.row(), 4).text().strip()
+        try:
+            fact_count = int(count_text) if count_text else None
+            if fact_count is not None and fact_count < 0:
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Проверьте количество",
+                "Количество должно быть целым числом не меньше нуля.",
+            )
+            self._load_unplanned_table()
+            return
+
+        def text_at(column: int) -> str | None:
+            value = self.unplanned_table.item(cell.row(), column).text().strip()
+            return value or None
+
+        try:
+            self.repository.update_work_fixation_unplanned_item(
+                str(item_id),
+                fact_price=text_at(2),
+                fact_amount=text_at(3),
+                fact_count=fact_count,
+                fact_total_cost=text_at(5),
+                comment=text_at(6),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
+            self._load_unplanned_table()
+            return
+        self._refresh_period_status()
+        self._refresh_year_status()
+
+    def _request_add_unplanned(self) -> None:
+        if not self._current_period_id:
+            return
+        status = self.integration_gateway.status()
+        if not (
+            status.running
+            and status.helper_connected
+            and status.gis_page_ready
+            and helper_supports_fixations(status.helper_version)
+        ):
+            QMessageBox.information(
+                self,
+                "Нет подключения к ГИС ЖКХ",
+                "Для выбора внеплановой работы нужен подключенный браузерный помощник 0.1.7+.",
+            )
+            return
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+
+        planned = self.repository.list_work_fixation_items(self._current_period_id)
+        payload = {
+            "plannedWorkGuids": [item.work_guid for item in planned if item.work_guid],
+            "plannedWorkCodes": [item.work_code for item in planned if item.work_code],
+        }
+        self._integration_busy = True
+        self._refresh_gis_buttons()
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "list_unplanned_work_options",
+            payload,
+            timeout=90.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            options = list(result.get("items") or [])
+            if not options:
+                QMessageBox.information(
+                    self,
+                    "Нет доступных работ",
+                    "В справочнике ГИС ЖКХ нет работ, которые можно добавить как внеплановые.",
+                )
+                return
+            dialog = AddUnplannedWorkDialog(options, parent=self)
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                return
+            try:
+                self.repository.add_work_fixation_unplanned_item(
+                    self._current_period_id,
+                    **dialog.values(),
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self, "Не удалось добавить работу", str(exc))
+                return
+            self._load_unplanned_table()
+            self._refresh_period_status()
+            self._refresh_year_status()
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(self, "Не удалось получить справочник работ", message)
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._integration_busy = False
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
     def _table_item_changed(self, cell: QTableWidgetItem) -> None:
         if self._loading or cell.column() not in (2, 4, 6, 8):
             return
