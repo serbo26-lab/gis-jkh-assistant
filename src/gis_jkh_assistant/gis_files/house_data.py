@@ -218,8 +218,8 @@ def normalize_positive_decimal(value: object) -> str:
         decimal = Decimal(text)
     except InvalidOperation as exc:
         raise ValueError(f"некорректное число: {value!r}.") from exc
-    if decimal <= 0:
-        raise ValueError("значение должно быть больше нуля.")
+    if not decimal.is_finite() or decimal <= 0:
+        raise ValueError("значение должно быть конечным числом больше нуля.")
     result = format(decimal, "f")
     if "." in result:
         result = result.rstrip("0").rstrip(".")
