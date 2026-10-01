@@ -47,10 +47,10 @@ def balanced_period_distribution(
     """Spread total across the full work-list period, including transition years."""
 
     points = period_months(work_list)
-    indexes = balanced_month_distribution(total, tuple(range(1, len(points) + 1)))
+    values = _balanced_slots(int(total), len(points))
     return {
-        point: indexes[index]
-        for index, point in enumerate(points, start=1)
+        point: values[index]
+        for index, point in enumerate(points)
     }
 
 
@@ -88,14 +88,26 @@ def balanced_month_distribution(
     if len(set(ordered)) != len(ordered):
         raise ValueError("Месяцы распределения не должны повторяться.")
 
-    result = {month: 0 for month in ordered}
-    base, remainder = divmod(total, len(ordered))
-    for month in ordered:
-        result[month] = base
+    values = _balanced_slots(total, len(ordered))
+    return {
+        month: values[index]
+        for index, month in enumerate(ordered)
+    }
 
-    for index in _even_indices(len(ordered), remainder):
-        result[ordered[index]] += 1
-    return result
+
+def _balanced_slots(total: int, size: int) -> tuple[int, ...]:
+    if total < 0:
+        raise ValueError("Количество не может быть отрицательным.")
+    if size <= 0:
+        if total:
+            raise ValueError("Нет периодов, доступных для распределения.")
+        return ()
+
+    base, remainder = divmod(total, size)
+    values = [base] * size
+    for index in _even_indices(size, remainder):
+        values[index] += 1
+    return tuple(values)
 
 
 def _even_indices(size: int, count: int) -> tuple[int, ...]:
