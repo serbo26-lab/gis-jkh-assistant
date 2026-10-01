@@ -323,6 +323,28 @@ class AddUnplannedWorkDialog(QDialog):
                 )
                 self.cost_edit.setText(format(value, "f"))
 
+        if not self.cost_edit.text().strip():
+            QMessageBox.warning(
+                self,
+                "Укажите стоимость",
+                "Для внеплановой работы требуется фактическая стоимость. "
+                "Укажите ее вручную либо заполните цену, объем и количество "
+                "для автоматического расчета.",
+            )
+            return
+
+        try:
+            cost = self._decimal(self.cost_edit.text().strip())
+            if cost < 0:
+                raise InvalidOperation
+        except InvalidOperation:
+            QMessageBox.warning(
+                self,
+                "Проверьте стоимость",
+                "Стоимость должна быть неотрицательным числом.",
+            )
+            return
+
         self.accept()
 
     def values(self) -> dict:
