@@ -73,6 +73,7 @@ def build_fixation_command_payload(
     for item in items:
         result_items.append(
             {
+                "localItemId": item.id,
                 "workGuid": item.work_guid,
                 "workCode": item.work_code,
                 "sortIndex": int(item.position),
