@@ -23,6 +23,37 @@ def active_months_for_work_list(work_list: WorkList, year: int) -> tuple[int, ..
     return tuple(months)
 
 
+def period_months(work_list: WorkList) -> tuple[tuple[int, int], ...]:
+    """Return every (year, month) point covered by the work-list period."""
+
+    result: list[tuple[int, int]] = []
+    year = int(work_list.start_year)
+    month = int(work_list.start_month)
+    end = (int(work_list.end_year), int(work_list.end_month))
+    while (year, month) <= end:
+        result.append((year, month))
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+    return tuple(result)
+
+
+def balanced_period_distribution(
+    total: int,
+    work_list: WorkList,
+) -> dict[tuple[int, int], int]:
+    """Spread total across the full work-list period, including transition years."""
+
+    points = period_months(work_list)
+    indexes = balanced_month_distribution(total, tuple(range(1, len(points) + 1)))
+    return {
+        point: indexes[index]
+        for index, point in enumerate(points, start=1)
+    }
+
+
 def integral_quantity(value: str | None) -> int | None:
     """Return a non-negative integer quantity or None when it is not integral."""
 
