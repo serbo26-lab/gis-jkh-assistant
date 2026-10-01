@@ -804,6 +804,17 @@ class FixationPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
+    def _period_has_data(self, period_id: str) -> bool:
+        planned = self.repository.list_work_fixation_items(period_id)
+        if any(item_has_fact(item) for item in planned):
+            return True
+        if self.repository.list_work_fixation_unplanned_items(period_id):
+            return True
+        for item in planned:
+            if self.repository.list_work_fixation_photos(fixation_item_id=item.id):
+                return True
+        return False
+
     def _refresh_period_status(self) -> None:
         period = (
             self.repository.get_work_fixation_period(self._current_period_id)
@@ -816,10 +827,22 @@ class FixationPage(QWidget):
 
         items = self.repository.list_work_fixation_items(period.id)
         filled = sum(1 for item in items if item_has_fact(item))
+        unplanned = self.repository.list_work_fixation_unplanned_items(period.id)
+        photo_count = sum(
+            len(self.repository.list_work_fixation_photos(fixation_item_id=item.id))
+            for item in items
+        ) + sum(
+            len(self.repository.list_work_fixation_photos(unplanned_item_id=item.id))
+            for item in unplanned
+        )
         text = (
-            f"{_MONTHS[period.month - 1]} {period.year}: заполнено строк "
+            f"{_MONTHS[period.month - 1]} {period.year}: плановых строк с фактом "
             f"{filled} из {len(items)}"
         )
+        if unplanned:
+            text += f" • внеплановых: {len(unplanned)}"
+        if photo_count:
+            text += f" • фото: {photo_count}"
         status = str(period.gis_status or "").upper()
         if status == "SAVED":
             text += " • размещено в ГИС ЖКХ"
@@ -854,8 +877,7 @@ class FixationPage(QWidget):
             if period is None:
                 suffix = "—"
             else:
-                items = self.repository.list_work_fixation_items(period.id)
-                has_data = any(item_has_fact(item) for item in items)
+                has_data = self._period_has_data(period.id)
                 status = str(period.gis_status or "").upper()
                 if status == "SAVED":
                     suffix = "✓"
@@ -880,10 +902,7 @@ class FixationPage(QWidget):
         return [
             period
             for period in periods
-            if any(
-                item_has_fact(item)
-                for item in self.repository.list_work_fixation_items(period.id)
-            )
+            if self._period_has_data(period.id)
         ]
 
     def _publish_selected_month(self) -> None:
@@ -892,10 +911,7 @@ class FixationPage(QWidget):
         period = self.repository.get_work_fixation_period(self._current_period_id)
         if period is None:
             return
-        if not any(
-            item_has_fact(item)
-            for item in self.repository.list_work_fixation_items(period.id)
-        ):
+        if not self._period_has_data(period.id):
             QMessageBox.information(
                 self,
                 "Нет фактических показателей",
@@ -994,13 +1010,31 @@ class FixationPage(QWidget):
             return
 
         fias = house.fias_house_guid or house.gis_house_guid
+        planned_items = self.repository.list_work_fixation_items(period.id)
+        unplanned_items = self.repository.list_work_fixation_unplanned_items(period.id)
+        photos_by_planned = {
+            item.id: self.repository.list_work_fixation_photos(
+                fixation_item_id=item.id
+            )
+            for item in planned_items
+        }
+        photos_by_unplanned = {
+            item.id: self.repository.list_work_fixation_photos(
+                unplanned_item_id=item.id
+            )
+            for item in unplanned_items
+        }
         try:
             payload = build_fixation_command_payload(
                 fias_house_code=fias or "",
                 work_list_guid=work_list.gis_work_list_guid or "",
                 year=period.year,
                 month=period.month,
-                items=self.repository.list_work_fixation_items(period.id),
+                items=planned_items,
+                unplanned_items=unplanned_items,
+                photos_by_planned=photos_by_planned,
+                photos_by_unplanned=photos_by_unplanned,
+                managed_unplanned_guids_json=period.managed_unplanned_guids_json,
             )
         except ValueError as exc:
             message = str(exc)
@@ -1044,12 +1078,27 @@ class FixationPage(QWidget):
                 for item in result.get("fixedItems", [])
                 if item.get("localItemId") and item.get("guid")
             }
+            unplanned_guids = {
+                str(item.get("localItemId")): str(item.get("guid"))
+                for item in result.get("unplannedItems", [])
+                if item.get("localItemId") and item.get("guid")
+            }
+            photo_guids = {
+                str(item.get("localPhotoId")): (
+                    str(item.get("contentGuid")) if item.get("contentGuid") else None,
+                    str(item.get("photoGuid")) if item.get("photoGuid") else None,
+                )
+                for item in result.get("photoResults", [])
+                if item.get("localPhotoId")
+            }
             self.repository.update_work_fixation_gis_state(
                 period_id,
                 reporting_period_guid=result.get("reportingPeriodGuid"),
                 gis_status="SAVED",
                 gis_last_error=None,
                 fixed_item_guids=fixed_guids,
+                unplanned_item_guids=unplanned_guids,
+                photo_guids=photo_guids,
             )
             if queue_mode:
                 self._queue_successes += 1
@@ -1119,7 +1168,7 @@ class FixationPage(QWidget):
         elif not helper_supports_fixations(status.helper_version):
             version = status.helper_version or "не определена"
             self.browser_status.setText(
-                f"Браузер: помощник {version} нужно обновить до 0.1.6 для фиксаций."
+                f"Браузер: помощник {version} нужно обновить до 0.1.7 для фиксаций."
             )
             self.browser_status.setStyleSheet("color: #8a5b00;")
         else:
@@ -1142,10 +1191,12 @@ class FixationPage(QWidget):
         self.publish_year_button.setEnabled(
             bool(self._current_work_list_id) and ready
         )
+        self.add_unplanned_button.setEnabled(bool(self._current_period_id) and ready)
         self.continue_queue_button.setEnabled(ready)
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
+        self.unplanned_table.setEnabled(enabled)
         self.fill_month_button.setEnabled(enabled)
         self.fill_year_button.setEnabled(enabled)
         self.clear_month_button.setEnabled(enabled)
