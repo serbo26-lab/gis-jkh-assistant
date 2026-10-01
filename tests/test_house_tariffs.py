@@ -323,3 +323,61 @@ def test_old_month_tariffs_migrate_to_first_day_with_month_precision(tmp_path) -
     assert tariffs[1].effective_from_label == "08.2021"
 
     repository.close()
+
+
+def test_equal_repeated_tariff_points_do_not_break_period_coverage(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    organization = repository.create_organization(
+        name="УК Пример",
+        ogrn="1022600000103",
+    )
+    house = repository.create_house(
+        organization_id=organization.id,
+        address="г Ставрополь, ул Братская, д. 11",
+    )
+
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="18,43",
+        start_year=2020,
+        start_month=8,
+    )
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="18.43",
+        start_year=2021,
+        start_month=8,
+    )
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="18,43",
+        start_year=2022,
+        start_month=8,
+    )
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="20,59",
+        start_year=2023,
+        start_month=8,
+    )
+
+    same_amount_period = repository.find_house_tariff_covering_period(
+        house.id,
+        start_year=2021,
+        start_month=1,
+        end_year=2022,
+        end_month=12,
+    )
+    assert same_amount_period is not None
+    assert same_amount_period.amount == "18,43"
+
+    changed_amount_period = repository.find_house_tariff_covering_period(
+        house.id,
+        start_year=2023,
+        start_month=1,
+        end_year=2023,
+        end_month=12,
+    )
+    assert changed_amount_period is None
+
+    repository.close()

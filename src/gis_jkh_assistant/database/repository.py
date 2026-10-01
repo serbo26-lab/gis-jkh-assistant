@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from collections.abc import Iterable
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,17 @@ from .models import (
     WorkTemplate,
     WorkTemplateItem,
 )
+
+
+def _numeric_text_equal(left: str, right: str) -> bool:
+    def as_decimal(value: str) -> Decimal:
+        text = str(value or "").replace("\u00a0", "").replace(" ", "").replace(",", ".")
+        return Decimal(text)
+
+    try:
+        return as_decimal(left) == as_decimal(right)
+    except InvalidOperation:
+        return str(left or "").strip() == str(right or "").strip()
 
 
 def _now() -> str:
@@ -728,7 +740,10 @@ class Repository:
             for item in candidates
             if period_start < item.effective_from_date <= period_end
         ]
-        if later_changes:
+        if any(
+            not _numeric_text_equal(item.amount, current.amount)
+            for item in later_changes
+        ):
             return None
         return current
 
