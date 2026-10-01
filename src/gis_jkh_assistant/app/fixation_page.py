@@ -414,6 +414,7 @@ class FixationPage(QWidget):
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             self._current_period_id = None
             self.table.setRowCount(0)
+            self.unplanned_table.setRowCount(0)
             self.month_status.setText("Период: —")
             self._set_enabled(False)
             return
@@ -422,6 +423,7 @@ class FixationPage(QWidget):
         if month is None:
             self._current_period_id = None
             self.table.setRowCount(0)
+            self.unplanned_table.setRowCount(0)
             self._set_enabled(False)
             return
 
@@ -435,6 +437,7 @@ class FixationPage(QWidget):
         except ValueError as exc:
             self._current_period_id = None
             self.table.setRowCount(0)
+            self.unplanned_table.setRowCount(0)
             self.month_status.setText(str(exc))
             self._set_enabled(False)
             return
@@ -442,6 +445,7 @@ class FixationPage(QWidget):
         self._current_period_id = period.id
         self._set_enabled(True)
         self._load_table()
+        self._load_unplanned_table()
         self._refresh_period_status()
         self._refresh_year_status()
 
@@ -468,7 +472,7 @@ class FixationPage(QWidget):
                     item.fact_total_cost,
                     "заполнено" if item_has_fact(item) else "—",
                 )
-                for column, value in enumerate(values):
+                for column, value in enumerate(values[:9]):
                     cell = QTableWidgetItem(value or "")
                     if column == 0:
                         cell.setData(_ITEM_ID_ROLE, item.id)
@@ -476,9 +480,24 @@ class FixationPage(QWidget):
                         cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     if column in (1, 3, 5, 7):
                         cell.setBackground(QBrush(QColor("#f5f6f7")))
-                    if column == 9 and item_has_fact(item):
-                        cell.setBackground(QBrush(QColor("#e8f4e8")))
                     self.table.setItem(row, column, cell)
+
+                photos = self.repository.list_work_fixation_photos(
+                    fixation_item_id=item.id
+                )
+                photo_button = QPushButton(
+                    f"Фото ({len(photos)})" if photos else "Фото"
+                )
+                photo_button.clicked.connect(
+                    lambda _checked=False, item_id=item.id: self._open_planned_photos(item_id)
+                )
+                self.table.setCellWidget(row, 9, photo_button)
+
+                status = QTableWidgetItem(values[9] or "")
+                status.setFlags(status.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if item_has_fact(item):
+                    status.setBackground(QBrush(QColor("#e8f4e8")))
+                self.table.setItem(row, 10, status)
         finally:
             self.table.blockSignals(False)
             self._loading = False
@@ -522,7 +541,7 @@ class FixationPage(QWidget):
             self._load_table()
             return
 
-        status = self.table.item(cell.row(), 9)
+        status = self.table.item(cell.row(), 10)
         if status:
             status.setText("заполнено")
             status.setBackground(QBrush(QColor("#e8f4e8")))
