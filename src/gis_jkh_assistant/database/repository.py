@@ -2342,6 +2342,8 @@ class Repository:
         gis_status: str | None = None,
         gis_last_error: str | None = None,
         fixed_item_guids: dict[str, str] | None = None,
+        unplanned_item_guids: dict[str, str] | None = None,
+        photo_guids: dict[str, tuple[str | None, str | None]] | None = None,
         sync_time: str | None = None,
     ) -> None:
         updates: dict[str, object] = {
@@ -2372,6 +2374,115 @@ class Repository:
                     """,
                     (_clean(guid), item_id, fixation_period_id),
                 )
+
+            for item_id, guid in (unplanned_item_guids or {}).items():
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_unplanned_items
+                    SET gis_fixed_work_guid = ?
+                    WHERE id = ? AND fixation_period_id = ?
+                    """,
+                    (_clean(guid), item_id, fixation_period_id),
+                )
+
+            for photo_id, values in (photo_guids or {}).items():
+                content_guid, photo_guid = values
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_photos
+                    SET remote_content_guid = ?, remote_photo_guid = ?
+                    WHERE id = ? AND fixation_period_id = ?
+                    """,
+                    (
+                        _clean(content_guid),
+                        _clean(photo_guid),
+                        photo_id,
+                        fixation_period_id,
+                    ),
+                )
+
+            planned_rows = self.connection.execute(
+                "SELECT id FROM work_fixation_items WHERE fixation_period_id = ?",
+                (fixation_period_id,),
+            ).fetchall()
+            for row in planned_rows:
+                item_id = str(row["id"])
+                photo_rows = self.connection.execute(
+                    """
+                    SELECT remote_content_guid
+                    FROM work_fixation_photos
+                    WHERE fixation_item_id = ?
+                      AND remote_content_guid IS NOT NULL
+                      AND remote_content_guid <> ''
+                    ORDER BY created_at, id
+                    """,
+                    (item_id,),
+                ).fetchall()
+                managed = [str(item["remote_content_guid"]) for item in photo_rows]
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_items
+                    SET managed_photo_content_guids_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        json.dumps(managed, ensure_ascii=False) if managed else None,
+                        item_id,
+                    ),
+                )
+
+            unplanned_rows = self.connection.execute(
+                """
+                SELECT id, gis_fixed_work_guid
+                FROM work_fixation_unplanned_items
+                WHERE fixation_period_id = ?
+                """,
+                (fixation_period_id,),
+            ).fetchall()
+            managed_unplanned = []
+            for row in unplanned_rows:
+                item_id = str(row["id"])
+                if row["gis_fixed_work_guid"]:
+                    managed_unplanned.append(str(row["gis_fixed_work_guid"]))
+                photo_rows = self.connection.execute(
+                    """
+                    SELECT remote_content_guid
+                    FROM work_fixation_photos
+                    WHERE unplanned_item_id = ?
+                      AND remote_content_guid IS NOT NULL
+                      AND remote_content_guid <> ''
+                    ORDER BY created_at, id
+                    """,
+                    (item_id,),
+                ).fetchall()
+                managed_photos = [str(item["remote_content_guid"]) for item in photo_rows]
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_unplanned_items
+                    SET managed_photo_content_guids_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        json.dumps(managed_photos, ensure_ascii=False)
+                        if managed_photos
+                        else None,
+                        item_id,
+                    ),
+                )
+
+            self.connection.execute(
+                """
+                UPDATE work_fixation_periods
+                SET managed_unplanned_guids_json = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(managed_unplanned, ensure_ascii=False)
+                    if managed_unplanned
+                    else None,
+                    fixation_period_id,
+                ),
+            )
 
     def update_work_list_period(
         self,
