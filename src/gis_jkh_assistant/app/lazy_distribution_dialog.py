@@ -218,17 +218,13 @@ class LazyDistributionDialog(QDialog):
 
         self.save_template_percentages_button = QPushButton("Сохранить % для шаблона")
         self.load_template_percentages_button = QPushButton("Загрузить % для шаблона")
-        template_percentages_hint = QLabel(
+        template_percentages_tooltip = (
             "Проценты сохраняются для выбранного шаблона и могут использоваться "
             "в перечнях других домов с тем же шаблоном."
         )
-        template_percentages_hint.setObjectName("Muted")
-        template_percentages_hint.setWordWrap(True)
+        self.save_template_percentages_button.setToolTip(template_percentages_tooltip)
+        self.load_template_percentages_button.setToolTip(template_percentages_tooltip)
 
-        controls.addWidget(QLabel("Проценты шаблона"), 3, 0)
-        controls.addWidget(self.save_template_percentages_button, 3, 1, 1, 2)
-        controls.addWidget(self.load_template_percentages_button, 3, 3, 1, 2)
-        controls.addWidget(template_percentages_hint, 4, 0, 1, 7)
         controls.setColumnStretch(3, 1)
         layout.addLayout(controls)
 
@@ -303,6 +299,13 @@ class LazyDistributionDialog(QDialog):
         summary.addStretch(1)
         summary.addWidget(self.amount_status)
         layout.addLayout(summary)
+
+        template_actions = QHBoxLayout()
+        template_actions.setSpacing(8)
+        template_actions.addWidget(self.save_template_percentages_button)
+        template_actions.addWidget(self.load_template_percentages_button)
+        template_actions.addStretch(1)
+        layout.addLayout(template_actions)
 
         buttons = QHBoxLayout()
         self.cancel_button = QPushButton("Отмена")
