@@ -1780,6 +1780,77 @@ class Repository:
         assert result is not None
         return result
 
+    def refresh_work_fixation_plan_snapshot(
+        self,
+        fixation_period_id: str,
+    ) -> None:
+        period = self.get_work_fixation_period(fixation_period_id)
+        if period is None:
+            raise ValueError("Период фиксации не найден.")
+
+        work_list_items = {
+            item.id: item
+            for item in self.list_work_list_items(period.work_list_id)
+        }
+        plan = self.get_work_plan_for_list_year(period.work_list_id, period.year)
+        plan_items = self.list_work_plan_items(plan.id) if plan else []
+        plan_by_list_item = {
+            item.work_list_item_id: item
+            for item in plan_items
+            if item.work_list_item_id
+        }
+        plan_months = (
+            {
+                row.work_plan_item_id: row
+                for row in self.list_work_plan_months(plan.id)
+                if row.month == period.month
+            }
+            if plan
+            else {}
+        )
+
+        rows = self.list_work_fixation_items(fixation_period_id)
+        with self.connection:
+            for item in rows:
+                list_item = (
+                    work_list_items.get(item.work_list_item_id)
+                    if item.work_list_item_id
+                    else None
+                )
+                if list_item is None:
+                    continue
+                plan_item = plan_by_list_item.get(list_item.id)
+                plan_month = (
+                    plan_months.get(plan_item.id)
+                    if plan_item is not None
+                    else None
+                )
+                planned_count = int(plan_month.count) if plan_month else 0
+                planned_cost = proportional_month_cost(
+                    list_item.cost,
+                    list_item.quantity,
+                    planned_count,
+                )
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_items
+                    SET work_plan_item_id = ?,
+                        planned_price = ?,
+                        planned_amount = ?,
+                        planned_count = ?,
+                        planned_total_cost = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        plan_item.id if plan_item else None,
+                        _clean(list_item.price),
+                        _clean(list_item.volume),
+                        planned_count,
+                        _clean(planned_cost),
+                        item.id,
+                    ),
+                )
+
     def list_work_fixation_items(
         self,
         fixation_period_id: str,
