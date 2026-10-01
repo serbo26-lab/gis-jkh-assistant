@@ -448,6 +448,207 @@ async function runGisCommand(command) {
       };
     }
 
+    async function getWorkListDetail(workListGuid) {
+      const guid = String(workListGuid || "").trim();
+      if (!guid) {
+        throw new Error("Не передан GUID размещенного перечня ГИС ЖКХ.");
+      }
+
+      const data = await request(
+        "GET",
+        "/workplanning/api/rest/services/search/worklist/" + encodeURIComponent(guid),
+        undefined,
+        STATE_WORKPLANNING
+      );
+      if (!data?.guid) {
+        throw new Error("Размещенный перечень не найден в ГИС ЖКХ.");
+      }
+      if (data.status !== "APPROVED") {
+        throw new Error(
+          "Перечень больше не находится в статусе «Размещен» в ГИС ЖКХ."
+        );
+      }
+      return data;
+    }
+
+    async function searchWorkPlan(workListGuid, year) {
+      const data = await request(
+        "POST",
+        "/workplanning/api/rest/services/search/workplans",
+        {
+          workListGuid: String(workListGuid),
+          year: Number(year)
+        },
+        STATE_WORKPLANNING
+      );
+      return data?.workPlan || null;
+    }
+
+    function planDateForGis(value) {
+      const text = String(value || "").trim();
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+      if (!match) {
+        throw new Error("Некорректная локальная дата плана: " + text);
+      }
+      return match[3] + "." + match[2] + "." + match[1] + " 00:00:00:000";
+    }
+
+    function findWorkListItem(localItem, remoteItems) {
+      const workGuid = String(localItem?.workGuid || "").trim();
+      const workCode = String(localItem?.workCode || "").trim();
+      const sortIndex = Number(localItem?.sortIndex);
+
+      let matches = [];
+      if (workGuid) {
+        matches = remoteItems.filter(
+          (item) => String(item?.work?.guid || "") === workGuid
+        );
+      }
+      if (!matches.length && workCode) {
+        matches = remoteItems.filter(
+          (item) => String(item?.work?.code || "") === workCode
+        );
+      }
+      if (matches.length > 1 && Number.isFinite(sortIndex)) {
+        const byPosition = matches.find(
+          (item) => Number(item?.sortIndex) === sortIndex
+        );
+        if (byPosition) return byPosition;
+      }
+      if (matches.length === 1) return matches[0];
+
+      if (Number.isFinite(sortIndex)) {
+        const byPosition = remoteItems.find(
+          (item) => Number(item?.sortIndex) === sortIndex
+        );
+        if (
+          byPosition &&
+          (!workGuid || String(byPosition?.work?.guid || "") === workGuid) &&
+          (!workCode || String(byPosition?.work?.code || "") === workCode)
+        ) {
+          return byPosition;
+        }
+      }
+
+      throw new Error(
+        "Не удалось сопоставить строку локального плана с размещенным перечнем " +
+          "в ГИС ЖКХ. Проверьте состав перечня и повторите."
+      );
+    }
+
+    function findExistingPlanItem(sourceItem, existingPlan) {
+      const items = Array.isArray(existingPlan?.workPlanItems)
+        ? existingPlan.workPlanItems
+        : [];
+      const workGuid = String(sourceItem?.work?.guid || "");
+      const sortIndex = Number(sourceItem?.sortIndex);
+
+      const byGuid = items.filter(
+        (item) => String(item?.work?.guid || "") === workGuid
+      );
+      if (byGuid.length === 1) return byGuid[0];
+      if (byGuid.length > 1 && Number.isFinite(sortIndex)) {
+        return (
+          byGuid.find((item) => Number(item?.sortIndex) === sortIndex) || null
+        );
+      }
+      return null;
+    }
+
+    function saveWorkPlanPayload(localPayload, workList, existingPlan) {
+      const localItems = Array.isArray(localPayload?.items)
+        ? localPayload.items
+        : [];
+      const remoteItems = Array.isArray(workList?.workListItems)
+        ? workList.workListItems
+        : [];
+      if (!remoteItems.length) {
+        throw new Error("В размещенном перечне ГИС ЖКХ нет работ и услуг.");
+      }
+
+      const usedRemoteItemGuids = new Set();
+      const year = Number(localPayload.year);
+      if (!Number.isInteger(year)) {
+        throw new Error("Некорректный год плана.");
+      }
+
+      const workPlanItems = localItems.map((localItem, index) => {
+        const sourceItem = findWorkListItem(localItem, remoteItems);
+        if (sourceItem?.guid) {
+          if (usedRemoteItemGuids.has(sourceItem.guid)) {
+            throw new Error(
+              "Несколько строк локального плана сопоставились с одной строкой ГИС ЖКХ."
+            );
+          }
+          usedRemoteItemGuids.add(sourceItem.guid);
+        }
+
+        const existingItem = findExistingPlanItem(sourceItem, existingPlan);
+        const monthlyWorks = (localItem?.monthlyWorks || []).map((month) => {
+          const monthNumber = Number(month?.month);
+          const count = Number(month?.count);
+          if (
+            !Number.isInteger(monthNumber) ||
+            monthNumber < 1 ||
+            monthNumber > 12 ||
+            !Number.isInteger(count) ||
+            count < 0
+          ) {
+            throw new Error("Некорректное количество или месяц локального плана.");
+          }
+
+          const dates = (Array.isArray(month?.dates) ? month.dates : []).map(
+            (value) => ({ date: planDateForGis(value) })
+          );
+          if (dates.length > count) {
+            throw new Error(
+              "Количество в месяце меньше числа выбранных конкретных дат."
+            );
+          }
+
+          return {
+            count,
+            dates,
+            monthYear: {
+              month: monthNumber,
+              year
+            }
+          };
+        });
+
+        const result = {
+          work: compactReference(sourceItem.work),
+          workType: compactReference(sourceItem.workType),
+          monthlyWorks,
+          sortIndex: sourceItem.sortIndex ?? localItem.sortIndex ?? index + 1
+        };
+        if (existingItem?.guid) {
+          result.guid = existingItem.guid;
+        }
+        return result;
+      });
+
+      if (usedRemoteItemGuids.size !== remoteItems.length) {
+        throw new Error(
+          "Состав локального плана отличается от размещенного перечня в ГИС ЖКХ. " +
+            "Проверьте статус перечня и создайте план заново."
+        );
+      }
+
+      const workPlan = {
+        workListGuid: workList.guid,
+        year,
+        workPlanItems
+      };
+      if (existingPlan?.guid) {
+        workPlan.guid = existingPlan.guid;
+        if (existingPlan.lastUpdateDate) {
+          workPlan.lastUpdateDate = existingPlan.lastUpdateDate;
+        }
+      }
+      return { workPlan };
+    }
+
     const payload = command?.payload || {};
 
     if (command.type === "keep_alive") {
@@ -520,6 +721,35 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: statusResult(draft, { fileGuid, importJobGuid })
+      };
+    }
+
+    if (command.type === "save_work_plan") {
+      const workList = await getWorkListDetail(payload.workListGuid);
+      const existingPlan = await searchWorkPlan(workList.guid, payload.year);
+      const body = saveWorkPlanPayload(payload, workList, existingPlan);
+
+      const saved = await request(
+        "PUT",
+        "/workplanning/api/rest/services/save/workplan",
+        body,
+        STATE_WORKPLANNING
+      );
+      if (!saved?.guid) {
+        throw new Error("ГИС ЖКХ не вернул GUID сохраненного плана работ и услуг.");
+      }
+
+      return {
+        ok: true,
+        result: {
+          found: true,
+          gisStatus: "SAVED",
+          workPlanGuid: saved.guid,
+          workListGuid: saved.workListGuid || workList.guid,
+          year: Number(saved.year ?? payload.year),
+          lastUpdateDate: saved.lastUpdateDate || null,
+          created: !existingPlan?.guid
+        }
       };
     }
 
