@@ -1114,6 +1114,9 @@ class FixationPage(QWidget):
                 unplanned_item_guids=unplanned_guids,
                 photo_guids=photo_guids,
             )
+            if self._current_period_id == period_id:
+                self._load_table()
+                self._load_unplanned_table()
             if queue_mode:
                 self._queue_successes += 1
                 self._queue_index += 1
