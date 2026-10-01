@@ -94,8 +94,14 @@ class HousesPage(QWidget):
         self.add_org_button = QPushButton("Добавить УО")
         self.edit_org_button = QPushButton("Изменить УО")
         self.delete_org_button = QPushButton("Удалить УО")
-        self.import_button = QPushButton("Импорт из файла")
+        self.import_button = QPushButton("Импорт домов из ГИС ЖКХ…")
         self.import_button.setObjectName("PrimaryButton")
+        self.import_button.setToolTip(
+            "Нужен XLSX из выгрузки ГИС ЖКХ: "
+            "«Реестр объектов жилищного фонда» → «Выгрузить информацию». "
+            "ГИС формирует архив «Объекты жилищного фонда.zip» — "
+            "распакуйте его и выберите XLSX внутри."
+        )
         self.add_house_button = QPushButton("Добавить дом")
 
         self.add_org_button.clicked.connect(self._add_organization)
@@ -116,6 +122,16 @@ class HousesPage(QWidget):
             actions_row.addWidget(button)
         actions_row.addStretch(1)
         toolbar_layout.addLayout(actions_row)
+
+        import_hint = QLabel(
+            "Для импорта домов используйте выгрузку ГИС ЖКХ: "
+            "«Реестр объектов жилищного фонда» → «Выгрузить информацию». "
+            "Из архива «Объекты жилищного фонда.zip» распакуйте и выберите XLSX-файл."
+        )
+        import_hint.setWordWrap(True)
+        import_hint.setObjectName("Muted")
+        toolbar_layout.addWidget(import_hint)
+
         root.addWidget(toolbar)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -692,9 +708,9 @@ class HousesPage(QWidget):
     def _import_file(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Импорт объектов жилищного фонда",
+            "Выберите XLSX из выгрузки «Объекты жилищного фонда»",
             "",
-            "Excel (*.xlsx *.xlsm)",
+            "Выгрузка ГИС ЖКХ (*.xlsx *.xlsm);;Excel (*.xlsx *.xlsm)",
         )
         if not filename:
             return
