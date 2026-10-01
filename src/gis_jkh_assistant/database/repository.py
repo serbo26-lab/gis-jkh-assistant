@@ -10,6 +10,8 @@ from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from gis_jkh_assistant.work_fixation import proportional_month_cost
+
 from .models import (
     House,
     HouseTariff,
@@ -19,6 +21,8 @@ from .models import (
     WorkList,
     WorkListItem,
     WorkListStatus,
+    WorkFixationItem,
+    WorkFixationPeriod,
     WorkPlan,
     WorkPlanItem,
     WorkPlanMonth,
@@ -265,6 +269,59 @@ class Repository:
                 CHECK (month BETWEEN 1 AND 12),
                 CHECK (count >= 0)
             );
+
+            CREATE TABLE IF NOT EXISTS work_fixation_periods (
+                id TEXT PRIMARY KEY,
+                work_list_id TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                reporting_period_guid TEXT,
+                gis_status TEXT,
+                gis_last_sync_at TEXT,
+                gis_last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (work_list_id)
+                    REFERENCES work_lists(id)
+                    ON DELETE CASCADE,
+                UNIQUE (work_list_id, year, month),
+                CHECK (month BETWEEN 1 AND 12)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_fixation_periods_list
+                ON work_fixation_periods(work_list_id, year, month);
+
+            CREATE TABLE IF NOT EXISTS work_fixation_items (
+                id TEXT PRIMARY KEY,
+                fixation_period_id TEXT NOT NULL,
+                work_list_item_id TEXT,
+                work_plan_item_id TEXT,
+                position INTEGER NOT NULL,
+                work_code TEXT,
+                work_name TEXT NOT NULL,
+                work_guid TEXT,
+                planned_price TEXT,
+                planned_amount TEXT,
+                planned_count INTEGER NOT NULL DEFAULT 0,
+                planned_total_cost TEXT,
+                fact_price TEXT,
+                fact_amount TEXT,
+                fact_count INTEGER,
+                fact_total_cost TEXT,
+                gis_fixed_work_guid TEXT,
+                FOREIGN KEY (fixation_period_id)
+                    REFERENCES work_fixation_periods(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (work_list_item_id)
+                    REFERENCES work_list_items(id)
+                    ON DELETE SET NULL,
+                FOREIGN KEY (work_plan_item_id)
+                    REFERENCES work_plan_items(id)
+                    ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_work_fixation_items
+                ON work_fixation_items(fixation_period_id, position);
 
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
@@ -902,6 +959,14 @@ class Repository:
     @staticmethod
     def _work_plan_month_from_row(row: sqlite3.Row) -> WorkPlanMonth:
         return WorkPlanMonth(**dict(row))
+
+    @staticmethod
+    def _work_fixation_period_from_row(row: sqlite3.Row) -> WorkFixationPeriod:
+        return WorkFixationPeriod(**dict(row))
+
+    @staticmethod
+    def _work_fixation_item_from_row(row: sqlite3.Row) -> WorkFixationItem:
+        return WorkFixationItem(**dict(row))
 
     def list_work_templates(self, organization_id: str) -> list[WorkTemplate]:
         rows = self.connection.execute(
@@ -1542,6 +1607,366 @@ class Repository:
             values,
         )
         self.connection.commit()
+
+    def get_work_fixation_period(
+        self,
+        fixation_period_id: str,
+    ) -> WorkFixationPeriod | None:
+        row = self.connection.execute(
+            "SELECT * FROM work_fixation_periods WHERE id = ?",
+            (fixation_period_id,),
+        ).fetchone()
+        return self._work_fixation_period_from_row(row) if row else None
+
+    def get_work_fixation_period_for_month(
+        self,
+        work_list_id: str,
+        *,
+        year: int,
+        month: int,
+    ) -> WorkFixationPeriod | None:
+        row = self.connection.execute(
+            """
+            SELECT * FROM work_fixation_periods
+            WHERE work_list_id = ? AND year = ? AND month = ?
+            """,
+            (work_list_id, int(year), int(month)),
+        ).fetchone()
+        return self._work_fixation_period_from_row(row) if row else None
+
+    def list_work_fixation_periods(
+        self,
+        work_list_id: str,
+        *,
+        year: int | None = None,
+    ) -> list[WorkFixationPeriod]:
+        if year is None:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM work_fixation_periods
+                WHERE work_list_id = ?
+                ORDER BY year, month
+                """,
+                (work_list_id,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM work_fixation_periods
+                WHERE work_list_id = ? AND year = ?
+                ORDER BY month
+                """,
+                (work_list_id, int(year)),
+            ).fetchall()
+        return [self._work_fixation_period_from_row(row) for row in rows]
+
+    def get_or_create_work_fixation_period(
+        self,
+        *,
+        work_list_id: str,
+        year: int,
+        month: int,
+    ) -> WorkFixationPeriod:
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень работ и услуг не найден.")
+        if (
+            work_list.status != WorkListStatus.PLACED
+            and str(work_list.gis_status or "").upper() != "APPROVED"
+        ):
+            raise ValueError(
+                "Фиксация доступна только для размещенного перечня работ и услуг."
+            )
+        if not work_list.gis_work_list_guid:
+            raise ValueError("У перечня отсутствует GUID ГИС ЖКХ.")
+
+        year = int(year)
+        month = int(month)
+        if not 1 <= month <= 12:
+            raise ValueError("Месяц должен быть от 1 до 12.")
+        if not (
+            (work_list.start_year, work_list.start_month)
+            <= (year, month)
+            <= (work_list.end_year, work_list.end_month)
+        ):
+            raise ValueError("Выбранный месяц не входит в период перечня.")
+
+        existing = self.get_work_fixation_period_for_month(
+            work_list_id,
+            year=year,
+            month=month,
+        )
+        if existing is not None:
+            return existing
+
+        fixation_id = str(uuid.uuid4())
+        timestamp = _now()
+        list_items = self.list_work_list_items(work_list_id)
+        plan = self.get_work_plan_for_list_year(work_list_id, year)
+        plan_items = self.list_work_plan_items(plan.id) if plan else []
+        plan_item_by_list_item = {
+            item.work_list_item_id: item
+            for item in plan_items
+            if item.work_list_item_id
+        }
+        plan_months = (
+            {
+                row.work_plan_item_id: row
+                for row in self.list_work_plan_months(plan.id)
+                if row.month == month
+            }
+            if plan
+            else {}
+        )
+
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_fixation_periods (
+                    id, work_list_id, year, month,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    fixation_id,
+                    work_list_id,
+                    year,
+                    month,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+            for list_item in list_items:
+                plan_item = plan_item_by_list_item.get(list_item.id)
+                plan_month = (
+                    plan_months.get(plan_item.id)
+                    if plan_item is not None
+                    else None
+                )
+                planned_count = int(plan_month.count) if plan_month else 0
+                planned_cost = proportional_month_cost(
+                    list_item.cost,
+                    list_item.quantity,
+                    planned_count,
+                )
+                self.connection.execute(
+                    """
+                    INSERT INTO work_fixation_items (
+                        id, fixation_period_id,
+                        work_list_item_id, work_plan_item_id,
+                        position, work_code, work_name, work_guid,
+                        planned_price, planned_amount, planned_count,
+                        planned_total_cost
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        fixation_id,
+                        list_item.id,
+                        plan_item.id if plan_item else None,
+                        int(list_item.position),
+                        _clean(list_item.work_code),
+                        list_item.work_name,
+                        _clean(list_item.work_guid),
+                        _clean(list_item.price),
+                        _clean(list_item.volume),
+                        planned_count,
+                        _clean(planned_cost),
+                    ),
+                )
+
+        result = self.get_work_fixation_period(fixation_id)
+        assert result is not None
+        return result
+
+    def list_work_fixation_items(
+        self,
+        fixation_period_id: str,
+    ) -> list[WorkFixationItem]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_fixation_items
+            WHERE fixation_period_id = ?
+            ORDER BY position
+            """,
+            (fixation_period_id,),
+        ).fetchall()
+        return [self._work_fixation_item_from_row(row) for row in rows]
+
+    def update_work_fixation_item(
+        self,
+        item_id: str,
+        *,
+        fact_price: str | None,
+        fact_amount: str | None,
+        fact_count: int | None,
+        fact_total_cost: str | None,
+    ) -> None:
+        if fact_count is not None and int(fact_count) < 0:
+            raise ValueError("Фактическое количество не может быть отрицательным.")
+
+        row = self.connection.execute(
+            """
+            SELECT fixation_period_id
+            FROM work_fixation_items
+            WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Строка фиксации не найдена.")
+
+        period_id = str(row["fixation_period_id"])
+        period = self.get_work_fixation_period(period_id)
+        if period is None:
+            raise ValueError("Период фиксации не найден.")
+
+        next_status = (
+            "MODIFIED"
+            if str(period.gis_status or "").upper() == "SAVED"
+            else "LOCAL"
+        )
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE work_fixation_items
+                SET fact_price = ?,
+                    fact_amount = ?,
+                    fact_count = ?,
+                    fact_total_cost = ?
+                WHERE id = ?
+                """,
+                (
+                    _clean(fact_price),
+                    _clean(fact_amount),
+                    int(fact_count) if fact_count is not None else None,
+                    _clean(fact_total_cost),
+                    item_id,
+                ),
+            )
+            self.connection.execute(
+                """
+                UPDATE work_fixation_periods
+                SET gis_status = ?, gis_last_error = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_status, _now(), period_id),
+            )
+
+    def fill_work_fixation_from_plan(self, fixation_period_id: str) -> None:
+        period = self.get_work_fixation_period(fixation_period_id)
+        if period is None:
+            raise ValueError("Период фиксации не найден.")
+
+        rows = self.list_work_fixation_items(fixation_period_id)
+        next_status = (
+            "MODIFIED"
+            if str(period.gis_status or "").upper() == "SAVED"
+            else "LOCAL"
+        )
+        with self.connection:
+            for item in rows:
+                has_plan = (
+                    item.planned_count > 0
+                    or item.planned_price is not None
+                    or item.planned_amount is not None
+                    or item.planned_total_cost is not None
+                )
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_items
+                    SET fact_price = ?,
+                        fact_amount = ?,
+                        fact_count = ?,
+                        fact_total_cost = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        item.planned_price if has_plan else None,
+                        item.planned_amount if has_plan else None,
+                        item.planned_count if has_plan else None,
+                        item.planned_total_cost if has_plan else None,
+                        item.id,
+                    ),
+                )
+            self.connection.execute(
+                """
+                UPDATE work_fixation_periods
+                SET gis_status = ?, gis_last_error = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_status, _now(), fixation_period_id),
+            )
+
+    def clear_work_fixation_period(self, fixation_period_id: str) -> None:
+        period = self.get_work_fixation_period(fixation_period_id)
+        if period is None:
+            return
+        next_status = (
+            "MODIFIED"
+            if str(period.gis_status or "").upper() == "SAVED"
+            else "LOCAL"
+        )
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE work_fixation_items
+                SET fact_price = NULL,
+                    fact_amount = NULL,
+                    fact_count = NULL,
+                    fact_total_cost = NULL
+                WHERE fixation_period_id = ?
+                """,
+                (fixation_period_id,),
+            )
+            self.connection.execute(
+                """
+                UPDATE work_fixation_periods
+                SET gis_status = ?, gis_last_error = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_status, _now(), fixation_period_id),
+            )
+
+    def update_work_fixation_gis_state(
+        self,
+        fixation_period_id: str,
+        *,
+        reporting_period_guid: str | None = None,
+        gis_status: str | None = None,
+        gis_last_error: str | None = None,
+        fixed_item_guids: dict[str, str] | None = None,
+        sync_time: str | None = None,
+    ) -> None:
+        updates: dict[str, object] = {
+            "gis_last_sync_at": sync_time or _now(),
+            "gis_last_error": _clean(gis_last_error),
+            "updated_at": _now(),
+        }
+        if reporting_period_guid is not None:
+            updates["reporting_period_guid"] = _clean(reporting_period_guid)
+        if gis_status is not None:
+            updates["gis_status"] = _clean(gis_status)
+
+        with self.connection:
+            clause = ", ".join(f"{key} = ?" for key in updates)
+            values = [updates[key] for key in updates]
+            values.append(fixation_period_id)
+            self.connection.execute(
+                f"UPDATE work_fixation_periods SET {clause} WHERE id = ?",
+                values,
+            )
+
+            for item_id, guid in (fixed_item_guids or {}).items():
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_items
+                    SET gis_fixed_work_guid = ?
+                    WHERE id = ? AND fixation_period_id = ?
+                    """,
+                    (_clean(guid), item_id, fixation_period_id),
+                )
 
     def update_work_list_period(
         self,
