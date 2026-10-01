@@ -858,7 +858,9 @@ class PlanningPage(QWidget):
 
         if plan.gis_work_plan_guid:
             text = f"План ГИС ЖКХ: {plan.gis_work_plan_guid}"
-            if plan.gis_status:
+            if plan.gis_status == "SAVED":
+                text += " • размещен / обновлен"
+            elif plan.gis_status:
                 text += f" • {plan.gis_status}"
             if plan.gis_last_sync_at:
                 text += f" • синхронизировано {plan.gis_last_sync_at}"
