@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 
 
@@ -72,24 +74,50 @@ class HouseTariff:
     start_month: int
     end_year: int
     end_month: int
+    start_day: int = 1
+    start_precision: str = "month"
+    end_day: int = 31
     created_at: str | None = None
     updated_at: str | None = None
 
     @property
+    def effective_from_date(self) -> date:
+        return date(self.start_year, self.start_month, self.start_day)
+
+    @property
+    def effective_to_date(self) -> date | None:
+        if self.end_year >= 9999:
+            return None
+        return date(self.end_year, self.end_month, self.end_day)
+
+    @property
     def effective_from_label(self) -> str:
+        if self.start_precision == "day":
+            return self.effective_from_date.strftime("%d.%m.%Y")
         return f"{self.start_month:02d}.{self.start_year}"
 
     @property
     def effective_to_label(self) -> str:
         if self.end_year >= 9999:
             return "до следующего изменения"
-        return f"{self.end_month:02d}.{self.end_year}"
+        last_day = calendar.monthrange(self.end_year, self.end_month)[1]
+        if self.start_precision == "month" and self.end_day == last_day:
+            return f"{self.end_month:02d}.{self.end_year}"
+        return date(self.end_year, self.end_month, self.end_day).strftime("%d.%m.%Y")
 
     @property
     def period_label(self) -> str:
         if self.end_year >= 9999:
             return f"с {self.effective_from_label}"
         return f"{self.effective_from_label} — {self.effective_to_label}"
+
+    @property
+    def period_full_label(self) -> str:
+        start = self.effective_from_date.strftime("%d.%m.%Y")
+        if self.end_year >= 9999:
+            return f"с {start}"
+        end = date(self.end_year, self.end_month, self.end_day).strftime("%d.%m.%Y")
+        return f"{start} — {end}"
 
 
 @dataclass(frozen=True, slots=True)

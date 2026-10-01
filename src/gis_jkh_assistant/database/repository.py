@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .models import (
@@ -89,8 +89,11 @@ class Repository:
                 amount TEXT NOT NULL,
                 start_year INTEGER NOT NULL,
                 start_month INTEGER NOT NULL,
+                start_day INTEGER NOT NULL DEFAULT 1,
+                start_precision TEXT NOT NULL DEFAULT 'month',
                 end_year INTEGER NOT NULL,
                 end_month INTEGER NOT NULL,
+                end_day INTEGER NOT NULL DEFAULT 31,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (house_id)
@@ -99,7 +102,10 @@ class Repository:
             );
 
             CREATE INDEX IF NOT EXISTS ix_house_tariffs_period
-                ON house_tariffs(house_id, start_year, start_month, end_year, end_month);
+                ON house_tariffs(
+                    house_id, start_year, start_month, start_day,
+                    end_year, end_month, end_day
+                );
 
             CREATE TABLE IF NOT EXISTS work_templates (
                 id TEXT PRIMARY KEY,
@@ -199,6 +205,13 @@ class Repository:
             """
         )
         self._ensure_column("houses", "charge_area", "TEXT")
+        self._ensure_column("house_tariffs", "start_day", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column(
+            "house_tariffs",
+            "start_precision",
+            "TEXT NOT NULL DEFAULT 'month'",
+        )
+        self._ensure_column("house_tariffs", "end_day", "INTEGER NOT NULL DEFAULT 31")
         self._ensure_column("work_templates", "source_file_path", "TEXT")
         self._ensure_column("work_template_items", "allocation_percent", "TEXT")
         self._ensure_column("work_lists", "planned_total", "TEXT")
@@ -492,7 +505,7 @@ class Repository:
             """
             SELECT * FROM house_tariffs
             WHERE house_id = ?
-            ORDER BY start_year, start_month, end_year, end_month, created_at
+            ORDER BY start_year, start_month, start_day, end_year, end_month, end_day, created_at
             """,
             (house_id,),
         ).fetchall()
@@ -512,15 +525,20 @@ class Repository:
         amount: str,
         start_year: int,
         start_month: int,
+        start_day: int = 1,
+        start_precision: str = "month",
         end_year: int | None = None,
         end_month: int | None = None,
+        end_day: int | None = None,
     ) -> HouseTariff:
-        del end_year, end_month
-        _validate_month_point(start_year, start_month)
+        del end_year, end_month, end_day
+        _validate_date_point(start_year, start_month, start_day)
+        precision = _validate_date_precision(start_precision)
         self._assert_unique_tariff_start(
             house_id,
             start_year=start_year,
             start_month=start_month,
+            start_day=start_day,
         )
 
         tariff_id = str(uuid.uuid4())
@@ -529,9 +547,10 @@ class Repository:
             """
             INSERT INTO house_tariffs (
                 id, house_id, amount,
-                start_year, start_month, end_year, end_month,
+                start_year, start_month, start_day, start_precision,
+                end_year, end_month, end_day,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tariff_id,
@@ -539,8 +558,11 @@ class Repository:
                 _required_text(amount, "Тариф"),
                 int(start_year),
                 int(start_month),
+                int(start_day),
+                precision,
                 9999,
                 12,
+                31,
                 timestamp,
                 timestamp,
             ),
@@ -558,11 +580,15 @@ class Repository:
         amount: str,
         start_year: int,
         start_month: int,
+        start_day: int = 1,
+        start_precision: str = "month",
         end_year: int | None = None,
         end_month: int | None = None,
+        end_day: int | None = None,
     ) -> None:
-        del end_year, end_month
-        _validate_month_point(start_year, start_month)
+        del end_year, end_month, end_day
+        _validate_date_point(start_year, start_month, start_day)
+        precision = _validate_date_precision(start_precision)
 
         existing = self.get_house_tariff(tariff_id)
         if existing is None:
@@ -572,6 +598,7 @@ class Repository:
             existing.house_id,
             start_year=start_year,
             start_month=start_month,
+            start_day=start_day,
             exclude_id=tariff_id,
         )
 
@@ -581,6 +608,8 @@ class Repository:
             SET amount = ?,
                 start_year = ?,
                 start_month = ?,
+                start_day = ?,
+                start_precision = ?,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -588,12 +617,74 @@ class Repository:
                 _required_text(amount, "Тариф"),
                 int(start_year),
                 int(start_month),
+                int(start_day),
+                precision,
                 _now(),
                 tariff_id,
             ),
         )
         self.connection.commit()
         self._recalculate_house_tariff_periods(existing.house_id)
+
+    def upsert_house_tariff_change(
+        self,
+        *,
+        house_id: str,
+        amount: str,
+        start_year: int,
+        start_month: int,
+        start_day: int = 1,
+        start_precision: str = "month",
+    ) -> tuple[HouseTariff, bool, bool]:
+        """Create or update one tariff change point.
+
+        Returns (tariff, created, changed). Existing equal values are left intact.
+        """
+
+        _validate_date_point(start_year, start_month, start_day)
+        precision = _validate_date_precision(start_precision)
+        existing = next(
+            (
+                item
+                for item in self.list_house_tariffs(house_id)
+                if (
+                    item.start_year,
+                    item.start_month,
+                    item.start_day,
+                )
+                == (int(start_year), int(start_month), int(start_day))
+            ),
+            None,
+        )
+        cleaned_amount = _required_text(amount, "Тариф")
+        if existing is None:
+            created = self.create_house_tariff(
+                house_id=house_id,
+                amount=cleaned_amount,
+                start_year=start_year,
+                start_month=start_month,
+                start_day=start_day,
+                start_precision=precision,
+            )
+            return created, True, True
+
+        changed = (
+            existing.amount != cleaned_amount
+            or existing.start_precision != precision
+        )
+        if changed:
+            self.update_house_tariff(
+                existing.id,
+                amount=cleaned_amount,
+                start_year=start_year,
+                start_month=start_month,
+                start_day=start_day,
+                start_precision=precision,
+            )
+            refreshed = self.get_house_tariff(existing.id)
+            assert refreshed is not None
+            return refreshed, False, True
+        return existing, False, False
 
     def delete_house_tariff(self, tariff_id: str) -> None:
         existing = self.get_house_tariff(tariff_id)
@@ -615,14 +706,18 @@ class Repository:
         end_month: int,
     ) -> HouseTariff | None:
         _validate_period(start_year, start_month, end_year, end_month)
-        start_key = _month_key(start_year, start_month)
-        end_key = _month_key(end_year, end_month)
+        period_start = date(int(start_year), int(start_month), 1)
+        period_end = date(
+            int(end_year),
+            int(end_month),
+            _last_day_of_month(end_year, end_month),
+        )
 
         candidates = self.list_house_tariffs(house_id)
         active = [
             item
             for item in candidates
-            if _month_key(item.start_year, item.start_month) <= start_key
+            if item.effective_from_date <= period_start
         ]
         if not active:
             return None
@@ -631,7 +726,7 @@ class Repository:
         later_changes = [
             item
             for item in candidates
-            if start_key < _month_key(item.start_year, item.start_month) <= end_key
+            if period_start < item.effective_from_date <= period_end
         ]
         if later_changes:
             return None
@@ -643,16 +738,21 @@ class Repository:
         *,
         start_year: int,
         start_month: int,
+        start_day: int = 1,
         exclude_id: str | None = None,
     ) -> None:
         rows = self.list_house_tariffs(house_id)
         for item in rows:
             if exclude_id and item.id == exclude_id:
                 continue
-            if item.start_year == int(start_year) and item.start_month == int(start_month):
+            if (
+                item.start_year,
+                item.start_month,
+                item.start_day,
+            ) == (int(start_year), int(start_month), int(start_day)):
                 raise ValueError(
                     "Для этого дома уже указан тариф, начинающий действовать "
-                    f"с {int(start_month):02d}.{int(start_year)}."
+                    f"с {int(start_day):02d}.{int(start_month):02d}.{int(start_year)}."
                 )
 
     def _normalize_all_house_tariff_periods(self) -> None:
@@ -665,10 +765,10 @@ class Repository:
     def _recalculate_house_tariff_periods(self, house_id: str) -> None:
         rows = self.connection.execute(
             """
-            SELECT id, start_year, start_month
+            SELECT id, start_year, start_month, start_day
             FROM house_tariffs
             WHERE house_id = ?
-            ORDER BY start_year, start_month, created_at
+            ORDER BY start_year, start_month, start_day, created_at
             """,
             (house_id,),
         ).fetchall()
@@ -679,21 +779,25 @@ class Repository:
             for index, row in enumerate(rows):
                 if index + 1 < len(rows):
                     next_row = rows[index + 1]
-                    previous_key = _month_key(
+                    next_start = date(
                         int(next_row["start_year"]),
                         int(next_row["start_month"]),
-                    ) - 1
-                    end_year, end_month = _year_month_from_key(previous_key)
+                        int(next_row["start_day"]),
+                    )
+                    previous_day = next_start - timedelta(days=1)
+                    end_year = previous_day.year
+                    end_month = previous_day.month
+                    end_day = previous_day.day
                 else:
-                    end_year, end_month = 9999, 12
+                    end_year, end_month, end_day = 9999, 12, 31
 
                 self.connection.execute(
                     """
                     UPDATE house_tariffs
-                    SET end_year = ?, end_month = ?
+                    SET end_year = ?, end_month = ?, end_day = ?
                     WHERE id = ?
                     """,
-                    (end_year, end_month, str(row["id"])),
+                    (end_year, end_month, end_day, str(row["id"])),
                 )
 
     @staticmethod
@@ -1235,6 +1339,29 @@ def _validate_month_point(year: int, month: int) -> None:
         raise ValueError("Год указан некорректно.")
     if not 1 <= int(month) <= 12:
         raise ValueError("Месяц должен быть от 1 до 12.")
+
+
+def _validate_date_point(year: int, month: int, day: int) -> None:
+    _validate_month_point(year, month)
+    try:
+        date(int(year), int(month), int(day))
+    except ValueError as exc:
+        raise ValueError("День месяца указан некорректно.") from exc
+
+
+def _validate_date_precision(value: str) -> str:
+    precision = str(value or "month").strip().lower()
+    if precision not in {"month", "day"}:
+        raise ValueError("Точность даты должна быть month или day.")
+    return precision
+
+
+def _last_day_of_month(year: int, month: int) -> int:
+    if int(month) == 12:
+        first_next = date(int(year) + 1, 1, 1)
+    else:
+        first_next = date(int(year), int(month) + 1, 1)
+    return (first_next - timedelta(days=1)).day
 
 
 def _validate_period(

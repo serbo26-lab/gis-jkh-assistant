@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from PySide6.QtWidgets import (
     QDialog,
-    QComboBox,
     QDialogButtonBox,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -19,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database.models import House, HouseTariff, ManagementOrganization
+from gis_jkh_assistant.period_dates import parse_period_date
 
 from .widgets import SafeSpinBox
 
@@ -146,21 +145,6 @@ class HouseDialog(QDialog):
 
 
 class HouseTariffDialog(QDialog):
-    MONTHS = (
-        "Январь",
-        "Февраль",
-        "Март",
-        "Апрель",
-        "Май",
-        "Июнь",
-        "Июль",
-        "Август",
-        "Сентябрь",
-        "Октябрь",
-        "Ноябрь",
-        "Декабрь",
-    )
-
     def __init__(
         self,
         parent=None,
@@ -168,48 +152,49 @@ class HouseTariffDialog(QDialog):
         *,
         default_start_year: int | None = None,
         default_start_month: int | None = None,
+        default_start_day: int = 1,
+        default_start_precision: str = "month",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Тариф дома")
         self.setMinimumWidth(560)
 
-        current_year = datetime.now().year
-
         self.amount_edit = QLineEdit(tariff.amount if tariff else "")
         self.amount_edit.setPlaceholderText("Например: 25,04")
 
-        self.start_month_combo = QComboBox()
-        for number, name in enumerate(self.MONTHS, start=1):
-            self.start_month_combo.addItem(f"{number:02d} — {name}", number)
-
-        self.start_year_spin = SafeSpinBox()
-        self.start_year_spin.setRange(2010, 2100)
-
         if tariff:
-            start_year = tariff.start_year
-            start_month = tariff.start_month
+            start_text = tariff.effective_from_label
+        elif default_start_year and default_start_month:
+            if default_start_precision == "day":
+                start_text = (
+                    f"{int(default_start_day):02d}."
+                    f"{int(default_start_month):02d}.{int(default_start_year)}"
+                )
+            else:
+                start_text = f"{int(default_start_month):02d}.{int(default_start_year)}"
         else:
-            start_year = default_start_year or current_year
-            start_month = default_start_month or 1
+            today = date.today()
+            start_text = f"{today.month:02d}.{today.year}"
 
-        self.start_month_combo.setCurrentIndex(max(0, min(11, start_month - 1)))
-        self.start_year_spin.setValue(start_year)
+        self.start_date_edit = QLineEdit(start_text)
+        self.start_date_edit.setPlaceholderText("08.2025 или 10.08.2025")
+        self.start_date_edit.setToolTip(
+            "ММ.ГГГГ означает первый день месяца. "
+            "ДД.ММ.ГГГГ сохраняет точную дату."
+        )
 
         explanation = QLabel(
-            "Укажите дату, с которой меняется тариф. Он будет действовать дальше "
-            "автоматически — до следующей добавленной записи об изменении тарифа. "
-            "Если в следующем году тариф не менялся, новую строку добавлять не нужно."
+            "Укажите дату, с которой меняется тариф. Можно использовать ММ.ГГГГ "
+            "(например 08.2025 — это 01.08.2025) или точную дату ДД.ММ.ГГГГ "
+            "(например 10.08.2025). Тариф действует до дня перед следующим "
+            "изменением. Если тариф не менялся, новую строку добавлять не нужно."
         )
         explanation.setWordWrap(True)
         explanation.setObjectName("Muted")
 
         form = QFormLayout()
         form.addRow("Тариф, руб./м² в месяц *", self.amount_edit)
-
-        start_row = QHBoxLayout()
-        start_row.addWidget(self.start_month_combo, 1)
-        start_row.addWidget(self.start_year_spin)
-        form.addRow("Действует с", start_row)
+        form.addRow("Действует с *", self.start_date_edit)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -228,10 +213,13 @@ class HouseTariffDialog(QDialog):
         layout.addWidget(buttons)
 
     def values(self) -> dict[str, object]:
+        parsed = parse_period_date(self.start_date_edit.text(), boundary="start")
         return {
             "amount": self.amount_edit.text().strip(),
-            "start_year": self.start_year_spin.value(),
-            "start_month": int(self.start_month_combo.currentData()),
+            "start_year": parsed.value.year,
+            "start_month": parsed.value.month,
+            "start_day": parsed.value.day,
+            "start_precision": parsed.precision,
         }
 
     def _validate_and_accept(self) -> None:
@@ -254,5 +242,11 @@ class HouseTariffDialog(QDialog):
             self.amount_edit.setFocus()
             return
 
-        super().accept()
+        try:
+            parse_period_date(self.start_date_edit.text(), boundary="start")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Проверьте дату", str(exc))
+            self.start_date_edit.setFocus()
+            return
 
+        super().accept()
