@@ -883,6 +883,11 @@ async function runGisCommand(command) {
           contentGuid: prepared?.attachment?.contentGuid || null
         });
       }
+      if (preserved.length + localPhotos.length > 1000) {
+        throw new Error(
+          "К одной работе нельзя прикрепить более 1000 фотографий."
+        );
+      }
       return { photos: preserved.concat(localPhotos), mappings };
     }
 
