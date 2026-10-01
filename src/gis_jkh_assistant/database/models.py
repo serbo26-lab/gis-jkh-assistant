@@ -119,6 +119,7 @@ class WorkTemplateItem:
     volume: str | None = None
     quantity: str | None = None
     cost: str | None = None
+    allocation_percent: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
