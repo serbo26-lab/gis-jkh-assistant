@@ -279,7 +279,6 @@ class WorkFixationUnplannedItem:
     comment: str | None = None
     gis_fixed_work_guid: str | None = None
     managed_photo_content_guids_json: str | None = None
-    managed_photo_content_guids_json: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,3 +300,4 @@ class WorkFixationItem:
     fact_count: int | None = None
     fact_total_cost: str | None = None
     gis_fixed_work_guid: str | None = None
+    managed_photo_content_guids_json: str | None = None
