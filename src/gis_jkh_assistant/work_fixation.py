@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Iterable
+from typing import Iterable, Mapping
 
-from gis_jkh_assistant.database.models import WorkFixationItem
+from gis_jkh_assistant.database.models import (
+    WorkFixationItem,
+    WorkFixationPhoto,
+    WorkFixationUnplannedItem,
+)
 
 
-MIN_FIXATION_HELPER_VERSION = (0, 1, 6)
+MIN_FIXATION_HELPER_VERSION = (0, 1, 7)
 
 
 def helper_supports_fixations(version: str | None) -> bool:
@@ -54,6 +60,10 @@ def build_fixation_command_payload(
     year: int,
     month: int,
     items: Iterable[WorkFixationItem],
+    unplanned_items: Iterable[WorkFixationUnplannedItem] = (),
+    photos_by_planned: Mapping[str, Iterable[WorkFixationPhoto]] | None = None,
+    photos_by_unplanned: Mapping[str, Iterable[WorkFixationPhoto]] | None = None,
+    managed_unplanned_guids_json: str | None = None,
 ) -> dict:
     """Build one monthly desired fixation state for the browser helper."""
 
@@ -68,6 +78,9 @@ def build_fixation_command_payload(
     month = int(month)
     if not 1 <= month <= 12:
         raise ValueError("Месяц фиксации должен быть от 1 до 12.")
+
+    planned_photos = photos_by_planned or {}
+    unplanned_photos = photos_by_unplanned or {}
 
     result_items: list[dict] = []
     for item in items:
@@ -85,6 +98,44 @@ def build_fixation_command_payload(
                     else None
                 ),
                 "factTotalCost": _clean(item.fact_total_cost),
+                "managedPhotoContentGuids": _json_string_list(
+                    item.managed_photo_content_guids_json
+                ),
+                "photos": [
+                    _photo_payload(photo)
+                    for photo in planned_photos.get(item.id, ())
+                ],
+            }
+        )
+
+    result_unplanned: list[dict] = []
+    for item in unplanned_items:
+        result_unplanned.append(
+            {
+                "localItemId": item.id,
+                "gisGuid": item.gis_fixed_work_guid,
+                "workGuid": item.work_guid,
+                "workCode": item.work_code,
+                "workName": item.work_name,
+                "workTypeCode": item.work_type_code,
+                "workTypeGuid": item.work_type_guid,
+                "unitName": item.unit_name,
+                "factPrice": _clean(item.fact_price),
+                "factAmount": _clean(item.fact_amount),
+                "factCount": (
+                    int(item.fact_count)
+                    if item.fact_count is not None
+                    else None
+                ),
+                "factTotalCost": _clean(item.fact_total_cost),
+                "comment": _clean(item.comment),
+                "managedPhotoContentGuids": _json_string_list(
+                    item.managed_photo_content_guids_json
+                ),
+                "photos": [
+                    _photo_payload(photo)
+                    for photo in unplanned_photos.get(item.id, ())
+                ],
             }
         )
 
@@ -94,7 +145,38 @@ def build_fixation_command_payload(
         "year": year,
         "month": month,
         "items": result_items,
+        "unplannedItems": result_unplanned,
+        "managedUnplannedGuids": _json_string_list(
+            managed_unplanned_guids_json
+        ),
     }
+
+
+def _photo_payload(photo: WorkFixationPhoto) -> dict:
+    result = {
+        "localPhotoId": photo.id,
+        "fileName": photo.file_name,
+        "description": photo.description or photo.file_name,
+        "contentType": photo.content_type,
+        "fileSize": int(photo.file_size),
+        "remoteContentGuid": photo.remote_content_guid,
+        "remotePhotoGuid": photo.remote_photo_guid,
+    }
+    if photo.content is not None and not photo.remote_content_guid:
+        result["fileBase64"] = base64.b64encode(photo.content).decode("ascii")
+    return result
+
+
+def _json_string_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
 
 
 def item_has_fact(item: WorkFixationItem) -> bool:
