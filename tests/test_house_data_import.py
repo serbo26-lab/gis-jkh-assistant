@@ -10,11 +10,18 @@ from gis_jkh_assistant.period_dates import parse_period_date
 
 def test_period_date_precision() -> None:
     month = parse_period_date("08.2025", boundary="start")
+    month_end = parse_period_date("07.2026", boundary="end")
     exact = parse_period_date("10.08.2025", boundary="start")
+    exact_end = parse_period_date("15.11.2026", boundary="end")
+
     assert month.value.isoformat() == "2025-08-01"
     assert month.precision == "month"
+    assert month_end.value.isoformat() == "2026-07-31"
+    assert month_end.precision == "month"
     assert exact.value.isoformat() == "2025-08-10"
     assert exact.precision == "day"
+    assert exact_end.value.isoformat() == "2026-11-15"
+    assert exact_end.precision == "day"
 
 
 def test_house_data_template_roundtrip(tmp_path) -> None:
