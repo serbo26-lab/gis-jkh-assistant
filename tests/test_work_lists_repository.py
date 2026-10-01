@@ -168,3 +168,48 @@ def test_lazy_distribution_is_persisted_and_cloned(tmp_path) -> None:
     assert clone_item.cost == "100000"
 
     repository.close()
+
+
+def test_template_distribution_percentages_can_be_reused(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _org, house, template = _fixture(repository)
+
+    repository.save_work_template_allocation_percentages(
+        template.id,
+        {1: "100"},
+    )
+
+    template_items = repository.list_work_template_items(template.id)
+    assert len(template_items) == 1
+    assert template_items[0].allocation_percent == "100"
+
+    second_house = repository.create_house(
+        organization_id=template.organization_id,
+        address="г Ставрополь, ул Ленина, д. 291",
+    )
+    second_list = repository.create_work_list(
+        house_id=second_house.id,
+        base_year=2026,
+        template_id=template.id,
+    )
+
+    assert second_list.template_id == template.id
+    assert repository.list_work_list_items(second_list.id)[0].allocation_percent is None
+    assert repository.list_work_template_items(template.id)[0].allocation_percent == "100"
+
+    repository.close()
+
+
+def test_template_distribution_requires_matching_positions(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _org, _house, template = _fixture(repository)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Состав перечня отличается"):
+        repository.save_work_template_allocation_percentages(
+            template.id,
+            {2: "100"},
+        )
+
+    repository.close()
