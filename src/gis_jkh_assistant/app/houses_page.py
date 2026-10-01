@@ -915,12 +915,19 @@ class HousesPage(QWidget):
         )
         if result.warnings:
             preview += "\n\n" + "\n".join(result.warnings)
+        if area_changes:
+            preview += "\n\nПримеры изменений площади:\n"
+            for house, area, old_area in area_changes[:6]:
+                preview += (
+                    f"• {house.address}: {old_area or 'не указана'} → {area} м²\n"
+                )
         if tariff_conflicts:
-            preview += "\n\nПримеры замен:\n"
+            preview += "\n\nПримеры изменений тарифа:\n"
             for house, row, existing in tariff_conflicts[:6]:
                 preview += (
-                    f"• {house.address}: {existing.effective_from_label} "
-                    f"{existing.amount} → {row.amount}\n"
+                    f"• {house.address}: "
+                    f"{existing.effective_from_label} = {existing.amount} → "
+                    f"{row.start.input_label} = {row.amount}\n"
                 )
         if not area_changes and not tariff_changes:
             QMessageBox.information(
