@@ -215,8 +215,34 @@ class LazyDistributionDialog(QDialog):
 
         self.apply_quantity_to_all_button = QPushButton("Применить количество ко всем")
         controls.addWidget(self.apply_quantity_to_all_button, 2, 3, 1, 2)
+
+        self.save_template_percentages_button = QPushButton("Сохранить % для шаблона")
+        self.load_template_percentages_button = QPushButton("Загрузить % для шаблона")
+        template_percentages_hint = QLabel(
+            "Проценты сохраняются для выбранного шаблона и могут использоваться "
+            "в перечнях других домов с тем же шаблоном."
+        )
+        template_percentages_hint.setObjectName("Muted")
+        template_percentages_hint.setWordWrap(True)
+
+        controls.addWidget(QLabel("Проценты шаблона"), 3, 0)
+        controls.addWidget(self.save_template_percentages_button, 3, 1, 1, 2)
+        controls.addWidget(self.load_template_percentages_button, 3, 3, 1, 2)
+        controls.addWidget(template_percentages_hint, 4, 0, 1, 7)
         controls.setColumnStretch(3, 1)
         layout.addLayout(controls)
+
+        has_template = bool(work_list.template_id)
+        self.save_template_percentages_button.setEnabled(has_template)
+        self.load_template_percentages_button.setEnabled(has_template)
+        if not has_template:
+            no_template_tip = (
+                "У перечня нет пользовательского шаблона. "
+                "Сохранять и загружать проценты можно только для перечня, "
+                "созданного из шаблона."
+            )
+            self.save_template_percentages_button.setToolTip(no_template_tip)
+            self.load_template_percentages_button.setToolTip(no_template_tip)
 
         self._last_applied_default_quantity = initial_default_quantity
 
@@ -292,6 +318,12 @@ class LazyDistributionDialog(QDialog):
         self.months_edit.returnPressed.connect(self._calculate_total)
         self.default_quantity_edit.returnPressed.connect(self._apply_quantity_to_all)
         self.apply_quantity_to_all_button.clicked.connect(self._apply_quantity_to_all)
+        self.save_template_percentages_button.clicked.connect(
+            self._save_template_percentages
+        )
+        self.load_template_percentages_button.clicked.connect(
+            self._load_template_percentages
+        )
         self.table.itemChanged.connect(self._table_item_changed)
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self._apply)
@@ -301,6 +333,140 @@ class LazyDistributionDialog(QDialog):
     def _table_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() in (1, 3):
             self._refresh_preview()
+
+    def _template_percentage_values(self) -> dict[int, str | None]:
+        percentages: dict[int, str | None] = {}
+        for row, work_item in enumerate(self.items):
+            percent_item = self.table.item(row, 1)
+            text = percent_item.text().strip() if percent_item else ""
+            percentages[int(work_item.position)] = text or None
+        return percentages
+
+    def _validate_template_percentages(self) -> dict[int, str | None] | None:
+        percentages = self._template_percentage_values()
+        total = Decimal("0")
+        try:
+            for raw in percentages.values():
+                value = _decimal_or_zero(raw or "")
+                if value < 0:
+                    raise InvalidOperation
+                total += value
+        except InvalidOperation:
+            QMessageBox.warning(
+                self,
+                "Проверьте проценты",
+                "В процентах шаблона должны быть только числа не меньше нуля.",
+            )
+            return None
+
+        if total != Decimal("100"):
+            QMessageBox.warning(
+                self,
+                "Проверьте проценты",
+                "Сохранить проценты для шаблона можно только когда сумма "
+                "распределения составляет ровно 100%.",
+            )
+            return None
+        return percentages
+
+    def _save_template_percentages(self) -> None:
+        template_id = self.work_list.template_id
+        if not template_id:
+            return
+
+        percentages = self._validate_template_percentages()
+        if percentages is None:
+            return
+
+        template = self.repository.get_work_template(template_id)
+        template_name = template.name if template else "выбранного шаблона"
+        existing = self.repository.list_work_template_items(template_id)
+        if any(item.allocation_percent for item in existing):
+            answer = QMessageBox.question(
+                self,
+                "Обновить сохраненные проценты?",
+                f"Для шаблона «{template_name}» уже сохранено распределение. "
+                "Заменить его текущими процентами?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        try:
+            self.repository.save_work_template_allocation_percentages(
+                template_id,
+                percentages,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Не удалось сохранить проценты", str(exc))
+            return
+
+        QMessageBox.information(
+            self,
+            "Проценты сохранены",
+            f"Распределение сохранено для шаблона «{template_name}».",
+        )
+
+    def _load_template_percentages(self) -> None:
+        template_id = self.work_list.template_id
+        if not template_id:
+            return
+
+        template = self.repository.get_work_template(template_id)
+        template_name = template.name if template else "выбранного шаблона"
+        template_items = self.repository.list_work_template_items(template_id)
+
+        template_by_position = {
+            int(item.position): item
+            for item in template_items
+        }
+        same_composition = len(template_items) == len(self.items)
+        if same_composition:
+            for work_item in self.items:
+                template_item = template_by_position.get(int(work_item.position))
+                if template_item is None:
+                    same_composition = False
+                    break
+                if (
+                    template_item.work_code != work_item.work_code
+                    or template_item.work_name != work_item.work_name
+                    or template_item.work_guid != work_item.work_guid
+                ):
+                    same_composition = False
+                    break
+
+        if not same_composition:
+            QMessageBox.warning(
+                self,
+                "Проценты не загружены",
+                "Состав текущего перечня отличается от состава шаблона. "
+                "Автоматически сопоставить проценты нельзя.",
+            )
+            return
+
+        saved = {
+            int(item.position): item.allocation_percent
+            for item in template_items
+        }
+        if not any(value for value in saved.values()):
+            QMessageBox.information(
+                self,
+                "Нет сохраненных процентов",
+                f"Для шаблона «{template_name}» проценты еще не сохранялись.",
+            )
+            return
+
+        self.table.blockSignals(True)
+        try:
+            for row, work_item in enumerate(self.items):
+                percent_item = self.table.item(row, 1)
+                if percent_item is not None:
+                    percent_item.setText(
+                        saved.get(int(work_item.position)) or ""
+                    )
+        finally:
+            self.table.blockSignals(False)
+
+        self._refresh_preview()
 
     def _calculate_total(self) -> None:
         try:
