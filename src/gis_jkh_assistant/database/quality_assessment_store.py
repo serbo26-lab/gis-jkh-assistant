@@ -71,6 +71,7 @@ class QualityAssessmentAct:
     content: bytes | None = None
     remote_content_guid: str | None = None
     remote_act_guid: str | None = None
+    deleted: bool = False
     created_at: str | None = None
 
 
@@ -143,6 +144,7 @@ class QualityAssessmentStore:
                 content BLOB,
                 remote_content_guid TEXT,
                 remote_act_guid TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (quality_item_id)
                     REFERENCES quality_assessment_items(id) ON DELETE CASCADE
@@ -152,6 +154,17 @@ class QualityAssessmentStore:
                 ON quality_assessment_acts(quality_item_id, created_at);
             """
         )
+        columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(quality_assessment_acts)"
+            ).fetchall()
+        }
+        if "deleted" not in columns:
+            self.connection.execute(
+                "ALTER TABLE quality_assessment_acts "
+                "ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"
+            )
         self.connection.commit()
 
     @staticmethod
@@ -166,7 +179,9 @@ class QualityAssessmentStore:
 
     @staticmethod
     def _act(row: sqlite3.Row) -> QualityAssessmentAct:
-        return QualityAssessmentAct(**dict(row))
+        data = dict(row)
+        data["deleted"] = bool(data.get("deleted", 0))
+        return QualityAssessmentAct(**data)
 
     def get_period(self, period_id: str) -> QualityAssessmentPeriod | None:
         row = self.connection.execute(
@@ -319,15 +334,30 @@ class QualityAssessmentStore:
             )
             self._touch_period(item.quality_period_id)
 
-    def list_acts(self, item_id: str) -> list[QualityAssessmentAct]:
-        rows = self.connection.execute(
-            """
-            SELECT * FROM quality_assessment_acts
-            WHERE quality_item_id = ?
-            ORDER BY created_at, rowid
-            """,
-            (item_id,),
-        ).fetchall()
+    def list_acts(
+        self,
+        item_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[QualityAssessmentAct]:
+        if include_deleted:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM quality_assessment_acts
+                WHERE quality_item_id = ?
+                ORDER BY created_at, rowid
+                """,
+                (item_id,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM quality_assessment_acts
+                WHERE quality_item_id = ? AND deleted = 0
+                ORDER BY created_at, rowid
+                """,
+                (item_id,),
+            ).fetchall()
         return [self._act(row) for row in rows]
 
     def add_act(
@@ -396,16 +426,17 @@ class QualityAssessmentStore:
         ).fetchone()
         if row is None:
             return
-        if row["remote_content_guid"] or row["remote_act_guid"]:
-            raise ValueError(
-                "Удаление уже сохраненного в ГИС ЖКХ акта будет добавлено после "
-                "отдельной проверки сценария изменения."
-            )
         with self.connection:
-            self.connection.execute(
-                "DELETE FROM quality_assessment_acts WHERE id = ?",
-                (act_id,),
-            )
+            if row["remote_content_guid"] or row["remote_act_guid"]:
+                self.connection.execute(
+                    "UPDATE quality_assessment_acts SET deleted = 1 WHERE id = ?",
+                    (act_id,),
+                )
+            else:
+                self.connection.execute(
+                    "DELETE FROM quality_assessment_acts WHERE id = ?",
+                    (act_id,),
+                )
             self._touch_period(str(row["quality_period_id"]))
 
     def _touch_period(self, period_id: str) -> None:
@@ -465,11 +496,60 @@ class QualityAssessmentStore:
                 self.connection.execute(
                     """
                     UPDATE quality_assessment_acts
-                    SET remote_content_guid = ?, remote_act_guid = ?
+                    SET remote_content_guid = ?, remote_act_guid = ?, deleted = 0
                     WHERE id = ?
                     """,
                     (_clean(content_guid), _clean(act_guid), act_id),
                 )
+
+            self.connection.execute(
+                """
+                DELETE FROM quality_assessment_acts
+                WHERE deleted = 1
+                  AND quality_item_id IN (
+                      SELECT id
+                      FROM quality_assessment_items
+                      WHERE quality_period_id = ?
+                  )
+                """,
+                (period_id,),
+            )
+
+    def mark_cancelled(self, period_id: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE quality_assessment_periods
+                SET estimation_guid = NULL,
+                    gis_status = 'CANCELLED',
+                    gis_last_sync_at = ?,
+                    gis_last_error = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (_now(), _now(), period_id),
+            )
+            self.connection.execute(
+                """
+                UPDATE quality_assessment_items
+                SET gis_estimation_item_guid = NULL
+                WHERE quality_period_id = ?
+                """,
+                (period_id,),
+            )
+            self.connection.execute(
+                """
+                UPDATE quality_assessment_acts
+                SET remote_act_guid = NULL,
+                    deleted = 0
+                WHERE quality_item_id IN (
+                    SELECT id
+                    FROM quality_assessment_items
+                    WHERE quality_period_id = ?
+                )
+                """,
+                (period_id,),
+            )
 
     def set_error(self, period_id: str, message: str) -> None:
         with self.connection:
