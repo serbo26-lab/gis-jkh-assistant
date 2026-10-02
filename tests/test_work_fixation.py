@@ -261,9 +261,9 @@ def test_unplanned_work_and_photo_are_in_gis_payload(tmp_path) -> None:
         work_code="20",
         work_name="Внеплановая работа",
         work_guid="a63d1b8b-6ca4-439f-8c78-71afe7c004c0",
-        work_type_code="1",
-        work_type_name="Обслуживание",
-        unit_name="ед",
+        work_type_code="custom-type-code",
+        work_type_name="Пользовательский вид работ",
+        unit_name="кв. м",
         fact_price="2",
         fact_amount="2",
         fact_count=2,
@@ -299,8 +299,8 @@ def test_unplanned_work_and_photo_are_in_gis_payload(tmp_path) -> None:
     assert payload["items"][0]["photos"][0]["fileName"] == "plan.jpg"
     assert payload["items"][0]["photos"][0]["fileBase64"]
     stored_unplanned = repository.list_work_fixation_unplanned_items(period.id)
-    assert stored_unplanned[0].work_type_name == "Обслуживание"
-    assert stored_unplanned[0].unit_name == "ед"
+    assert stored_unplanned[0].work_type_name == "Пользовательский вид работ"
+    assert stored_unplanned[0].unit_name == "кв. м"
 
     assert payload["unplannedItems"][0]["workCode"] == "20"
     assert payload["unplannedItems"][0]["factCount"] == 2
@@ -338,10 +338,10 @@ def test_managed_gis_guids_allow_deleting_published_extras(tmp_path) -> None:
         unplanned_item_guids={extra.id: "remote-unplanned-guid"},
         unplanned_item_metadata={
             extra.id: {
-                "work_type_code": "1",
+                "work_type_code": "custom-type-code",
                 "work_type_guid": "work-type-guid",
-                "work_type_name": "Обслуживание",
-                "unit_name": "ед",
+                "work_type_name": "Произвольный вид работ",
+                "unit_name": "шт",
             }
         },
         photo_guids={photo.id: ("remote-content-guid", "remote-photo-guid")},
@@ -349,10 +349,10 @@ def test_managed_gis_guids_allow_deleting_published_extras(tmp_path) -> None:
 
     refreshed_item = repository.list_work_fixation_items(period.id)[0]
     refreshed_unplanned = repository.list_work_fixation_unplanned_items(period.id)[0]
-    assert refreshed_unplanned.work_type_code == "1"
+    assert refreshed_unplanned.work_type_code == "custom-type-code"
     assert refreshed_unplanned.work_type_guid == "work-type-guid"
-    assert refreshed_unplanned.work_type_name == "Обслуживание"
-    assert refreshed_unplanned.unit_name == "ед"
+    assert refreshed_unplanned.work_type_name == "Произвольный вид работ"
+    assert refreshed_unplanned.unit_name == "шт"
 
     refreshed_period = repository.get_work_fixation_period(period.id)
     assert refreshed_period is not None
