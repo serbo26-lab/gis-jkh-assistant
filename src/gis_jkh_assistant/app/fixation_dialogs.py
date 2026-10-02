@@ -403,6 +403,7 @@ class AddUnplannedWorkDialog(QDialog):
             "work_guid": str(option.get("guid") or ""),
             "work_type_code": option.get("workTypeCode"),
             "work_type_guid": option.get("workTypeGuid"),
+            "work_type_name": option.get("workTypeName"),
             "unit_name": option.get("unitName"),
             "fact_price": clean(self.price_edit),
             "fact_amount": clean(self.amount_edit),
