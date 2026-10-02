@@ -205,8 +205,8 @@ def test_clear_fixation_removes_all_fact_values(tmp_path) -> None:
 
 def test_fixation_helper_version() -> None:
     assert not helper_supports_fixations(None)
-    assert not helper_supports_fixations("0.1.7")
-    assert helper_supports_fixations("0.1.8")
+    assert not helper_supports_fixations("0.1.8")
+    assert helper_supports_fixations("0.1.9")
     assert helper_supports_fixations("0.2.0")
 
 
@@ -262,6 +262,7 @@ def test_unplanned_work_and_photo_are_in_gis_payload(tmp_path) -> None:
         work_name="Внеплановая работа",
         work_guid="a63d1b8b-6ca4-439f-8c78-71afe7c004c0",
         work_type_code="1",
+        work_type_name="Обслуживание",
         unit_name="ед",
         fact_price="2",
         fact_amount="2",
@@ -297,6 +298,10 @@ def test_unplanned_work_and_photo_are_in_gis_payload(tmp_path) -> None:
 
     assert payload["items"][0]["photos"][0]["fileName"] == "plan.jpg"
     assert payload["items"][0]["photos"][0]["fileBase64"]
+    stored_unplanned = repository.list_work_fixation_unplanned_items(period.id)
+    assert stored_unplanned[0].work_type_name == "Обслуживание"
+    assert stored_unplanned[0].unit_name == "ед"
+
     assert payload["unplannedItems"][0]["workCode"] == "20"
     assert payload["unplannedItems"][0]["factCount"] == 2
     assert payload["unplannedItems"][0]["comment"] == "комментарий"
