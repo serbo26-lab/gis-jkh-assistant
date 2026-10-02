@@ -1293,6 +1293,16 @@ async function runGisCommand(command) {
       );
     }
 
+    async function searchQualityActs(estimationItemGuid) {
+      const data = await request(
+        "POST",
+        "/workplanning/api/rest/services/search/quality-acts",
+        { estimationItemGuid: String(estimationItemGuid || "") },
+        STATE_WORKPLANNING
+      );
+      return Array.isArray(data?.actList) ? data.actList : [];
+    }
+
     function matchQualityItem(localItem, remoteItems) {
       const workGuid = String(localItem?.workGuid || "");
       const workCode = String(localItem?.workCode || "");
@@ -1320,6 +1330,37 @@ async function runGisCommand(command) {
         throw new Error("Некорректное значение «" + label + "»: " + String(value));
       }
       return text;
+    }
+
+    function qualityActDateTime(value) {
+      const text = String(value || "").trim();
+      if (!text) return text;
+      if (/^\d{2}\.\d{2}\.\d{4}$/.test(text)) {
+        return text + " 00:00:00:000";
+      }
+      return text;
+    }
+
+    function normalizeRemoteQualityAct(act) {
+      const result = Object.assign({}, act || {});
+      result.regDate = qualityActDateTime(result.regDate);
+      if (result.attachment) {
+        result.attachment = Object.assign({}, result.attachment);
+      }
+      if (result.period) {
+        result.period = Object.assign({}, result.period);
+      }
+      return result;
+    }
+
+    function remoteQualityActMatchesLocal(localAct, remoteAct) {
+      const remoteGuid = String(remoteAct?.guid || "");
+      const contentGuid = String(remoteAct?.attachment?.contentGuid || "");
+      const localRemoteGuid = String(localAct?.remoteActGuid || "");
+      const localContentGuid = String(localAct?.remoteContentGuid || "");
+      if (localRemoteGuid && remoteGuid === localRemoteGuid) return true;
+      if (localContentGuid && contentGuid === localContentGuid) return true;
+      return false;
     }
 
     async function uploadQualityActFile(act) {
@@ -1402,6 +1443,114 @@ async function runGisCommand(command) {
       };
     }
 
+    async function qualityActAttachment(localAct) {
+      if (!localAct?.remoteContentGuid) {
+        return uploadQualityActFile(localAct);
+      }
+
+      const contentGuid = String(localAct.remoteContentGuid);
+      const details = await request(
+        "GET",
+        "/filestore/api/rest/services/filestore/fileDetail?fileUid=" +
+          encodeURIComponent(contentGuid),
+        undefined,
+        STATE_WORKPLANNING
+      );
+      if (details?.infected) {
+        throw new Error("ГИС ЖКХ сообщил, что файл акта заражён.");
+      }
+      return {
+        contentGuid,
+        attachment: {
+          contentType: details?.contentType || localAct?.contentType || null,
+          contentGuid,
+          fileSize: Number(details?.fileSize ?? localAct?.fileSize ?? 0),
+          fileName: details?.fileName || localAct?.fileName || null,
+          description:
+            details?.description ||
+            localAct?.description ||
+            localAct?.fileName ||
+            null
+        }
+      };
+    }
+
+    async function createLocalQualityAct(localAct, remote, house) {
+      const actType = String(localAct?.actType || "");
+      if (!["ACCEPTANCE_ACT", "QUALITY_VIOLATION_ACT"].includes(actType)) {
+        throw new Error("Неизвестный тип акта оценки качества.");
+      }
+
+      await request(
+        "POST",
+        "/workplanning/api/rest/services/checkunique/quality-act",
+        {
+          regDate: qualityActDateTime(localAct?.regDate),
+          number: String(localAct?.number || ""),
+          actType,
+          orgRootGuid: remote?.orgRootGuid || null,
+          houseGuid: house.guid
+        },
+        STATE_WORKPLANNING
+      );
+
+      const uploaded = await qualityActAttachment(localAct);
+      return {
+        localActId: localAct?.localActId || null,
+        contentGuid: uploaded.contentGuid,
+        act: {
+          guid: null,
+          regDate: qualityActDateTime(localAct?.regDate),
+          number: String(localAct?.number || ""),
+          attachment: uploaded.attachment,
+          period: {
+            from: String(localAct?.periodFrom || ""),
+            to: String(localAct?.periodTo || "")
+          },
+          actType
+        }
+      };
+    }
+
+    function qualityValues(localItem, qualityActs) {
+      const daysPerMonth = Number(localItem?.daysPerMonth);
+      const daysCount =
+        localItem?.daysCount === null || localItem?.daysCount === undefined
+          ? null
+          : Number(localItem.daysCount);
+      if (
+        daysCount !== null &&
+        (!Number.isInteger(daysCount) || daysCount < 0 || daysCount > daysPerMonth)
+      ) {
+        throw new Error("Некорректное количество дней ненадлежащего качества.");
+      }
+
+      const hasViolation = qualityActs.some(
+        (act) => String(act?.actType || "") === "QUALITY_VIOLATION_ACT"
+      );
+      if (hasViolation && daysCount === null) {
+        throw new Error(
+          "Для акта нарушения качества нужно указать количество дней " +
+            "ненадлежащего качества."
+        );
+      }
+
+      const reductionText = qualityDecimalText(
+        localItem?.costReduction,
+        "Размер уменьшения платы"
+      );
+      return {
+        cost: qualityDecimalText(
+          localItem?.cost,
+          "Стоимость в ежемесячной плате"
+        ),
+        daysCount: daysCount === null ? null : String(daysCount),
+        daysPerMonth,
+        costReduction: reductionText === null ? null : Number(reductionText),
+        hasViolation
+      };
+    }
+
     async function prepareNewQualityAssessment(localPayload) {
       const reportingPeriod = await findReportingPeriod(localPayload);
       const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
@@ -1415,14 +1564,12 @@ async function runGisCommand(command) {
       if (existingGuid) {
         if (!knownGuid || String(existingGuid) !== String(knownGuid)) {
           throw new Error(
-            "Для выбранного месяца в ГИС ЖКХ уже существует оценка качества. " +
-              "Первый dev30 пока не перезаписывает существующую оценку; " +
-              "сначала проверим сценарий изменения отдельно."
+            "Для выбранного месяца в ГИС ЖКХ уже существует другая оценка качества."
           );
         }
         throw new Error(
-          "Проект оценки уже сохранён в ГИС ЖКХ. Для размещения используйте кнопку " +
-            "«Разместить информацию»."
+          "Оценка качества уже сохранена в ГИС ЖКХ. " +
+            "Для изменения используйте «Разместить изменения»."
         );
       }
 
@@ -1434,7 +1581,6 @@ async function runGisCommand(command) {
       }
 
       const estimationList = [];
-      const itemMappings = [];
       const actMappings = [];
 
       for (const localItem of localItems) {
@@ -1455,86 +1601,29 @@ async function runGisCommand(command) {
         }
 
         const qualityActs = [];
-        let hasViolation = false;
-        for (const act of localActs) {
-          const actType = String(act?.actType || "");
-          if (!["ACCEPTANCE_ACT", "QUALITY_VIOLATION_ACT"].includes(actType)) {
-            throw new Error("Неизвестный тип акта оценки качества.");
-          }
-          if (actType === "QUALITY_VIOLATION_ACT") hasViolation = true;
-
-          await request(
-            "POST",
-            "/workplanning/api/rest/services/checkunique/quality-act",
-            {
-              regDate: String(act?.regDate || "") + " 00:00:00:000",
-              number: String(act?.number || ""),
-              actType,
-              orgRootGuid: remote?.orgRootGuid || null,
-              houseGuid: house.guid
-            },
-            STATE_WORKPLANNING
-          );
-
-          const uploaded = await uploadQualityActFile(act);
-          qualityActs.push({
-            guid: null,
-            regDate: String(act?.regDate || "") + " 00:00:00:000",
-            number: String(act?.number || ""),
-            attachment: uploaded.attachment,
-            period: {
-              from: String(act?.periodFrom || ""),
-              to: String(act?.periodTo || "")
-            },
-            actType
-          });
+        for (const localAct of localActs) {
+          const created = await createLocalQualityAct(localAct, remote, house);
+          qualityActs.push(created.act);
           actMappings.push({
-            localActId: act?.localActId || null,
-            contentGuid: uploaded.contentGuid,
+            localActId: created.localActId,
+            contentGuid: created.contentGuid,
             guid: null
           });
         }
 
-        const daysPerMonth = Number(localItem?.daysPerMonth);
-        const daysCount =
-          localItem?.daysCount === null || localItem?.daysCount === undefined
-            ? null
-            : Number(localItem.daysCount);
-        if (
-          daysCount !== null &&
-          (!Number.isInteger(daysCount) || daysCount < 0 || daysCount > daysPerMonth)
-        ) {
-          throw new Error("Некорректное количество дней ненадлежащего качества.");
-        }
-        if (hasViolation && daysCount === null) {
-          throw new Error(
-            "Для акта нарушения качества нужно указать количество дней " +
-              "ненадлежащего качества."
-          );
-        }
-
-        const reductionText = qualityDecimalText(
-          localItem?.costReduction,
-          "Размер уменьшения платы"
-        );
-        const resultItem = {
+        const values = qualityValues(localItem, qualityActs);
+        estimationList.push({
           guid: remoteItem?.guid || null,
           work: remoteItem?.work || null,
           workType: remoteItem?.workType || null,
           workName: remoteItem?.workName || localItem?.workName || null,
-          cost: qualityDecimalText(localItem?.cost, "Стоимость в ежемесячной плате"),
-          daysCount: daysCount === null ? null : String(daysCount),
-          daysPerMonth,
-          costReduction: reductionText === null ? null : Number(reductionText),
+          cost: values.cost,
+          daysCount: values.daysCount,
+          daysPerMonth: values.daysPerMonth,
+          costReduction: values.costReduction,
           qualityAct: qualityActs,
           hasQualityActs: true,
-          hasQualityViolationActs: hasViolation
-        };
-        estimationList.push(resultItem);
-        itemMappings.push({
-          localItemId: localItem?.localItemId || null,
-          workGuid: localItem?.workGuid || null,
-          workCode: localItem?.workCode || null
+          hasQualityViolationActs: values.hasViolation
         });
       }
 
@@ -1546,7 +1635,146 @@ async function runGisCommand(command) {
           estimationList,
           orgRootGuid: remote?.orgRootGuid || null
         },
-        itemMappings,
+        actMappings
+      };
+    }
+
+    async function prepareExistingQualityAssessment(
+      localPayload,
+      reportingPeriod,
+      remote
+    ) {
+      const knownGuid = String(localPayload?.knownEstimationGuid || "");
+      const remoteGuid = String(remote?.estimation?.guid || "");
+      if (!remoteGuid) {
+        throw new Error("Сохранённая оценка качества в ГИС ЖКХ не найдена.");
+      }
+      if (!knownGuid || knownGuid !== remoteGuid) {
+        throw new Error(
+          "Оценка качества в ГИС ЖКХ изменилась после последней синхронизации. " +
+            "Обновите данные перед повторным изменением."
+        );
+      }
+
+      const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
+      const remoteItems = Array.isArray(remote?.estimationList)
+        ? remote.estimationList
+        : [];
+      const localItems = Array.isArray(localPayload?.items)
+        ? localPayload.items
+        : [];
+      if (!localItems.length) {
+        throw new Error("В оценку качества не включено ни одной работы.");
+      }
+
+      const estimationList = [];
+      const actMappings = [];
+
+      for (const localItem of localItems) {
+        const remoteItem = matchQualityItem(localItem, remoteItems);
+        if (!remoteItem?.guid) {
+          throw new Error(
+            "Не удалось найти сохранённую строку оценки качества для работы «" +
+              String(localItem?.workName || "") +
+              "»."
+          );
+        }
+
+        const remoteActs = await searchQualityActs(remoteItem.guid);
+        const removedActGuids = new Set(
+          (localItem?.removedRemoteActGuids || []).map(String)
+        );
+        const removedContentGuids = new Set(
+          (localItem?.removedRemoteContentGuids || []).map(String)
+        );
+        const localActs = Array.isArray(localItem?.acts) ? localItem.acts : [];
+
+        const claimedRemoteGuids = new Set();
+        const claimedContentGuids = new Set();
+        for (const localAct of localActs) {
+          if (localAct?.remoteActGuid) {
+            claimedRemoteGuids.add(String(localAct.remoteActGuid));
+          }
+          if (localAct?.remoteContentGuid) {
+            claimedContentGuids.add(String(localAct.remoteContentGuid));
+          }
+        }
+
+        const qualityActs = remoteActs
+          .filter((act) => {
+            const guid = String(act?.guid || "");
+            const contentGuid = String(act?.attachment?.contentGuid || "");
+            if (guid && removedActGuids.has(guid)) return false;
+            if (contentGuid && removedContentGuids.has(contentGuid)) return false;
+            if (guid && claimedRemoteGuids.has(guid)) return false;
+            if (contentGuid && claimedContentGuids.has(contentGuid)) return false;
+            return true;
+          })
+          .map(normalizeRemoteQualityAct);
+
+        for (const localAct of localActs) {
+          const matched = remoteActs.find((remoteAct) =>
+            remoteQualityActMatchesLocal(localAct, remoteAct)
+          );
+          if (matched) {
+            const normalized = normalizeRemoteQualityAct(matched);
+            qualityActs.push(normalized);
+            actMappings.push({
+              localActId: localAct?.localActId || null,
+              contentGuid: normalized?.attachment?.contentGuid || null,
+              guid: normalized?.guid || null
+            });
+            continue;
+          }
+
+          const created = await createLocalQualityAct(localAct, remote, house);
+          qualityActs.push(created.act);
+          actMappings.push({
+            localActId: created.localActId,
+            contentGuid: created.contentGuid,
+            guid: null
+          });
+        }
+
+        if (!qualityActs.length) {
+          throw new Error(
+            "Для работы «" + String(localItem?.workName || "") + "» не добавлен акт."
+          );
+        }
+
+        const values = qualityValues(localItem, qualityActs);
+        estimationList.push({
+          guid: remoteItem.guid,
+          work: remoteItem?.work || null,
+          workType: remoteItem?.workType || null,
+          workName: remoteItem?.workName || localItem?.workName || null,
+          cost: values.cost,
+          daysCount: values.daysCount,
+          daysPerMonth: values.daysPerMonth,
+          costReduction: values.costReduction,
+          qualityAct: qualityActs,
+          hasQualityActs: true,
+          hasQualityViolationActs: values.hasViolation
+        });
+      }
+
+      const estimation = Object.assign({}, remote.estimation, {
+        status: "DRAFT",
+        period: {
+          month: Number(localPayload.month),
+          year: Number(localPayload.year)
+        },
+        fiasHouseCode: String(localPayload.fiasHouseCode || "")
+      });
+
+      return {
+        reportingPeriod,
+        remote,
+        body: {
+          estimation,
+          estimationList,
+          orgRootGuid: remote?.orgRootGuid || null
+        },
         actMappings
       };
     }
@@ -1574,6 +1802,57 @@ async function runGisCommand(command) {
       };
     }
 
+    async function qualityResultWithActs(
+      remote,
+      reportingPeriod,
+      localItems,
+      fallbackMappings = []
+    ) {
+      const result = qualityResult(
+        remote,
+        reportingPeriod,
+        localItems,
+        fallbackMappings
+      );
+      const mappings = [];
+      const remoteItems = Array.isArray(remote?.estimationList)
+        ? remote.estimationList
+        : [];
+
+      for (const localItem of localItems || []) {
+        const matchedItem = matchQualityItem(localItem, remoteItems);
+        if (!matchedItem?.guid) continue;
+        const remoteActs = await searchQualityActs(matchedItem.guid);
+        for (const localAct of localItem?.acts || []) {
+          let matchedAct = remoteActs.find((remoteAct) =>
+            remoteQualityActMatchesLocal(localAct, remoteAct)
+          );
+          if (!matchedAct) {
+            matchedAct =
+              remoteActs.find(
+                (remoteAct) =>
+                  String(remoteAct?.number || "") ===
+                    String(localAct?.number || "") &&
+                  String(remoteAct?.actType || "") ===
+                    String(localAct?.actType || "") &&
+                  String(remoteAct?.period?.from || "") ===
+                    String(localAct?.periodFrom || "") &&
+                  String(remoteAct?.period?.to || "") ===
+                    String(localAct?.periodTo || "")
+              ) || null;
+          }
+          if (!matchedAct) continue;
+          mappings.push({
+            localActId: localAct?.localActId || null,
+            contentGuid: matchedAct?.attachment?.contentGuid || null,
+            guid: matchedAct?.guid || null
+          });
+        }
+      }
+      if (mappings.length) result.acts = mappings;
+      return result;
+    }
+
     async function saveNewQualityAssessment(localPayload) {
       const prepared = await prepareNewQualityAssessment(localPayload);
       await request(
@@ -1589,7 +1868,7 @@ async function runGisCommand(command) {
       return {
         prepared,
         fresh,
-        result: qualityResult(
+        result: await qualityResultWithActs(
           fresh,
           prepared.reportingPeriod,
           localPayload.items,
@@ -1598,69 +1877,81 @@ async function runGisCommand(command) {
       };
     }
 
+    function mergeSavedActMappings(localPayload, mappings) {
+      const byId = new Map(
+        (mappings || [])
+          .filter((item) => item?.localActId)
+          .map((item) => [String(item.localActId), item])
+      );
+      return Object.assign({}, localPayload, {
+        items: (localPayload?.items || []).map((item) =>
+          Object.assign({}, item, {
+            acts: (item?.acts || []).map((act) => {
+              const mapping = byId.get(String(act?.localActId || ""));
+              if (!mapping) return act;
+              return Object.assign({}, act, {
+                remoteContentGuid:
+                  mapping.contentGuid || act?.remoteContentGuid || null,
+                remoteActGuid: mapping.guid || act?.remoteActGuid || null
+              });
+            })
+          })
+        )
+      });
+    }
+
     async function approveQualityAssessment(localPayload) {
       const reportingPeriod = await findReportingPeriod(localPayload);
       let remote = await searchQualityAssessment(reportingPeriod.guid, false);
-      const knownGuid = localPayload?.knownEstimationGuid || null;
+      let effectivePayload = localPayload;
 
       if (!remote?.estimation?.guid) {
         const saved = await saveNewQualityAssessment(localPayload);
         remote = saved.fresh;
-      } else if (
-        !knownGuid ||
-        String(remote.estimation.guid) !== String(knownGuid)
-      ) {
-        throw new Error(
-          "В ГИС ЖКХ уже существует другая оценка качества для выбранного месяца. " +
-            "Изменение существующей оценки проверим отдельным шагом."
-        );
+        effectivePayload = mergeSavedActMappings(localPayload, saved.result.acts);
+        effectivePayload.knownEstimationGuid =
+          saved.result.estimationGuid || remote?.estimation?.guid || null;
       }
 
-      const remoteItems = Array.isArray(remote?.estimationList)
-        ? remote.estimationList
-        : [];
-      const selected = [];
-      for (const localItem of localPayload?.items || []) {
-        const matched = matchQualityItem(localItem, remoteItems);
-        if (!matched) {
-          throw new Error("Не удалось найти сохранённую строку оценки качества.");
-        }
-        selected.push({
-          guid: matched?.guid || null,
-          work: matched?.work || null,
-          workType: matched?.workType || null,
-          workName: matched?.workName || localItem?.workName || null,
-          cost: matched?.cost ?? null,
-          daysCount: matched?.daysCount ?? null,
-          daysPerMonth: matched?.daysPerMonth ?? null,
-          costReduction: matched?.costReduction ?? null,
-          hasQualityActs: Boolean(matched?.hasQualityActs),
-          hasQualityViolationActs: Boolean(matched?.hasQualityViolationActs)
-        });
-      }
-      if (!selected.length) {
-        throw new Error("В оценку качества не включено ни одной работы.");
-      }
+      const prepared = await prepareExistingQualityAssessment(
+        effectivePayload,
+        reportingPeriod,
+        remote
+      );
 
       await request(
         "POST",
         "/workplanning/api/rest/services/approve/estimation",
-        {
-          estimation: remote.estimation,
-          estimationList: selected,
-          orgRootGuid: remote?.orgRootGuid || null
-        },
+        prepared.body,
         STATE_WORKPLANNING
       );
       const fresh = await searchQualityAssessment(reportingPeriod.guid, false);
-      const result = qualityResult(
+      const result = await qualityResultWithActs(
         fresh,
         reportingPeriod,
-        localPayload.items,
-        []
+        effectivePayload.items,
+        prepared.actMappings
       );
       result.gisStatus = "APPROVED";
       return result;
+    }
+
+    async function cancelQualityAssessment(localPayload) {
+      const reportingPeriod = await findReportingPeriod(localPayload);
+      await request(
+        "PUT",
+        "/workplanning/api/rest/services/cancel/estimation",
+        { workReportingPeriodGuid: reportingPeriod.guid },
+        STATE_WORKPLANNING
+      );
+      return {
+        cancelled: true,
+        reportingPeriodGuid: reportingPeriod.guid,
+        estimationGuid: null,
+        gisStatus: "CANCELLED",
+        items: [],
+        acts: []
+      };
     }
 
     if (command.type === "list_unplanned_work_options") {
@@ -1682,6 +1973,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await approveQualityAssessment(payload)
+      };
+    }
+
+    if (command.type === "cancel_quality_assessment") {
+      return {
+        ok: true,
+        result: await cancelQualityAssessment(payload)
       };
     }
 
