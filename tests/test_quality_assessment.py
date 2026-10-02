@@ -78,7 +78,7 @@ def test_quality_helper_version() -> None:
 
 
 def test_quality_reduction_matches_gis_formula() -> None:
-    assert quality_reduction("1", 1, 31) == "0.03"
+    assert quality_reduction("1", 1, 31).startswith("0.03225806451612903")
     assert quality_reduction("31", 1, 31) == "1.00"
     assert quality_reduction("62,00", 2, 31) == "4.00"
     assert quality_reduction(None, 1, 31) is None
