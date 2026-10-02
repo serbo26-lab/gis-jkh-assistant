@@ -1279,12 +1279,409 @@ async function runGisCommand(command) {
       };
     }
 
+
+    async function searchQualityAssessment(reportingPeriodGuid, readOnly = false) {
+      return request(
+        "POST",
+        "/workplanning/api/rest/services/search/estimations",
+        {
+          workReportingPeriodGuid: reportingPeriodGuid,
+          readOnly: Boolean(readOnly),
+          notInStatuses: ["CANCELLED"]
+        },
+        STATE_WORKPLANNING
+      );
+    }
+
+    function matchQualityItem(localItem, remoteItems) {
+      const workGuid = String(localItem?.workGuid || "");
+      const workCode = String(localItem?.workCode || "");
+      return (
+        remoteItems.find(
+          (item) => workGuid && String(item?.work?.guid || "") === workGuid
+        ) ||
+        remoteItems.find(
+          (item) => workCode && String(item?.work?.code || "") === workCode
+        ) ||
+        null
+      );
+    }
+
+    function qualityDecimalText(value, label) {
+      if (value === null || value === undefined || String(value).trim() === "") {
+        return null;
+      }
+      const text = String(value)
+        .replace(/\u00a0/g, "")
+        .replace(/\s+/g, "")
+        .replace(",", ".");
+      const number = Number(text);
+      if (!Number.isFinite(number) || number < 0) {
+        throw new Error("Некорректное значение «" + label + "»: " + String(value));
+      }
+      return text;
+    }
+
+    async function uploadQualityActFile(act) {
+      const encoded = String(act?.fileBase64 || "");
+      if (!encoded) {
+        throw new Error("Не передан файл акта.");
+      }
+      const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+      if (!bytes.length) throw new Error("Файл акта пуст.");
+      if (bytes.length > 50 * 1024 * 1024) {
+        throw new Error("Размер файла акта превышает 50 МБ.");
+      }
+
+      const fileName = String(act?.fileName || "act.pdf");
+      const description = String(act?.description || fileName);
+      const contentType = String(act?.contentType || "application/octet-stream");
+      const blob = new Blob([bytes], { type: contentType });
+      const identifier = blob.size + "-" + fileName.replace(/[^\w-]/g, "");
+
+      const form = new FormData();
+      const values = {
+        context: "homemanagement",
+        description,
+        fileName,
+        chunkNumber: "1",
+        totalChunks: "1",
+        fileSize: String(blob.size),
+        flowChunkNumber: "1",
+        flowChunkSize: "5242880",
+        flowCurrentChunkSize: String(blob.size),
+        flowTotalSize: String(blob.size),
+        flowIdentifier: identifier,
+        flowFilename: fileName,
+        flowRelativePath: fileName,
+        flowTotalChunks: "1"
+      };
+      for (const [key, value] of Object.entries(values)) form.append(key, value);
+      form.append("file", blob, fileName);
+
+      const response = await fetch(
+        "/filestore/api/rest/services/filestore/uploadFile",
+        { method: "POST", body: form, credentials: "include" }
+      );
+      if (!response.ok) {
+        throw new Error("Не удалось загрузить акт в файловое хранилище ГИС ЖКХ.");
+      }
+      const uploaded = await response.json();
+      if (!uploaded?.guid) {
+        throw new Error("ГИС ЖКХ не вернул GUID загруженного акта.");
+      }
+
+      let details = uploaded;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        details = await request(
+          "GET",
+          "/filestore/api/rest/services/filestore/fileDetail?fileUid=" +
+            encodeURIComponent(String(uploaded.guid)),
+          undefined,
+          STATE_WORKPLANNING
+        );
+        if (details?.infected) {
+          throw new Error("ГИС ЖКХ сообщил, что файл акта заражён.");
+        }
+        if (details?.virusChecked && details?.downloadAvailable) break;
+        await sleep(500);
+      }
+      if (!details?.virusChecked || !details?.downloadAvailable) {
+        throw new Error("ГИС ЖКХ слишком долго проверяет файл акта.");
+      }
+
+      return {
+        contentGuid: uploaded.guid,
+        attachment: {
+          contentType: details?.contentType || contentType,
+          contentGuid: uploaded.guid,
+          fileSize: Number(details?.fileSize ?? blob.size),
+          fileName: details?.fileName || fileName,
+          description: details?.description || description
+        }
+      };
+    }
+
+    async function prepareNewQualityAssessment(localPayload) {
+      const reportingPeriod = await findReportingPeriod(localPayload);
+      const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
+      const remote = await searchQualityAssessment(reportingPeriod.guid, false);
+      if (!remote?.estimation || !Array.isArray(remote?.estimationList)) {
+        throw new Error("ГИС ЖКХ не вернул данные формы оценки качества.");
+      }
+
+      const existingGuid = remote?.estimation?.guid || null;
+      const knownGuid = localPayload?.knownEstimationGuid || null;
+      if (existingGuid) {
+        if (!knownGuid || String(existingGuid) !== String(knownGuid)) {
+          throw new Error(
+            "Для выбранного месяца в ГИС ЖКХ уже существует оценка качества. " +
+              "Первый dev30 пока не перезаписывает существующую оценку; " +
+              "сначала проверим сценарий изменения отдельно."
+          );
+        }
+        throw new Error(
+          "Проект оценки уже сохранён в ГИС ЖКХ. Для размещения используйте кнопку " +
+            "«Разместить информацию»."
+        );
+      }
+
+      const localItems = Array.isArray(localPayload?.items)
+        ? localPayload.items
+        : [];
+      if (!localItems.length) {
+        throw new Error("В оценку качества не включено ни одной работы.");
+      }
+
+      const estimationList = [];
+      const itemMappings = [];
+      const actMappings = [];
+
+      for (const localItem of localItems) {
+        const remoteItem = matchQualityItem(localItem, remote.estimationList);
+        if (!remoteItem) {
+          throw new Error(
+            "Не удалось сопоставить работу «" +
+              String(localItem?.workName || localItem?.workCode || "") +
+              "» с формой оценки качества ГИС ЖКХ."
+          );
+        }
+
+        const localActs = Array.isArray(localItem?.acts) ? localItem.acts : [];
+        if (!localActs.length) {
+          throw new Error(
+            "Для работы «" + String(localItem?.workName || "") + "» не добавлен акт."
+          );
+        }
+
+        const qualityActs = [];
+        let hasViolation = false;
+        for (const act of localActs) {
+          const actType = String(act?.actType || "");
+          if (!["ACCEPTANCE_ACT", "QUALITY_VIOLATION_ACT"].includes(actType)) {
+            throw new Error("Неизвестный тип акта оценки качества.");
+          }
+          if (actType === "QUALITY_VIOLATION_ACT") hasViolation = true;
+
+          await request(
+            "POST",
+            "/workplanning/api/rest/services/checkunique/quality-act",
+            {
+              regDate: String(act?.regDate || "") + " 00:00:00:000",
+              number: String(act?.number || ""),
+              actType,
+              orgRootGuid: remote?.orgRootGuid || null,
+              houseGuid: house.guid
+            },
+            STATE_WORKPLANNING
+          );
+
+          const uploaded = await uploadQualityActFile(act);
+          qualityActs.push({
+            guid: null,
+            regDate: String(act?.regDate || "") + " 00:00:00:000",
+            number: String(act?.number || ""),
+            attachment: uploaded.attachment,
+            period: {
+              from: String(act?.periodFrom || ""),
+              to: String(act?.periodTo || "")
+            },
+            actType
+          });
+          actMappings.push({
+            localActId: act?.localActId || null,
+            contentGuid: uploaded.contentGuid,
+            guid: null
+          });
+        }
+
+        const daysPerMonth = Number(localItem?.daysPerMonth);
+        const daysCount =
+          localItem?.daysCount === null || localItem?.daysCount === undefined
+            ? null
+            : Number(localItem.daysCount);
+        if (
+          daysCount !== null &&
+          (!Number.isInteger(daysCount) || daysCount < 0 || daysCount > daysPerMonth)
+        ) {
+          throw new Error("Некорректное количество дней ненадлежащего качества.");
+        }
+        if (hasViolation && daysCount === null) {
+          throw new Error(
+            "Для акта нарушения качества нужно указать количество дней " +
+              "ненадлежащего качества."
+          );
+        }
+
+        const reductionText = qualityDecimalText(
+          localItem?.costReduction,
+          "Размер уменьшения платы"
+        );
+        const resultItem = {
+          guid: remoteItem?.guid || null,
+          work: remoteItem?.work || null,
+          workType: remoteItem?.workType || null,
+          workName: remoteItem?.workName || localItem?.workName || null,
+          cost: qualityDecimalText(localItem?.cost, "Стоимость в ежемесячной плате"),
+          daysCount: daysCount === null ? null : String(daysCount),
+          daysPerMonth,
+          costReduction: reductionText === null ? null : Number(reductionText),
+          qualityAct: qualityActs,
+          hasQualityActs: true,
+          hasQualityViolationActs: hasViolation
+        };
+        estimationList.push(resultItem);
+        itemMappings.push({
+          localItemId: localItem?.localItemId || null,
+          workGuid: localItem?.workGuid || null,
+          workCode: localItem?.workCode || null
+        });
+      }
+
+      return {
+        reportingPeriod,
+        remote,
+        body: {
+          estimation: remote.estimation,
+          estimationList,
+          orgRootGuid: remote?.orgRootGuid || null
+        },
+        itemMappings,
+        actMappings
+      };
+    }
+
+    function qualityResult(remote, reportingPeriod, localItems, actMappings) {
+      const remoteItems = Array.isArray(remote?.estimationList)
+        ? remote.estimationList
+        : [];
+      const items = (localItems || []).map((localItem) => {
+        const matched = matchQualityItem(localItem, remoteItems);
+        return {
+          localItemId: localItem?.localItemId || null,
+          guid: matched?.guid || null
+        };
+      });
+      return {
+        reportingPeriodGuid: reportingPeriod?.guid || null,
+        estimationGuid: remote?.estimation?.guid || null,
+        gisStatus:
+          remote?.estimation?.status ||
+          remote?.estimation?.dbStatus ||
+          null,
+        items,
+        acts: actMappings || []
+      };
+    }
+
+    async function saveNewQualityAssessment(localPayload) {
+      const prepared = await prepareNewQualityAssessment(localPayload);
+      await request(
+        "POST",
+        "/workplanning/api/rest/services/save/estimation",
+        prepared.body,
+        STATE_WORKPLANNING
+      );
+      const fresh = await searchQualityAssessment(
+        prepared.reportingPeriod.guid,
+        false
+      );
+      return {
+        prepared,
+        fresh,
+        result: qualityResult(
+          fresh,
+          prepared.reportingPeriod,
+          localPayload.items,
+          prepared.actMappings
+        )
+      };
+    }
+
+    async function approveQualityAssessment(localPayload) {
+      const reportingPeriod = await findReportingPeriod(localPayload);
+      let remote = await searchQualityAssessment(reportingPeriod.guid, false);
+      const knownGuid = localPayload?.knownEstimationGuid || null;
+
+      if (!remote?.estimation?.guid) {
+        const saved = await saveNewQualityAssessment(localPayload);
+        remote = saved.fresh;
+      } else if (
+        !knownGuid ||
+        String(remote.estimation.guid) !== String(knownGuid)
+      ) {
+        throw new Error(
+          "В ГИС ЖКХ уже существует другая оценка качества для выбранного месяца. " +
+            "Изменение существующей оценки проверим отдельным шагом."
+        );
+      }
+
+      const remoteItems = Array.isArray(remote?.estimationList)
+        ? remote.estimationList
+        : [];
+      const selected = [];
+      for (const localItem of localPayload?.items || []) {
+        const matched = matchQualityItem(localItem, remoteItems);
+        if (!matched) {
+          throw new Error("Не удалось найти сохранённую строку оценки качества.");
+        }
+        selected.push({
+          guid: matched?.guid || null,
+          work: matched?.work || null,
+          workType: matched?.workType || null,
+          workName: matched?.workName || localItem?.workName || null,
+          cost: matched?.cost ?? null,
+          daysCount: matched?.daysCount ?? null,
+          daysPerMonth: matched?.daysPerMonth ?? null,
+          costReduction: matched?.costReduction ?? null,
+          hasQualityActs: Boolean(matched?.hasQualityActs),
+          hasQualityViolationActs: Boolean(matched?.hasQualityViolationActs)
+        });
+      }
+      if (!selected.length) {
+        throw new Error("В оценку качества не включено ни одной работы.");
+      }
+
+      await request(
+        "POST",
+        "/workplanning/api/rest/services/approve/estimation",
+        {
+          estimation: remote.estimation,
+          estimationList: selected,
+          orgRootGuid: remote?.orgRootGuid || null
+        },
+        STATE_WORKPLANNING
+      );
+      const fresh = await searchQualityAssessment(reportingPeriod.guid, false);
+      const result = qualityResult(
+        fresh,
+        reportingPeriod,
+        localPayload.items,
+        []
+      );
+      result.gisStatus = "APPROVED";
+      return result;
+    }
+
     if (command.type === "list_unplanned_work_options") {
       return {
         ok: true,
         result: {
           items: await listUnplannedWorkOptions(payload)
         }
+      };
+    }
+
+
+    if (command.type === "save_quality_assessment") {
+      const saved = await saveNewQualityAssessment(payload);
+      return { ok: true, result: saved.result };
+    }
+
+    if (command.type === "approve_quality_assessment") {
+      return {
+        ok: true,
+        result: await approveQualityAssessment(payload)
       };
     }
 
