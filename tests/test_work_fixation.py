@@ -336,10 +336,24 @@ def test_managed_gis_guids_allow_deleting_published_extras(tmp_path) -> None:
         period.id,
         gis_status="SAVED",
         unplanned_item_guids={extra.id: "remote-unplanned-guid"},
+        unplanned_item_metadata={
+            extra.id: {
+                "work_type_code": "1",
+                "work_type_guid": "work-type-guid",
+                "work_type_name": "Обслуживание",
+                "unit_name": "ед",
+            }
+        },
         photo_guids={photo.id: ("remote-content-guid", "remote-photo-guid")},
     )
 
     refreshed_item = repository.list_work_fixation_items(period.id)[0]
+    refreshed_unplanned = repository.list_work_fixation_unplanned_items(period.id)[0]
+    assert refreshed_unplanned.work_type_code == "1"
+    assert refreshed_unplanned.work_type_guid == "work-type-guid"
+    assert refreshed_unplanned.work_type_name == "Обслуживание"
+    assert refreshed_unplanned.unit_name == "ед"
+
     refreshed_period = repository.get_work_fixation_period(period.id)
     assert refreshed_period is not None
     assert "remote-unplanned-guid" in (refreshed_period.managed_unplanned_guids_json or "")
