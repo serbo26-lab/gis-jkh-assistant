@@ -158,14 +158,14 @@ class AddUnplannedWorkDialog(QDialog):
         self.work_combo.setMinimumWidth(520)
         for option in options:
             label = option.get("name") or option.get("code") or "Без наименования"
-            unit = option.get("unitName")
-            if unit:
-                label += f" • {unit}"
             self.work_combo.addItem(label, option)
         form.addRow("Работа / услуга *", self.work_combo)
 
         self.work_type_label = QLabel("—")
         form.addRow("Вид работы / услуги", self.work_type_label)
+
+        self.unit_label = QLabel("—")
+        form.addRow("Единица измерения", self.unit_label)
 
         self.price_edit = QLineEdit()
         self.amount_edit = QLineEdit()
@@ -316,6 +316,7 @@ class AddUnplannedWorkDialog(QDialog):
     def _update_work_type(self) -> None:
         option = self.work_combo.currentData() or {}
         self.work_type_label.setText(option.get("workTypeName") or "—")
+        self.unit_label.setText(option.get("unitName") or "—")
 
     @staticmethod
     def _decimal(text: str) -> Decimal:
