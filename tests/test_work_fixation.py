@@ -3,6 +3,7 @@ import pytest
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.work_fixation import (
     build_fixation_command_payload,
+    calculate_fact_total_cost,
     helper_supports_fixations,
     proportional_month_cost,
 )
@@ -204,9 +205,19 @@ def test_clear_fixation_removes_all_fact_values(tmp_path) -> None:
 
 def test_fixation_helper_version() -> None:
     assert not helper_supports_fixations(None)
-    assert not helper_supports_fixations("0.1.6")
-    assert helper_supports_fixations("0.1.7")
+    assert not helper_supports_fixations("0.1.7")
+    assert helper_supports_fixations("0.1.8")
     assert helper_supports_fixations("0.2.0")
+
+
+def test_unplanned_fact_total_cost_matches_gis_formula() -> None:
+    assert calculate_fact_total_cost("1", "1", 1) == "1.00"
+    assert calculate_fact_total_cost("12,50", "2", 3) == "75.00"
+    assert calculate_fact_total_cost("0.1", "0.2", 1) == "0.02"
+    assert calculate_fact_total_cost("", "2", 3) is None
+    assert calculate_fact_total_cost("2", None, 3) is None
+    assert calculate_fact_total_cost("2", "3", None) is None
+    assert calculate_fact_total_cost("-1", "2", 3) is None
 
 
 def test_unplanned_work_cannot_duplicate_planned_work(tmp_path) -> None:
