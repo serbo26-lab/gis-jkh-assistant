@@ -1,0 +1,210 @@
+import pytest
+
+from gis_jkh_assistant.database import Repository
+from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
+from gis_jkh_assistant.quality_assessment import (
+    build_quality_command_payload,
+    helper_supports_quality_assessment,
+    quality_reduction,
+)
+
+
+def _fixture(repository: Repository):
+    organization = repository.create_organization(
+        name="УК Оценка качества",
+        ogrn="1022600000400",
+    )
+    house = repository.create_house(
+        organization_id=organization.id,
+        address="г Ставрополь, ул Тестовая, д. 30",
+        fias_house_guid="44062768-dec0-4576-86cb-62bb82d854d2",
+    )
+    template = repository.create_work_template(
+        organization_id=organization.id,
+        name="Оценка качества",
+        items=[
+            type(
+                "Item",
+                (),
+                {
+                    "position": 1,
+                    "work_code": "12",
+                    "work_name": "Услуга по управлению",
+                    "work_guid": "83592b3d-c928-416b-b6e0-595fa1339821",
+                    "price": None,
+                    "volume": None,
+                    "quantity": "12",
+                    "cost": "26151.38",
+                    "allocation_percent": None,
+                },
+            )(),
+            type(
+                "Item",
+                (),
+                {
+                    "position": 2,
+                    "work_code": "13",
+                    "work_name": "Техническое обслуживание",
+                    "work_guid": "98a9a390-d7bb-455b-b0a7-79422b18b252",
+                    "price": None,
+                    "volume": None,
+                    "quantity": "12",
+                    "cost": "11886.99",
+                    "allocation_percent": None,
+                },
+            )(),
+        ],
+    )
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+        template_id=template.id,
+    )
+    repository.update_work_list_gis_state(
+        work_list.id,
+        gis_work_list_guid="f505f0ff-8769-4732-9d21-185884a789aa",
+        gis_status="APPROVED",
+    )
+    work_list = repository.get_work_list(work_list.id)
+    assert work_list is not None
+    return organization, house, work_list
+
+
+def test_quality_helper_version() -> None:
+    assert not helper_supports_quality_assessment(None)
+    assert not helper_supports_quality_assessment("0.1.9")
+    assert helper_supports_quality_assessment("0.1.10")
+    assert helper_supports_quality_assessment("0.2.0")
+
+
+def test_quality_reduction_matches_gis_formula() -> None:
+    assert quality_reduction("1", 1, 31) == "0.03"
+    assert quality_reduction("31", 1, 31) == "1.00"
+    assert quality_reduction("62,00", 2, 31) == "4.00"
+    assert quality_reduction(None, 1, 31) is None
+    assert quality_reduction("1", None, 31) is None
+    assert quality_reduction("1", 32, 31) is None
+
+
+def test_quality_period_snapshots_work_list_and_month_days(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    items = store.list_items(period.id)
+
+    assert len(items) == 2
+    assert [item.work_name for item in items] == [
+        "Услуга по управлению",
+        "Техническое обслуживание",
+    ]
+    assert all(item.days_per_month == 31 for item in items)
+    assert all(not item.included for item in items)
+
+    repository.close()
+
+
+def test_multiple_quality_acts_are_kept_for_one_work(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    item = store.list_items(period.id)[0]
+    store.update_item(
+        item.id,
+        included=True,
+        cost=None,
+        days_count=None,
+        cost_reduction=None,
+    )
+
+    first = store.add_act(
+        item_id=item.id,
+        act_type="ACCEPTANCE_ACT",
+        number="№3",
+        reg_date="01.01.2026",
+        period_from="01.01.2026",
+        period_to="01.01.2026",
+        file_name="act-1.pdf",
+        description="act-1.pdf",
+        content_type="application/pdf",
+        content=b"pdf-one",
+    )
+    second = store.add_act(
+        item_id=item.id,
+        act_type="ACCEPTANCE_ACT",
+        number="№4",
+        reg_date="02.01.2026",
+        period_from="01.01.2026",
+        period_to="01.01.2026",
+        file_name="act-2.pdf",
+        description="act-2.pdf",
+        content_type="application/pdf",
+        content=b"pdf-two",
+    )
+
+    acts = store.list_acts(item.id)
+    assert [act.id for act in acts] == [first.id, second.id]
+
+    refreshed = store.list_items(period.id)[0]
+    payload = build_quality_command_payload(
+        fias_house_code=house.fias_house_guid or "",
+        work_list_guid=work_list.gis_work_list_guid or "",
+        year=2026,
+        month=1,
+        items=[refreshed],
+        acts_by_item={refreshed.id: acts},
+    )
+    assert len(payload["items"]) == 1
+    assert len(payload["items"][0]["acts"]) == 2
+    assert payload["items"][0]["acts"][0]["actType"] == "ACCEPTANCE_ACT"
+    assert payload["items"][0]["acts"][1]["number"] == "№4"
+    assert payload["items"][0]["acts"][0]["fileBase64"]
+
+    repository.close()
+
+
+def test_remote_quality_act_is_not_deleted_before_update_flow_is_verified(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    item = store.list_items(period.id)[0]
+    act = store.add_act(
+        item_id=item.id,
+        act_type="QUALITY_VIOLATION_ACT",
+        number="1",
+        reg_date="01.01.2026",
+        period_from="01.01.2026",
+        period_to="01.01.2026",
+        file_name="quality.pdf",
+        description=None,
+        content_type="application/pdf",
+        content=b"quality",
+    )
+    store.set_gis_state(
+        period.id,
+        reporting_period_guid="reporting-guid",
+        estimation_guid="estimation-guid",
+        gis_status="DRAFT",
+        act_guids={act.id: ("content-guid", "act-guid")},
+    )
+
+    with pytest.raises(ValueError, match="отдельной проверки"):
+        store.delete_act(act.id)
+
+    assert len(store.list_acts(item.id)) == 1
+    repository.close()
