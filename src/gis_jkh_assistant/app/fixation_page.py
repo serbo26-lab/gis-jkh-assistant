@@ -395,53 +395,78 @@ class FixationPage(QWidget):
         self._year_changed()
 
     def _year_changed(self) -> None:
-        self.month_combo.blockSignals(True)
-        self.month_combo.clear()
         work_list = (
             self.repository.get_work_list(self._current_work_list_id)
             if self._current_work_list_id
             else None
         )
         year = self.year_combo.currentData()
-        if work_list and year is not None:
-            for month in active_months_for_work_list(work_list, int(year)):
-                self.month_combo.addItem(_MONTHS[month - 1], month)
-        self.month_combo.blockSignals(False)
-        if self.month_combo.count():
-            self.month_combo.setCurrentIndex(0)
+        active_months = (
+            active_months_for_work_list(work_list, int(year))
+            if work_list and year is not None
+            else ()
+        )
+
+        for month, button in self.month_buttons.items():
+            button.setEnabled(month in active_months)
+
+        if self._current_month not in active_months:
+            self._current_month = active_months[0] if active_months else None
+
+        if self._current_month is None:
+            self._current_period_id = None
+            self.table.setRowCount(0)
+            self.unplanned_table.setRowCount(0)
+            self._resize_planned_table()
+            self._resize_unplanned_table()
+            self.month_status.setText("Период: —")
+            self._set_enabled(False)
+            self._refresh_year_status()
+            return
+
         self._month_changed()
         self._refresh_year_status()
 
+    def _select_month(self, month: int) -> None:
+        button = self.month_buttons.get(int(month))
+        if button is None or not button.isEnabled():
+            return
+        self._current_month = int(month)
+        self._month_changed()
+
     def _month_changed(self) -> None:
-        if not self._current_work_list_id or self.year_combo.currentData() is None:
+        if (
+            not self._current_work_list_id
+            or self.year_combo.currentData() is None
+            or self._current_month is None
+        ):
             self._current_period_id = None
             self.table.setRowCount(0)
             self.unplanned_table.setRowCount(0)
+            self._resize_planned_table()
+            self._resize_unplanned_table()
             self.month_status.setText("Период: —")
             self._set_enabled(False)
+            self._refresh_year_status()
             return
 
-        month = self.month_combo.currentData()
-        if month is None:
-            self._current_period_id = None
-            self.table.setRowCount(0)
-            self.unplanned_table.setRowCount(0)
-            self._set_enabled(False)
-            return
-
+        month = int(self._current_month)
         try:
             period = self.repository.get_or_create_work_fixation_period(
                 work_list_id=self._current_work_list_id,
                 year=int(self.year_combo.currentData()),
-                month=int(month),
+                month=month,
             )
             self.repository.refresh_work_fixation_plan_snapshot(period.id)
         except ValueError as exc:
             self._current_period_id = None
             self.table.setRowCount(0)
             self.unplanned_table.setRowCount(0)
+            self._resize_planned_table()
+            self._resize_unplanned_table()
             self.month_status.setText(str(exc))
             self._set_enabled(False)
+            self._refresh_year_status()
             return
 
         self._current_period_id = period.id
@@ -450,6 +475,47 @@ class FixationPage(QWidget):
         self._load_unplanned_table()
         self._refresh_period_status()
         self._refresh_year_status()
+
+    def _relayout_month_buttons(self, columns: int | None = None) -> None:
+        if columns is not None:
+            self._month_button_columns = max(1, int(columns))
+        while self.month_buttons_layout.count():
+            item = self.month_buttons_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(self)
+        for index, month in enumerate(range(1, 13)):
+            row, column = divmod(index, self._month_button_columns)
+            button = self.month_buttons[month]
+            button.setParent(self)
+            self.month_buttons_layout.addWidget(button, row, column)
+            self.month_buttons_layout.setColumnStretch(column, 1)
+
+    def _resize_table_to_rows(
+        self,
+        table: QTableWidget,
+        *,
+        max_rows: int,
+        minimum_rows: int = 1,
+    ) -> None:
+        row_count = table.rowCount()
+        visible_rows = min(max(row_count, minimum_rows), max_rows)
+        row_height = max(24, table.verticalHeader().defaultSectionSize())
+        header_height = max(26, table.horizontalHeader().height())
+        frame = table.frameWidth() * 2
+        height = header_height + visible_rows * row_height + frame + 4
+        table.setFixedHeight(height)
+        table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            if row_count > max_rows
+            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+    def _resize_planned_table(self) -> None:
+        self._resize_table_to_rows(self.table, max_rows=15)
+
+    def _resize_unplanned_table(self) -> None:
+        self._resize_table_to_rows(self.unplanned_table, max_rows=8)
+
 
     def _load_table(self) -> None:
         if not self._current_period_id:
