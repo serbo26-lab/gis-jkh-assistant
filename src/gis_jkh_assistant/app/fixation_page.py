@@ -74,19 +74,16 @@ class FixationPage(QWidget):
         self._integration_busy = False
         self._current_work_list_id: str | None = None
         self._current_period_id: str | None = None
+        self._current_month: int | None = None
+        self._month_button_columns = 12
         self._queue_period_ids: list[str] = []
         self._queue_index = 0
         self._queue_successes = 0
         self._queue_failed_period_id: str | None = None
 
-        self._integration_status_timer = QTimer(self)
-        self._integration_status_timer.setInterval(1500)
-        self._integration_status_timer.timeout.connect(self._refresh_integration_status)
-
         self._build_ui()
         self.refresh_organizations()
         self._refresh_integration_status()
-        self._integration_status_timer.start()
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -143,16 +140,6 @@ class FixationPage(QWidget):
         self.year_combo.setFixedWidth(120)
         grid.addWidget(self.year_combo, 3, 1)
 
-        grid.addWidget(QLabel("Месяц"), 3, 2)
-        self.month_combo = SafeComboBox()
-        self.month_combo.setMinimumWidth(170)
-        grid.addWidget(self.month_combo, 3, 3)
-
-        self.browser_status = QLabel("Браузер: проверка подключения…")
-        self.browser_status.setObjectName("Muted")
-        self.browser_status.setWordWrap(True)
-        grid.addWidget(self.browser_status, 4, 0, 1, 4)
-
         grid.setColumnStretch(1, 2)
         grid.setColumnStretch(3, 1)
         root.addWidget(context)
@@ -172,14 +159,26 @@ class FixationPage(QWidget):
         month_layout.setContentsMargins(12, 12, 12, 12)
         month_layout.setSpacing(8)
 
+        self.month_buttons_layout = QGridLayout()
+        self.month_buttons_layout.setHorizontalSpacing(6)
+        self.month_buttons_layout.setVerticalSpacing(6)
+        self.month_buttons: dict[int, QPushButton] = {}
+        for month, name in enumerate(_MONTHS, start=1):
+            button = QPushButton(f"{name}\n—")
+            button.setObjectName("MonthButton")
+            button.setCheckable(True)
+            button.setMinimumWidth(72)
+            button.clicked.connect(
+                lambda _checked=False, value=month: self._select_month(value)
+            )
+            self.month_buttons[month] = button
+        month_layout.addLayout(self.month_buttons_layout)
+        self._relayout_month_buttons()
+
         self.month_status = QLabel("Период: —")
+        self.month_status.setObjectName("Muted")
         self.month_status.setWordWrap(True)
         month_layout.addWidget(self.month_status)
-
-        self.year_status = QLabel("")
-        self.year_status.setObjectName("Muted")
-        self.year_status.setWordWrap(True)
-        month_layout.addWidget(self.year_status)
 
         fill_actions = QHBoxLayout()
         self.fill_month_button = QPushButton("Заполнить по плану этот месяц")
@@ -254,8 +253,8 @@ class FixationPage(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in range(1, 11):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        table_layout.addWidget(self.table, 1)
-        root.addWidget(table_card, 1)
+        table_layout.addWidget(self.table)
+        root.addWidget(table_card)
 
         unplanned_card = QFrame()
         unplanned_card.setObjectName("Card")
@@ -305,12 +304,12 @@ class FixationPage(QWidget):
             )
         unplanned_layout.addWidget(self.unplanned_table)
         root.addWidget(unplanned_card)
+        root.addStretch(1)
 
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         self.house_combo.currentIndexChanged.connect(self._house_changed)
         self.work_list_combo.currentIndexChanged.connect(self._work_list_changed)
         self.year_combo.currentIndexChanged.connect(self._year_changed)
-        self.month_combo.currentIndexChanged.connect(self._month_changed)
         self.fill_month_button.clicked.connect(self._fill_month_from_plan)
         self.fill_year_button.clicked.connect(self._fill_year_from_plan)
         self.clear_month_button.clicked.connect(self._clear_month)
@@ -378,6 +377,7 @@ class FixationPage(QWidget):
         value = self.work_list_combo.currentData()
         self._current_work_list_id = str(value) if value else None
         self._current_period_id = None
+        self._current_month = None
 
         self.year_combo.blockSignals(True)
         self.year_combo.clear()
