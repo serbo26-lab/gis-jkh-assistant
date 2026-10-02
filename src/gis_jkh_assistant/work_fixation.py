@@ -14,7 +14,7 @@ from gis_jkh_assistant.database.models import (
 )
 
 
-MIN_FIXATION_HELPER_VERSION = (0, 1, 8)
+MIN_FIXATION_HELPER_VERSION = (0, 1, 9)
 
 
 def helper_supports_fixations(version: str | None) -> bool:
