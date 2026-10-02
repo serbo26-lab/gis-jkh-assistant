@@ -1120,24 +1120,34 @@ async function runGisCommand(command) {
           code: work?.serviceType?.code || localItem?.workTypeCode || null
         };
 
-        const existingMonthly = existing?.monthlyFixedWork || {};
         const updatedMonthly =
           factCount === null
             ? null
-            : Object.assign({}, existingMonthly, {
+            : {
                 count: String(factCount),
-                monthYear:
-                  existingMonthly?.monthYear || {
-                    month: Number(localPayload.month),
-                    year: Number(localPayload.year)
-                  },
-                dates: Array.isArray(existingMonthly?.dates)
-                  ? existingMonthly.dates
+                monthYear: {
+                  month: Number(localPayload.month),
+                  year: Number(localPayload.year)
+                },
+                dates: Array.isArray(existing?.monthlyFixedWork?.dates)
+                  ? existing.monthlyFixedWork.dates
                   : []
-              });
+              };
 
-        const editableValues = {
+        function compactGuidOnly(value) {
+          return value?.guid ? { guid: value.guid } : {};
+        }
+
+        // search/fixedworks expands work/workType into rich DTOs containing fields
+        // such as rootEntityGuid. save/fixedworks accepts compact references only.
+        // Never echo the expanded remote objects back on update.
+        const unplannedRow = {
+          work: { code: work.code, guid: work.guid },
+          workType,
           monthlyFixedWork: updatedMonthly,
+          accidentObject: compactGuidOnly(existing?.accidentObject),
+          municipalService: compactGuidOnly(existing?.municipalService),
+          municipalResource: compactGuidOnly(existing?.municipalResource),
           factPrice: fixationNumberForGis(localItem?.factPrice, "Цена факт"),
           factAmount: fixationNumberForGis(localItem?.factAmount, "Объем факт"),
           factTotalCost: fixationNumberForGis(
@@ -1147,24 +1157,24 @@ async function runGisCommand(command) {
           photos: mergedPhotos.photos,
           comment: localItem?.comment || null
         };
+        if (existing?.guid) unplannedRow.guid = existing.guid;
+        if (existing?.municipalResourceSupplierGuid) {
+          unplannedRow.municipalResourceSupplierGuid =
+            existing.municipalResourceSupplierGuid;
+        }
 
-        const unplannedRow = existing?.guid
-          ? Object.assign({}, existing, editableValues)
-          : Object.assign(
-              {
-                work: { code: work.code, guid: work.guid },
-                workType,
-                accidentObject: {},
-                municipalService: {},
-                municipalResource: {}
-              },
-              editableValues
-            );
         newUnplanned.push(unplannedRow);
         unplannedMappings.push({
           localItemId: localItem?.localItemId || null,
           workGuid: work.guid,
-          existingGuid: existing?.guid || null
+          existingGuid: existing?.guid || null,
+          workTypeCode: work?.serviceType?.code || null,
+          workTypeGuid: work?.serviceType?.guid || null,
+          workTypeName: work?.serviceType?.serviceName || null,
+          unitName:
+            work?.dimensionsUnit?.dimensionsUnitOkei?.nationalSymbolName ||
+            work?.dimensionsUnit?.dimensionsUnitString ||
+            null
         });
       }
 
@@ -1320,7 +1330,19 @@ async function runGisCommand(command) {
           null;
         return {
           localItemId: item.localItemId,
-          guid: matched?.guid || null
+          guid: matched?.guid || null,
+          workTypeCode: item.workTypeCode || matched?.workType?.code || null,
+          workTypeGuid: item.workTypeGuid || matched?.workType?.guid || null,
+          workTypeName:
+            item.workTypeName ||
+            matched?.workType?.serviceName ||
+            matched?.work?.serviceType?.serviceName ||
+            null,
+          unitName:
+            item.unitName ||
+            matched?.work?.dimensionsUnit?.dimensionsUnitOkei?.nationalSymbolName ||
+            matched?.work?.dimensionsUnit?.dimensionsUnitString ||
+            null
         };
       });
 
