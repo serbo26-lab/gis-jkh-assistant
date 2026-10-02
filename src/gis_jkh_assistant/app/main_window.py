@@ -17,11 +17,12 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
-from gis_jkh_assistant.work_fixation import helper_supports_fixations
+from gis_jkh_assistant.quality_assessment import helper_supports_quality_assessment
 
 from .fixation_page import FixationPage
 from .houses_page import HousesPage
 from .planning_page import PlanningPage
+from .quality_page import QualityAssessmentPage
 from .styles import COMPACT_WINDOW_STYLESHEET, NARROW_WINDOW_STYLESHEET
 from .work_lists_page import WorkListsPage
 
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
             "Перечни работ и услуг",
             "Планирование",
             "Фиксация работ и услуг",
+            "Оценка качества",
             "Настройки",
         ):
             self.navigation.addItem(QListWidgetItem(title))
@@ -88,10 +90,12 @@ class MainWindow(QMainWindow):
         self.work_lists_page = WorkListsPage(repository, self.integration_gateway)
         self.planning_page = PlanningPage(repository, self.integration_gateway)
         self.fixation_page = FixationPage(repository, self.integration_gateway)
+        self.quality_page = QualityAssessmentPage(repository, self.integration_gateway)
         self.pages.addWidget(self.houses_page)
         self.pages.addWidget(self.work_lists_page)
         self.pages.addWidget(self.planning_page)
         self.pages.addWidget(self.fixation_page)
+        self.pages.addWidget(self.quality_page)
         self.pages.addWidget(_placeholder("Настройки"))
         layout.addWidget(self.pages, 1)
 
@@ -121,10 +125,10 @@ class MainWindow(QMainWindow):
             color = "#8a5b00"
         else:
             version = status.helper_version or "?"
-            if not helper_supports_fixations(status.helper_version):
+            if not helper_supports_quality_assessment(status.helper_version):
                 text = (
                     f"ГИС ЖКХ подключен\nПомощник {version} устарел\n"
-                    "Требуется 0.1.9+"
+                    "Требуется 0.1.10+"
                 )
                 color = "#8a5b00"
             else:
@@ -145,6 +149,7 @@ class MainWindow(QMainWindow):
         self.work_lists_page._refresh_integration_status()
         self.planning_page._refresh_integration_status()
         self.fixation_page._refresh_integration_status()
+        self.quality_page._refresh_integration_status()
 
     def _navigation_changed(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
@@ -154,6 +159,8 @@ class MainWindow(QMainWindow):
             self.planning_page.refresh_organizations()
         elif index == 3:
             self.fixation_page.refresh_organizations()
+        elif index == 4:
+            self.quality_page.refresh_organizations()
 
     def resizeEvent(self, event) -> None:
         width = event.size().width()
@@ -183,6 +190,7 @@ class MainWindow(QMainWindow):
             self.work_lists_page.set_view_mode(mode)
             self.planning_page.set_view_mode(mode)
             self.fixation_page.set_view_mode(mode)
+            self.quality_page.set_view_mode(mode)
 
         super().resizeEvent(event)
 
@@ -191,6 +199,7 @@ class MainWindow(QMainWindow):
         self.work_lists_page.flush_pending_changes()
         self.planning_page.flush_pending_changes()
         self.fixation_page.flush_pending_changes()
+        self.quality_page.flush_pending_changes()
         self.integration_gateway.stop()
         self.repository.close()
         super().closeEvent(event)
