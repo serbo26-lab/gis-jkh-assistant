@@ -370,7 +370,13 @@ class QualityAssessmentPage(QWidget):
                 month_days.setFlags(month_days.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, 4, month_days)
 
-                reduction = QTableWidgetItem(item.cost_reduction or "")
+                reduction_text = ""
+                if item.cost_reduction:
+                    try:
+                        reduction_text = f"{float(item.cost_reduction):.2f}"
+                    except ValueError:
+                        reduction_text = item.cost_reduction
+                reduction = QTableWidgetItem(reduction_text)
                 reduction.setFlags(reduction.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, 5, reduction)
 
