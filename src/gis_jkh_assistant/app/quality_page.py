@@ -495,7 +495,7 @@ class QualityAssessmentPage(QWidget):
             return None
         items = self.store.list_items(period.id)
         acts = {item.id: self.store.list_acts(item.id) for item in items}
-        return build_quality_command_payload(
+        payload = build_quality_command_payload(
             fias_house_code=house.fias_house_guid,
             work_list_guid=work_list.gis_work_list_guid,
             year=period.year,
@@ -503,6 +503,9 @@ class QualityAssessmentPage(QWidget):
             items=items,
             acts_by_item=acts,
         )
+        payload["knownEstimationGuid"] = period.estimation_guid
+        payload["knownGisStatus"] = period.gis_status
+        return payload
 
     def _save_project(self) -> None:
         if not self._validate_local():
