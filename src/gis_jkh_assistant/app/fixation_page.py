@@ -569,6 +569,7 @@ class FixationPage(QWidget):
         finally:
             self.table.blockSignals(False)
             self._loading = False
+        self._resize_planned_table()
 
     def _load_unplanned_table(self) -> None:
         if not self._current_period_id:
@@ -622,6 +623,7 @@ class FixationPage(QWidget):
         finally:
             self.unplanned_table.blockSignals(False)
             self._loading = False
+        self._resize_unplanned_table()
 
     def _open_planned_photos(self, item_id: str) -> None:
         dialog = FixationPhotoDialog(
@@ -938,10 +940,21 @@ class FixationPage(QWidget):
         self.month_status.setText(text)
 
     def _refresh_year_status(self) -> None:
-        if not self._current_work_list_id or self.year_combo.currentData() is None:
-            self.year_status.setText("")
+        year_value = self.year_combo.currentData()
+        work_list = (
+            self.repository.get_work_list(self._current_work_list_id)
+            if self._current_work_list_id
+            else None
+        )
+        if not work_list or year_value is None:
+            for month, button in self.month_buttons.items():
+                button.setText(f"{_MONTHS[month - 1]}\n—")
+                button.setEnabled(False)
+                button.setChecked(False)
             return
-        year = int(self.year_combo.currentData())
+
+        year = int(year_value)
+        active_months = set(active_months_for_work_list(work_list, year))
         periods = {
             period.month: period
             for period in self.repository.list_work_fixation_periods(
@@ -949,29 +962,33 @@ class FixationPage(QWidget):
                 year=year,
             )
         }
-        labels = []
-        work_list = self.repository.get_work_list(self._current_work_list_id)
-        if not work_list:
-            return
-        for month in active_months_for_work_list(work_list, year):
-            period = periods.get(month)
-            if period is None:
-                suffix = "—"
+
+        for month, button in self.month_buttons.items():
+            if month not in active_months:
+                status_text = "вне периода"
+                button.setEnabled(False)
             else:
-                has_data = self._period_has_data(period.id)
-                status = str(period.gis_status or "").upper()
-                if status == "SAVED":
-                    suffix = "✓"
-                elif status == "ERROR":
-                    suffix = "!"
-                elif status == "MODIFIED":
-                    suffix = "*"
-                elif has_data:
-                    suffix = "готов"
+                button.setEnabled(True)
+                period = periods.get(month)
+                if period is None:
+                    status_text = "—"
                 else:
-                    suffix = "—"
-            labels.append(f"{_MONTH_SHORT[month - 1]}: {suffix}")
-        self.year_status.setText(" • ".join(labels))
+                    has_data = self._period_has_data(period.id)
+                    status = str(period.gis_status or "").upper()
+                    if status == "SAVED":
+                        status_text = "размещено"
+                    elif status == "ERROR":
+                        status_text = "ошибка"
+                    elif status == "MODIFIED":
+                        status_text = "изменено"
+                    elif has_data:
+                        status_text = "готов"
+                    else:
+                        status_text = "—"
+
+            button.setText(f"{_MONTHS[month - 1]}\n{status_text}")
+            button.setChecked(month == self._current_month and month in active_months)
+
 
     def _periods_with_data_for_year(self) -> list[WorkFixationPeriod]:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
@@ -1235,31 +1252,8 @@ class FixationPage(QWidget):
         worker.start()
 
     def _refresh_integration_status(self) -> None:
-        status = self.integration_gateway.status()
-        if not status.running:
-            self.browser_status.setText("Браузер: локальная интеграция не запущена")
-            self.browser_status.setStyleSheet("color: #b42318;")
-        elif not status.helper_connected:
-            self.browser_status.setText(
-                "Браузер: помощник не подключен. Откройте ГИС ЖКХ и проверьте расширение."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        elif not status.gis_page_ready:
-            self.browser_status.setText(
-                "Браузер: помощник подключен, но вкладка ГИС ЖКХ не открыта."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        elif not helper_supports_fixations(status.helper_version):
-            version = status.helper_version or "не определена"
-            self.browser_status.setText(
-                f"Браузер: помощник {version} нужно обновить до 0.1.7 для фиксаций."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        else:
-            self.browser_status.setText(
-                f"Браузер: ГИС ЖКХ подключен • помощник {status.helper_version}"
-            )
-            self.browser_status.setStyleSheet("color: #107c10;")
+        """Refresh GIS-dependent actions; visible status lives in the sidebar."""
+
         self._refresh_gis_buttons()
 
     def _refresh_gis_buttons(self) -> None:
@@ -1286,8 +1280,14 @@ class FixationPage(QWidget):
         self.clear_month_button.setEnabled(enabled)
         self._refresh_gis_buttons()
 
-    def set_view_mode(self, _mode: str) -> None:
-        """Public resize hook used by the main window."""
+    def set_view_mode(self, mode: str) -> None:
+        """Adapt month navigation density to the available window size."""
+
+        columns = 12 if mode == "normal" else 6
+        if columns != self._month_button_columns:
+            self._relayout_month_buttons(columns)
+        self._resize_planned_table()
+        self._resize_unplanned_table()
 
     def flush_pending_changes(self) -> None:
         """Cells are saved immediately; kept for the main-window hook."""
