@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import calendar
 import json
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping
 
 MIN_QUALITY_HELPER_VERSION = (0, 1, 10)
@@ -41,11 +41,12 @@ def quality_reduction(
         return None
     if cost_value < 0 or days < 0 or month_days <= 0 or days > month_days:
         return None
-    result = (cost_value * days / month_days).quantize(
-        Decimal("0.01"),
-        rounding=ROUND_HALF_UP,
-    )
-    return format(result, ".2f")
+    # GIS ЖКХ sends the exact ratio in the save payload (for example
+    # 1 / 31 -> 0.03225806451612903) and only rounds it for visual display.
+    # Keep the unrounded decimal locally; the browser helper converts it to
+    # a JSON number exactly as the web interface does.
+    result = cost_value * days / month_days
+    return format(result, "f")
 
 
 def days_in_month(year: int, month: int) -> int:
