@@ -29,6 +29,7 @@ from gis_jkh_assistant.database.models import WorkFixationPeriod
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 from gis_jkh_assistant.work_fixation import (
     build_fixation_command_payload,
+    calculate_fact_total_cost,
     helper_supports_fixations,
     item_has_fact,
 )
@@ -623,10 +624,43 @@ class FixationPage(QWidget):
                     lambda _checked=False, item_id=item.id: self._delete_unplanned(item_id)
                 )
                 self.unplanned_table.setCellWidget(row, 8, remove_button)
+                self._apply_unplanned_row_mode(row)
         finally:
             self.unplanned_table.blockSignals(False)
             self._loading = False
         self._resize_unplanned_table()
+
+    def _apply_unplanned_row_mode(self, row: int) -> None:
+        price_cell = self.unplanned_table.item(row, 2)
+        amount_cell = self.unplanned_table.item(row, 3)
+        cost_cell = self.unplanned_table.item(row, 5)
+        if not price_cell or not amount_cell or not cost_cell:
+            return
+
+        price = price_cell.text().strip()
+        amount = amount_cell.text().strip()
+        cost = cost_cell.text().strip()
+        detailed_mode = bool(price or amount)
+        total_mode = bool(cost) and not detailed_mode
+
+        editable = Qt.ItemFlag.ItemIsEditable
+        readonly_background = QBrush(QColor("#f5f6f7"))
+        normal_background = QBrush()
+
+        for cell in (price_cell, amount_cell):
+            if total_mode:
+                cell.setFlags(cell.flags() & ~editable)
+                cell.setBackground(readonly_background)
+            else:
+                cell.setFlags(cell.flags() | editable)
+                cell.setBackground(normal_background)
+
+        if detailed_mode:
+            cost_cell.setFlags(cost_cell.flags() & ~editable)
+            cost_cell.setBackground(readonly_background)
+        else:
+            cost_cell.setFlags(cost_cell.flags() | editable)
+            cost_cell.setBackground(normal_background)
 
     def _open_planned_photos(self, item_id: str) -> None:
         dialog = FixationPhotoDialog(
@@ -667,12 +701,18 @@ class FixationPage(QWidget):
     def _unplanned_item_changed(self, cell: QTableWidgetItem) -> None:
         if self._loading or cell.column() not in (2, 3, 4, 5, 6):
             return
-        name_cell = self.unplanned_table.item(cell.row(), 0)
+        row = cell.row()
+        name_cell = self.unplanned_table.item(row, 0)
         item_id = name_cell.data(_ITEM_ID_ROLE) if name_cell else None
         if not item_id:
             return
 
-        count_text = self.unplanned_table.item(cell.row(), 4).text().strip()
+        def text_at(column: int) -> str | None:
+            item = self.unplanned_table.item(row, column)
+            value = item.text().strip() if item else ""
+            return value or None
+
+        count_text = text_at(4)
         try:
             fact_count = int(count_text) if count_text else None
             if fact_count is not None and fact_count < 0:
@@ -686,23 +726,38 @@ class FixationPage(QWidget):
             self._load_unplanned_table()
             return
 
-        def text_at(column: int) -> str | None:
-            value = self.unplanned_table.item(cell.row(), column).text().strip()
-            return value or None
+        price = text_at(2)
+        amount = text_at(3)
+        cost = text_at(5)
+        if price or amount:
+            calculated = calculate_fact_total_cost(price, amount, fact_count)
+            if calculated is None:
+                cost = None
+            else:
+                cost = calculated
+            cost_cell = self.unplanned_table.item(row, 5)
+            if cost_cell is not None:
+                self.unplanned_table.blockSignals(True)
+                try:
+                    cost_cell.setText(cost or "")
+                finally:
+                    self.unplanned_table.blockSignals(False)
 
         try:
             self.repository.update_work_fixation_unplanned_item(
                 str(item_id),
-                fact_price=text_at(2),
-                fact_amount=text_at(3),
+                fact_price=price,
+                fact_amount=amount,
                 fact_count=fact_count,
-                fact_total_cost=text_at(5),
+                fact_total_cost=cost,
                 comment=text_at(6),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Не удалось сохранить", str(exc))
             self._load_unplanned_table()
             return
+
+        self._apply_unplanned_row_mode(row)
         self._refresh_period_status()
         self._refresh_year_status()
 
@@ -719,7 +774,7 @@ class FixationPage(QWidget):
             QMessageBox.information(
                 self,
                 "Нет подключения к ГИС ЖКХ",
-                "Для выбора внеплановой работы нужен подключенный браузерный помощник 0.1.7+.",
+                "Для выбора внеплановой работы нужен подключенный браузерный помощник 0.1.8+.",
             )
             return
         if self._integration_worker is not None and self._integration_worker.isRunning():
