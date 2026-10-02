@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
+from gis_jkh_assistant.work_fixation import helper_supports_fixations
 
 from .fixation_page import FixationPage
 from .houses_page import HousesPage
@@ -120,16 +121,23 @@ class MainWindow(QMainWindow):
             color = "#8a5b00"
         else:
             version = status.helper_version or "?"
-            text = f"ГИС ЖКХ подключен\nПомощник {version}"
-            if status.session_keep_alive_error:
-                text += "\nСессия: ошибка продления"
+            if not helper_supports_fixations(status.helper_version):
+                text = (
+                    f"ГИС ЖКХ подключен\nПомощник {version} устарел\n"
+                    "Требуется 0.1.7+"
+                )
                 color = "#8a5b00"
-            elif status.session_keep_alive_enabled:
-                text += "\nСессия: автопродление вкл."
-                color = "#107c10"
             else:
-                text += "\nСессия: активна"
-                color = "#107c10"
+                text = f"ГИС ЖКХ подключен\nПомощник {version}"
+                if status.session_keep_alive_error:
+                    text += "\nСессия: ошибка продления"
+                    color = "#8a5b00"
+                elif status.session_keep_alive_enabled:
+                    text += "\nСессия: автопродление вкл."
+                    color = "#107c10"
+                else:
+                    text += "\nСессия: активна"
+                    color = "#107c10"
 
         self.integration_status.setText(text)
         self.integration_status.setStyleSheet(f"color: {color};")
