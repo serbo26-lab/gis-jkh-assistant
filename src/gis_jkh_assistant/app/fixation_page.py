@@ -480,6 +480,8 @@ class FixationPage(QWidget):
             self._month_button_columns = max(1, int(columns))
         while self.month_buttons_layout.count():
             self.month_buttons_layout.takeAt(0)
+        for column in range(12):
+            self.month_buttons_layout.setColumnStretch(column, 0)
         for index, month in enumerate(range(1, 13)):
             row, column = divmod(index, self._month_button_columns)
             self.month_buttons_layout.addWidget(
