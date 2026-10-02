@@ -336,6 +336,7 @@ class Repository:
                 work_guid TEXT NOT NULL,
                 work_type_code TEXT,
                 work_type_guid TEXT,
+                work_type_name TEXT,
                 unit_name TEXT,
                 fact_price TEXT,
                 fact_amount TEXT,
@@ -413,6 +414,7 @@ class Repository:
         self._ensure_column("work_list_items", "allocation_percent", "TEXT")
         self._ensure_column("work_fixation_periods", "managed_unplanned_guids_json", "TEXT")
         self._ensure_column("work_fixation_items", "managed_photo_content_guids_json", "TEXT")
+        self._ensure_column("work_fixation_unplanned_items", "work_type_name", "TEXT")
         self.connection.commit()
         self._normalize_all_house_tariff_periods()
 
@@ -1959,6 +1961,7 @@ class Repository:
         work_guid: str,
         work_type_code: str | None = None,
         work_type_guid: str | None = None,
+        work_type_name: str | None = None,
         unit_name: str | None = None,
         fact_price: str | None = None,
         fact_amount: str | None = None,
@@ -1989,14 +1992,15 @@ class Repository:
                 INSERT INTO work_fixation_unplanned_items (
                     id, fixation_period_id, position,
                     work_code, work_name, work_guid,
-                    work_type_code, work_type_guid, unit_name,
+                    work_type_code, work_type_guid, work_type_name, unit_name,
                     fact_price, fact_amount, fact_count, fact_total_cost, comment
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id, fixation_period_id, position,
                     str(work_code), str(work_name), str(work_guid),
-                    _clean(work_type_code), _clean(work_type_guid), _clean(unit_name),
+                    _clean(work_type_code), _clean(work_type_guid),
+                    _clean(work_type_name), _clean(unit_name),
                     _clean(fact_price), _clean(fact_amount),
                     int(fact_count) if fact_count is not None else None,
                     _clean(fact_total_cost), _clean(comment),
@@ -2349,6 +2353,7 @@ class Repository:
         gis_last_error: str | None = None,
         fixed_item_guids: dict[str, str] | None = None,
         unplanned_item_guids: dict[str, str] | None = None,
+        unplanned_item_metadata: dict[str, dict[str, str | None]] | None = None,
         photo_guids: dict[str, tuple[str | None, str | None]] | None = None,
         sync_time: str | None = None,
     ) -> None:
@@ -2389,6 +2394,26 @@ class Repository:
                     WHERE id = ? AND fixation_period_id = ?
                     """,
                     (_clean(guid), item_id, fixation_period_id),
+                )
+
+            for item_id, metadata in (unplanned_item_metadata or {}).items():
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_unplanned_items
+                    SET work_type_code = COALESCE(?, work_type_code),
+                        work_type_guid = COALESCE(?, work_type_guid),
+                        work_type_name = COALESCE(?, work_type_name),
+                        unit_name = COALESCE(?, unit_name)
+                    WHERE id = ? AND fixation_period_id = ?
+                    """,
+                    (
+                        _clean(metadata.get("work_type_code")),
+                        _clean(metadata.get("work_type_guid")),
+                        _clean(metadata.get("work_type_name")),
+                        _clean(metadata.get("unit_name")),
+                        item_id,
+                        fixation_period_id,
+                    ),
                 )
 
             for photo_id, values in (photo_guids or {}).items():
