@@ -14,7 +14,7 @@ from gis_jkh_assistant.database.models import (
 )
 
 
-MIN_FIXATION_HELPER_VERSION = (0, 1, 7)
+MIN_FIXATION_HELPER_VERSION = (0, 1, 8)
 
 
 def helper_supports_fixations(version: str | None) -> bool:
@@ -25,6 +25,32 @@ def helper_supports_fixations(version: str | None) -> bool:
     except ValueError:
         return False
     return parts >= MIN_FIXATION_HELPER_VERSION
+
+
+def calculate_fact_total_cost(
+    price: str | None,
+    amount: str | None,
+    count: int | str | None,
+) -> str | None:
+    """Return price × amount × count rounded to two decimals, or None if incomplete."""
+
+    if price is None or amount is None or count is None:
+        return None
+    if not str(price).strip() or not str(amount).strip() or not str(count).strip():
+        return None
+    try:
+        price_value = _decimal(str(price))
+        amount_value = _decimal(str(amount))
+        count_value = Decimal(str(int(count)))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if price_value < 0 or amount_value < 0 or count_value < 0:
+        return None
+    value = (price_value * amount_value * count_value).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+    return format(value, ".2f")
 
 
 def proportional_month_cost(
