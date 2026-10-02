@@ -324,7 +324,7 @@ class QualityAssessmentStore:
             """
             SELECT * FROM quality_assessment_acts
             WHERE quality_item_id = ?
-            ORDER BY created_at, id
+            ORDER BY created_at, rowid
             """,
             (item_id,),
         ).fetchall()
