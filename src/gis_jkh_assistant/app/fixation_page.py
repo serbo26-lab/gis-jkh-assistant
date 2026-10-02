@@ -55,15 +55,6 @@ _MONTHS = (
     "Декабрь",
 )
 _ITEM_ID_ROLE = Qt.ItemDataRole.UserRole
-_WORK_TYPE_NAMES = {
-    "1": "Обслуживание",
-    "2": "Текущий ремонт",
-    "3": "Аварийные работы",
-    "4": "По обращениям граждан",
-    "5": "По ограничениям поставки",
-    "6": "Подготовка ОКИ к отопительному сезону",
-    "7": "Иные",
-}
 
 
 class FixationPage(QWidget):
@@ -287,11 +278,12 @@ class FixationPage(QWidget):
         unplanned_hint.setWordWrap(True)
         unplanned_layout.addWidget(unplanned_hint)
 
-        self.unplanned_table = QTableWidget(0, 9)
+        self.unplanned_table = QTableWidget(0, 10)
         self.unplanned_table.setHorizontalHeaderLabels(
             [
                 "Работа / услуга",
                 "Вид работы / услуги",
+                "Ед. изм.",
                 "Цена",
                 "Объем",
                 "Количество",
@@ -305,8 +297,8 @@ class FixationPage(QWidget):
         self.unplanned_table.verticalHeader().setVisible(False)
         unplanned_header_view = self.unplanned_table.horizontalHeader()
         unplanned_header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        unplanned_header_view.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        for column in (1, 2, 3, 4, 5, 7, 8):
+        unplanned_header_view.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        for column in (1, 2, 3, 4, 5, 6, 8, 9):
             unplanned_header_view.setSectionResizeMode(
                 column,
                 QHeaderView.ResizeMode.ResizeToContents,
@@ -598,9 +590,8 @@ class FixationPage(QWidget):
             for row, item in enumerate(items):
                 values = (
                     item.work_name,
-                    item.work_type_name
-                    or _WORK_TYPE_NAMES.get(item.work_type_code or "")
-                    or "—",
+                    item.work_type_name or "—",
+                    item.unit_name or "—",
                     item.fact_price,
                     item.fact_amount,
                     str(item.fact_count) if item.fact_count is not None else "",
@@ -611,7 +602,7 @@ class FixationPage(QWidget):
                     cell = QTableWidgetItem(value or "")
                     if column == 0:
                         cell.setData(_ITEM_ID_ROLE, item.id)
-                    if column in (0, 1):
+                    if column in (0, 1, 2):
                         cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     self.unplanned_table.setItem(row, column, cell)
 
@@ -624,13 +615,13 @@ class FixationPage(QWidget):
                 photo_button.clicked.connect(
                     lambda _checked=False, item_id=item.id: self._open_unplanned_photos(item_id)
                 )
-                self.unplanned_table.setCellWidget(row, 7, photo_button)
+                self.unplanned_table.setCellWidget(row, 8, photo_button)
 
                 remove_button = QPushButton("Удалить")
                 remove_button.clicked.connect(
                     lambda _checked=False, item_id=item.id: self._delete_unplanned(item_id)
                 )
-                self.unplanned_table.setCellWidget(row, 8, remove_button)
+                self.unplanned_table.setCellWidget(row, 9, remove_button)
                 self._apply_unplanned_row_mode(row)
         finally:
             self.unplanned_table.blockSignals(False)
@@ -638,9 +629,9 @@ class FixationPage(QWidget):
         self._resize_unplanned_table()
 
     def _apply_unplanned_row_mode(self, row: int) -> None:
-        price_cell = self.unplanned_table.item(row, 2)
-        amount_cell = self.unplanned_table.item(row, 3)
-        cost_cell = self.unplanned_table.item(row, 5)
+        price_cell = self.unplanned_table.item(row, 3)
+        amount_cell = self.unplanned_table.item(row, 4)
+        cost_cell = self.unplanned_table.item(row, 6)
         if not price_cell or not amount_cell or not cost_cell:
             return
 
@@ -710,7 +701,7 @@ class FixationPage(QWidget):
         self._refresh_year_status()
 
     def _unplanned_item_changed(self, cell: QTableWidgetItem) -> None:
-        if self._loading or cell.column() not in (2, 3, 4, 5, 6):
+        if self._loading or cell.column() not in (3, 4, 5, 6, 7):
             return
         row = cell.row()
         name_cell = self.unplanned_table.item(row, 0)
@@ -723,7 +714,7 @@ class FixationPage(QWidget):
             value = item.text().strip() if item else ""
             return value or None
 
-        count_text = text_at(4)
+        count_text = text_at(5)
         try:
             fact_count = int(count_text) if count_text else None
             if fact_count is not None and fact_count < 0:
@@ -737,16 +728,16 @@ class FixationPage(QWidget):
             self._load_unplanned_table()
             return
 
-        price = text_at(2)
-        amount = text_at(3)
-        cost = text_at(5)
+        price = text_at(3)
+        amount = text_at(4)
+        cost = text_at(6)
         if price or amount:
             calculated = calculate_fact_total_cost(price, amount, fact_count)
             if calculated is None:
                 cost = None
             else:
                 cost = calculated
-            cost_cell = self.unplanned_table.item(row, 5)
+            cost_cell = self.unplanned_table.item(row, 6)
             if cost_cell is not None:
                 self.unplanned_table.blockSignals(True)
                 try:
@@ -761,7 +752,7 @@ class FixationPage(QWidget):
                 fact_amount=amount,
                 fact_count=fact_count,
                 fact_total_cost=cost,
-                comment=text_at(6),
+                comment=text_at(7),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Не удалось сохранить", str(exc))
