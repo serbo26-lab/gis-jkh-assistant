@@ -271,6 +271,7 @@ class WorkFixationUnplannedItem:
     work_guid: str
     work_type_code: str | None = None
     work_type_guid: str | None = None
+    work_type_name: str | None = None
     unit_name: str | None = None
     fact_price: str | None = None
     fact_amount: str | None = None

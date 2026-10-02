@@ -55,6 +55,15 @@ _MONTHS = (
     "Декабрь",
 )
 _ITEM_ID_ROLE = Qt.ItemDataRole.UserRole
+_WORK_TYPE_NAMES = {
+    "1": "Обслуживание",
+    "2": "Текущий ремонт",
+    "3": "Аварийные работы",
+    "4": "По обращениям граждан",
+    "5": "По ограничениям поставки",
+    "6": "Подготовка ОКИ к отопительному сезону",
+    "7": "Иные",
+}
 
 
 class FixationPage(QWidget):
@@ -282,7 +291,7 @@ class FixationPage(QWidget):
         self.unplanned_table.setHorizontalHeaderLabels(
             [
                 "Работа / услуга",
-                "Вид / ед.",
+                "Вид работы / услуги",
                 "Цена",
                 "Объем",
                 "Количество",
@@ -589,11 +598,9 @@ class FixationPage(QWidget):
             for row, item in enumerate(items):
                 values = (
                     item.work_name,
-                    " / ".join(
-                        value
-                        for value in (item.work_type_code, item.unit_name)
-                        if value
-                    ),
+                    item.work_type_name
+                    or _WORK_TYPE_NAMES.get(item.work_type_code or "")
+                    or "—",
                     item.fact_price,
                     item.fact_amount,
                     str(item.fact_count) if item.fact_count is not None else "",
@@ -647,20 +654,24 @@ class FixationPage(QWidget):
         readonly_background = QBrush(QColor("#f5f6f7"))
         normal_background = QBrush()
 
-        for cell in (price_cell, amount_cell):
-            if total_mode:
-                cell.setFlags(cell.flags() & ~editable)
-                cell.setBackground(readonly_background)
-            else:
-                cell.setFlags(cell.flags() | editable)
-                cell.setBackground(normal_background)
+        was_blocked = self.unplanned_table.blockSignals(True)
+        try:
+            for cell in (price_cell, amount_cell):
+                if total_mode:
+                    cell.setFlags(cell.flags() & ~editable)
+                    cell.setBackground(readonly_background)
+                else:
+                    cell.setFlags(cell.flags() | editable)
+                    cell.setBackground(normal_background)
 
-        if detailed_mode:
-            cost_cell.setFlags(cost_cell.flags() & ~editable)
-            cost_cell.setBackground(readonly_background)
-        else:
-            cost_cell.setFlags(cost_cell.flags() | editable)
-            cost_cell.setBackground(normal_background)
+            if detailed_mode:
+                cost_cell.setFlags(cost_cell.flags() & ~editable)
+                cost_cell.setBackground(readonly_background)
+            else:
+                cost_cell.setFlags(cost_cell.flags() | editable)
+                cost_cell.setBackground(normal_background)
+        finally:
+            self.unplanned_table.blockSignals(was_blocked)
 
     def _open_planned_photos(self, item_id: str) -> None:
         dialog = FixationPhotoDialog(
@@ -774,7 +785,7 @@ class FixationPage(QWidget):
             QMessageBox.information(
                 self,
                 "Нет подключения к ГИС ЖКХ",
-                "Для выбора внеплановой работы нужен подключенный браузерный помощник 0.1.8+.",
+                "Для выбора внеплановой работы нужен подключенный браузерный помощник 0.1.9+.",
             )
             return
         if self._integration_worker is not None and self._integration_worker.isRunning():
@@ -1239,6 +1250,32 @@ class FixationPage(QWidget):
                 for item in result.get("unplannedItems", [])
                 if item.get("localItemId") and item.get("guid")
             }
+            unplanned_metadata = {
+                str(item.get("localItemId")): {
+                    "work_type_code": (
+                        str(item.get("workTypeCode"))
+                        if item.get("workTypeCode")
+                        else None
+                    ),
+                    "work_type_guid": (
+                        str(item.get("workTypeGuid"))
+                        if item.get("workTypeGuid")
+                        else None
+                    ),
+                    "work_type_name": (
+                        str(item.get("workTypeName"))
+                        if item.get("workTypeName")
+                        else None
+                    ),
+                    "unit_name": (
+                        str(item.get("unitName"))
+                        if item.get("unitName")
+                        else None
+                    ),
+                }
+                for item in result.get("unplannedItems", [])
+                if item.get("localItemId")
+            }
             photo_guids = {
                 str(item.get("localPhotoId")): (
                     str(item.get("contentGuid")) if item.get("contentGuid") else None,
@@ -1254,6 +1291,7 @@ class FixationPage(QWidget):
                 gis_last_error=None,
                 fixed_item_guids=fixed_guids,
                 unplanned_item_guids=unplanned_guids,
+                unplanned_item_metadata=unplanned_metadata,
                 photo_guids=photo_guids,
             )
             if self._current_period_id == period_id:
