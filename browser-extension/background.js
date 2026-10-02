@@ -1,7 +1,7 @@
 const LOCAL_BASE = "http://127.0.0.1:8765/api/integration";
 const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
-const KEEP_ALIVE_INTERVAL_MS = 8 * 60 * 1000;
+const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
 
 let lastKeepAliveAttemptMs = 0;
@@ -142,8 +142,8 @@ async function pollLoop() {
 pollLoop();
 
 chrome.alarms.create(KEEP_ALIVE_ALARM, {
-  delayInMinutes: 8,
-  periodInMinutes: 8
+  delayInMinutes: 4,
+  periodInMinutes: 4
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -157,6 +157,42 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 
 async function runGisCommand(command) {
+  function readableError(error) {
+    const data = error?.data;
+    const candidates = [
+      data?.message,
+      data?.error,
+      data?.description,
+      data?.detail,
+      data?.errors,
+      data?.violations
+    ];
+    for (const value of candidates) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+      if (value && typeof value === "object") {
+        try {
+          const text = JSON.stringify(value);
+          if (text && text !== "{}") return text.slice(0, 2000);
+        } catch (_) {
+          // Continue with another representation.
+        }
+      }
+    }
+    if (typeof data === "string" && data.trim()) return data.trim();
+    if (data && typeof data === "object") {
+      try {
+        const text = JSON.stringify(data);
+        if (text && text !== "{}") return text.slice(0, 2000);
+      } catch (_) {
+        // Fall through to ordinary error text.
+      }
+    }
+    if (typeof error?.statusText === "string" && error.statusText.trim()) {
+      return error.statusText.trim();
+    }
+    return String(error?.message || error || "Неизвестная ошибка ГИС ЖКХ.");
+  }
+
   try {
     const angularRef = window.angular;
     if (!angularRef) {
@@ -211,18 +247,6 @@ async function runGisCommand(command) {
       }
       const response = await $http(config);
       return response.data;
-    }
-
-    function normalizeError(error) {
-      const data = error?.data;
-      if (typeof data === "string" && data.trim()) return data.trim();
-      if (data && typeof data.message === "string" && data.message.trim()) {
-        return data.message.trim();
-      }
-      if (typeof error?.statusText === "string" && error.statusText.trim()) {
-        return error.statusText.trim();
-      }
-      return String(error?.message || error || "Неизвестная ошибка ГИС ЖКХ.");
     }
 
     function addressCriteria(houseInfo) {
@@ -1096,22 +1120,24 @@ async function runGisCommand(command) {
           code: work?.serviceType?.code || localItem?.workTypeCode || null
         };
 
-        const unplannedRow = {
-          work: { code: work.code, guid: work.guid },
-          workType,
-          monthlyFixedWork:
-            factCount === null
-              ? null
-              : {
-                  count: String(factCount),
-                  monthYear: {
+        const existingMonthly = existing?.monthlyFixedWork || {};
+        const updatedMonthly =
+          factCount === null
+            ? null
+            : Object.assign({}, existingMonthly, {
+                count: String(factCount),
+                monthYear:
+                  existingMonthly?.monthYear || {
                     month: Number(localPayload.month),
                     year: Number(localPayload.year)
                   },
-                  dates: Array.isArray(existing?.monthlyFixedWork?.dates)
-                    ? existing.monthlyFixedWork.dates
-                    : []
-                },
+                dates: Array.isArray(existingMonthly?.dates)
+                  ? existingMonthly.dates
+                  : []
+              });
+
+        const editableValues = {
+          monthlyFixedWork: updatedMonthly,
           factPrice: fixationNumberForGis(localItem?.factPrice, "Цена факт"),
           factAmount: fixationNumberForGis(localItem?.factAmount, "Объем факт"),
           factTotalCost: fixationNumberForGis(
@@ -1119,12 +1145,21 @@ async function runGisCommand(command) {
             "Стоимость факт"
           ),
           photos: mergedPhotos.photos,
-          accidentObject: {},
-          municipalService: {},
-          municipalResource: {},
           comment: localItem?.comment || null
         };
-        if (existing?.guid) unplannedRow.guid = existing.guid;
+
+        const unplannedRow = existing?.guid
+          ? Object.assign({}, existing, editableValues)
+          : Object.assign(
+              {
+                work: { code: work.code, guid: work.guid },
+                workType,
+                accidentObject: {},
+                municipalService: {},
+                municipalResource: {}
+              },
+              editableValues
+            );
         newUnplanned.push(unplannedRow);
         unplannedMappings.push({
           localItemId: localItem?.localItemId || null,
@@ -1149,6 +1184,20 @@ async function runGisCommand(command) {
     const payload = command?.payload || {};
 
     if (command.type === "keep_alive") {
+      // The GIS timeout is partly driven by client-side inactivity, so a server
+      // echo alone is not sufficient. Dispatch the same harmless activity
+      // signals the page's idle watcher listens for, then perform an
+      // authenticated request as an additional server-side keepalive.
+      const activityTarget = document.body || document.documentElement || document;
+      for (const eventName of ["mousemove", "scroll"]) {
+        activityTarget.dispatchEvent(
+          new Event(eventName, { bubbles: true, cancelable: false })
+        );
+        document.dispatchEvent(
+          new Event(eventName, { bubbles: true, cancelable: false })
+        );
+      }
+
       await request(
         "GET",
         "/auth/api/rest/services/auth/echo/",
@@ -1156,9 +1205,8 @@ async function runGisCommand(command) {
         STATE_WORKPLANNING
       );
 
-      // Fallback for a timeout dialog that may already be visible, for example
-      // after the computer woke from sleep. The exact GIS ЖКХ button simply
-      // performs the same session continuation action.
+      // If the warning dialog appeared between keepalive cycles, use its native
+      // continuation action as a recovery path.
       const continueButton = Array.from(document.querySelectorAll("button")).find(
         (button) => (button.textContent || "").trim() === "Продолжить работу"
       );
@@ -1380,16 +1428,6 @@ async function runGisCommand(command) {
 
     throw new Error("Неизвестная команда интеграции: " + String(command.type));
   } catch (error) {
-    let message = String(error?.message || error);
-    try {
-      const data = error?.data;
-      if (typeof data === "string" && data.trim()) message = data.trim();
-      if (data && typeof data.message === "string" && data.message.trim()) {
-        message = data.message.trim();
-      }
-    } catch (_) {
-      // Keep the original message.
-    }
-    return { ok: false, error: message };
+    return { ok: false, error: readableError(error) };
   }
 }
