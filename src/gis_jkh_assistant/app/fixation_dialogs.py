@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database import Repository
+from gis_jkh_assistant.work_fixation import calculate_fact_total_cost
 
 
 _ALLOWED_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".bmp", ".gif"}
@@ -146,6 +147,7 @@ class AddUnplannedWorkDialog(QDialog):
         super().__init__(parent)
         self.options = options
         self._photo_paths: list[Path] = []
+        self._syncing_fact_fields = False
         self.setWindowTitle("Добавление внеплановой работы")
         self.resize(700, 500)
 
@@ -193,8 +195,10 @@ class AddUnplannedWorkDialog(QDialog):
         root.addWidget(self.photo_list)
 
         hint = QLabel(
-            "Стоимость можно оставить пустой — если цена, объем и количество заполнены, "
-            "она будет рассчитана автоматически."
+            "Как в ГИС ЖКХ: либо заполните цену + объем + количество — стоимость "
+            "рассчитается автоматически и будет заблокирована, либо укажите "
+            "стоимость + количество — тогда цена и объем будут заблокированы. "
+            "Чтобы сменить вариант, очистите заполненные поля текущего варианта."
         )
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
@@ -209,11 +213,39 @@ class AddUnplannedWorkDialog(QDialog):
         root.addWidget(buttons)
 
         self.work_combo.currentIndexChanged.connect(self._update_work_type)
+        self.price_edit.textChanged.connect(self._sync_fact_fields)
+        self.amount_edit.textChanged.connect(self._sync_fact_fields)
+        self.count_edit.textChanged.connect(self._sync_fact_fields)
+        self.cost_edit.textChanged.connect(self._sync_fact_fields)
         self.add_photo_button.clicked.connect(self._add_photos)
         self.remove_photo_button.clicked.connect(self._remove_photo)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         self._update_work_type()
+        self._sync_fact_fields()
+
+    def _sync_fact_fields(self, *_args) -> None:
+        if self._syncing_fact_fields:
+            return
+        self._syncing_fact_fields = True
+        try:
+            price = self.price_edit.text().strip()
+            amount = self.amount_edit.text().strip()
+            count = self.count_edit.text().strip()
+            cost = self.cost_edit.text().strip()
+
+            detailed_mode = bool(price or amount)
+            total_mode = bool(cost) and not detailed_mode
+
+            self.price_edit.setEnabled(not total_mode)
+            self.amount_edit.setEnabled(not total_mode)
+            self.cost_edit.setEnabled(not detailed_mode)
+
+            if detailed_mode:
+                calculated = calculate_fact_total_cost(price, amount, count)
+                self.cost_edit.setText(calculated or "")
+        finally:
+            self._syncing_fact_fields = False
 
     def _add_photos(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -309,19 +341,31 @@ class AddUnplannedWorkDialog(QDialog):
                 )
                 return
 
-        if not self.cost_edit.text().strip():
-            try:
-                price = self._decimal(self.price_edit.text().strip())
-                amount = self._decimal(self.amount_edit.text().strip())
-                count = Decimal(int(count_text))
-            except (InvalidOperation, ValueError):
-                pass
-            else:
-                value = (price * amount * count).quantize(
-                    Decimal("0.01"),
-                    rounding=ROUND_HALF_UP,
+        price_text = self.price_edit.text().strip()
+        amount_text = self.amount_edit.text().strip()
+        if price_text or amount_text:
+            if not price_text or not amount_text or not count_text:
+                QMessageBox.warning(
+                    self,
+                    "Заполните расчетные поля",
+                    "Для варианта «цена × объем × количество» нужно заполнить "
+                    "все три поля.",
                 )
-                self.cost_edit.setText(format(value, "f"))
+                return
+            calculated = calculate_fact_total_cost(
+                price_text,
+                amount_text,
+                count_text,
+            )
+            if calculated is None:
+                QMessageBox.warning(
+                    self,
+                    "Проверьте расчетные поля",
+                    "Цена, объем и количество должны быть неотрицательными числами, "
+                    "а количество — целым числом.",
+                )
+                return
+            self.cost_edit.setText(calculated)
 
         if not self.cost_edit.text().strip():
             QMessageBox.warning(
