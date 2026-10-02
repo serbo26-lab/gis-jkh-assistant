@@ -53,7 +53,6 @@ _MONTHS = (
     "Ноябрь",
     "Декабрь",
 )
-_MONTH_SHORT = ("Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек")
 _ITEM_ID_ROLE = Qt.ItemDataRole.UserRole
 
 
@@ -480,14 +479,14 @@ class FixationPage(QWidget):
         if columns is not None:
             self._month_button_columns = max(1, int(columns))
         while self.month_buttons_layout.count():
-            item = self.month_buttons_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(self)
+            self.month_buttons_layout.takeAt(0)
         for index, month in enumerate(range(1, 13)):
             row, column = divmod(index, self._month_button_columns)
-            button = self.month_buttons[month]
-            button.setParent(self)
-            self.month_buttons_layout.addWidget(button, row, column)
+            self.month_buttons_layout.addWidget(
+                self.month_buttons[month],
+                row,
+                column,
+            )
             self.month_buttons_layout.setColumnStretch(column, 1)
 
     def _resize_table_to_rows(
@@ -520,6 +519,7 @@ class FixationPage(QWidget):
     def _load_table(self) -> None:
         if not self._current_period_id:
             self.table.setRowCount(0)
+            self._resize_planned_table()
             return
 
         items = self.repository.list_work_fixation_items(self._current_period_id)
@@ -574,6 +574,7 @@ class FixationPage(QWidget):
     def _load_unplanned_table(self) -> None:
         if not self._current_period_id:
             self.unplanned_table.setRowCount(0)
+            self._resize_unplanned_table()
             return
         items = self.repository.list_work_fixation_unplanned_items(
             self._current_period_id
