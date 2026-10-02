@@ -1,5 +1,3 @@
-import pytest
-
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
 from gis_jkh_assistant.quality_assessment import (
@@ -73,7 +71,8 @@ def _fixture(repository: Repository):
 def test_quality_helper_version() -> None:
     assert not helper_supports_quality_assessment(None)
     assert not helper_supports_quality_assessment("0.1.9")
-    assert helper_supports_quality_assessment("0.1.10")
+    assert not helper_supports_quality_assessment("0.1.10")
+    assert helper_supports_quality_assessment("0.1.11")
     assert helper_supports_quality_assessment("0.2.0")
 
 
@@ -173,7 +172,71 @@ def test_multiple_quality_acts_are_kept_for_one_work(tmp_path) -> None:
     repository.close()
 
 
-def test_remote_quality_act_is_not_deleted_before_update_flow_is_verified(tmp_path) -> None:
+def test_remote_quality_act_is_marked_for_removal_and_sent_in_payload(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    item = store.list_items(period.id)[0]
+    store.update_item(
+        item.id,
+        included=True,
+        cost=None,
+        days_count=None,
+        cost_reduction=None,
+    )
+    act = store.add_act(
+        item_id=item.id,
+        act_type="ACCEPTANCE_ACT",
+        number="10",
+        reg_date="01.01.2026",
+        period_from="01.01.2026",
+        period_to="10.01.2026",
+        file_name="quality.pdf",
+        description=None,
+        content_type="application/pdf",
+        content=b"quality",
+    )
+    store.set_gis_state(
+        period.id,
+        reporting_period_guid="reporting-guid",
+        estimation_guid="estimation-guid",
+        gis_status="APPROVED",
+        act_guids={act.id: ("content-guid", "act-guid")},
+    )
+
+    store.delete_act(act.id)
+
+    assert store.list_acts(item.id) == []
+    all_acts = store.list_acts(item.id, include_deleted=True)
+    assert len(all_acts) == 1
+    assert all_acts[0].deleted is True
+
+    refreshed = store.list_items(period.id)[0]
+    payload = build_quality_command_payload(
+        fias_house_code=house.fias_house_guid or "",
+        work_list_guid=work_list.gis_work_list_guid or "",
+        year=2026,
+        month=1,
+        items=[refreshed],
+        acts_by_item={refreshed.id: all_acts},
+    )
+    row = payload["items"][0]
+    assert row["acts"] == []
+    assert row["removedRemoteActGuids"] == ["act-guid"]
+    assert row["removedRemoteContentGuids"] == ["content-guid"]
+
+    period_after = store.get_period(period.id)
+    assert period_after is not None
+    assert period_after.gis_status == "MODIFIED"
+    repository.close()
+
+
+def test_cancelled_quality_assessment_keeps_local_data_for_reuse(tmp_path) -> None:
     repository = Repository(tmp_path / "app.db")
     _organization, _house, work_list = _fixture(repository)
     store = QualityAssessmentStore(repository)
@@ -185,26 +248,38 @@ def test_remote_quality_act_is_not_deleted_before_update_flow_is_verified(tmp_pa
     item = store.list_items(period.id)[0]
     act = store.add_act(
         item_id=item.id,
-        act_type="QUALITY_VIOLATION_ACT",
-        number="1",
+        act_type="ACCEPTANCE_ACT",
+        number="11",
         reg_date="01.01.2026",
         period_from="01.01.2026",
-        period_to="01.01.2026",
-        file_name="quality.pdf",
-        description=None,
+        period_to="11.01.2026",
+        file_name="act.pdf",
+        description="act.pdf",
         content_type="application/pdf",
-        content=b"quality",
+        content=b"act",
     )
     store.set_gis_state(
         period.id,
         reporting_period_guid="reporting-guid",
         estimation_guid="estimation-guid",
-        gis_status="DRAFT",
+        gis_status="APPROVED",
+        item_guids={item.id: "item-guid"},
         act_guids={act.id: ("content-guid", "act-guid")},
     )
 
-    with pytest.raises(ValueError, match="отдельной проверки"):
-        store.delete_act(act.id)
+    store.mark_cancelled(period.id)
 
-    assert len(store.list_acts(item.id)) == 1
+    cancelled = store.get_period(period.id)
+    assert cancelled is not None
+    assert cancelled.estimation_guid is None
+    assert cancelled.gis_status == "CANCELLED"
+
+    refreshed_item = store.get_item(item.id)
+    assert refreshed_item is not None
+    assert refreshed_item.gis_estimation_item_guid is None
+
+    kept_act = store.list_acts(item.id)[0]
+    assert kept_act.remote_content_guid == "content-guid"
+    assert kept_act.remote_act_guid is None
+    assert kept_act.content == b"act"
     repository.close()

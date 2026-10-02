@@ -150,8 +150,10 @@ class QualityAssessmentPage(QWidget):
         actions = QHBoxLayout()
         self.save_button = QPushButton("Сохранить проект")
         self.publish_button = QPushButton("Разместить информацию")
+        self.cancel_button = QPushButton("Аннулировать информацию")
         actions.addWidget(self.save_button)
         actions.addWidget(self.publish_button)
+        actions.addWidget(self.cancel_button)
         actions.addStretch(1)
         month_layout.addLayout(actions)
         root.addWidget(month_card)
@@ -199,6 +201,7 @@ class QualityAssessmentPage(QWidget):
         self.table.itemChanged.connect(self._table_item_changed)
         self.save_button.clicked.connect(self._save_project)
         self.publish_button.clicked.connect(self._publish)
+        self.cancel_button.clicked.connect(self._cancel)
         self._set_enabled(False)
 
     def refresh_organizations(self) -> None:
@@ -333,8 +336,6 @@ class QualityAssessmentPage(QWidget):
         if not self._current_period_id:
             self.table.setRowCount(0)
             return
-        period = self.store.get_period(self._current_period_id)
-        locked = str(period.gis_status or "").upper() in {"DRAFT", "APPROVED"} if period else False
         items = self.store.list_items(self._current_period_id)
         self._loading = True
         self.table.blockSignals(True)
@@ -347,8 +348,6 @@ class QualityAssessmentPage(QWidget):
                     Qt.CheckState.Checked if item.included else Qt.CheckState.Unchecked
                 )
                 include.setData(_ITEM_ID_ROLE, item.id)
-                if locked:
-                    include.setFlags(include.flags() & ~Qt.ItemFlag.ItemIsEnabled)
                 self.table.setItem(row, 0, include)
 
                 name = QTableWidgetItem(item.work_name)
@@ -359,9 +358,6 @@ class QualityAssessmentPage(QWidget):
                 days = QTableWidgetItem(
                     "" if item.days_count is None else str(item.days_count)
                 )
-                if locked:
-                    cost.setFlags(cost.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    days.setFlags(days.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, 2, cost)
                 self.table.setItem(row, 3, days)
 
@@ -437,14 +433,12 @@ class QualityAssessmentPage(QWidget):
     def _open_acts(self, item_id: str) -> None:
         if not self._current_period_id or self._current_month is None:
             return
-        period = self.store.get_period(self._current_period_id)
-        editable = str(period.gis_status or "").upper() not in {"DRAFT", "APPROVED"} if period else True
         dialog = QualityActsDialog(
             self.store,
             item_id=item_id,
             year=int(self.year_combo.currentData()),
             month=int(self._current_month),
-            editable=editable,
+            editable=True,
             parent=self,
         )
         dialog.exec()
@@ -499,7 +493,10 @@ class QualityAssessmentPage(QWidget):
             )
             return None
         items = self.store.list_items(period.id)
-        acts = {item.id: self.store.list_acts(item.id) for item in items}
+        acts = {
+            item.id: self.store.list_acts(item.id, include_deleted=True)
+            for item in items
+        }
         payload = build_quality_command_payload(
             fias_house_code=house.fias_house_guid,
             work_list_guid=work_list.gis_work_list_guid,
@@ -520,14 +517,51 @@ class QualityAssessmentPage(QWidget):
     def _publish(self) -> None:
         if not self._validate_local():
             return
+        period = (
+            self.store.get_period(self._current_period_id)
+            if self._current_period_id
+            else None
+        )
+        if period and period.estimation_guid:
+            question = (
+                "Изменения будут отправлены в ГИС ЖКХ как новая версия "
+                "оценки качества. Продолжить?"
+            )
+            success = "Изменения оценки качества размещены в ГИС ЖКХ."
+        else:
+            question = (
+                "Программа сначала сохранит актуальные данные как проект, "
+                "затем разместит их. Продолжить?"
+            )
+            success = "Оценка качества размещена в ГИС ЖКХ."
         answer = QMessageBox.question(
             self,
             "Разместить оценку качества?",
-            "Программа сначала сохранит актуальные данные как проект, затем разместит их. Продолжить?",
+            question,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._run_gis("approve_quality_assessment", "Оценка качества размещена в ГИС ЖКХ.")
+        self._run_gis("approve_quality_assessment", success)
+
+    def _cancel(self) -> None:
+        if not self._current_period_id:
+            return
+        period = self.store.get_period(self._current_period_id)
+        if period is None or not period.estimation_guid:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Аннулировать оценку качества?",
+            "ГИС ЖКХ аннулирует размещённую оценку качества выбранного месяца. "
+            "Локальные данные останутся в программе, чтобы при необходимости "
+            "сформировать оценку заново. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._run_gis(
+            "cancel_quality_assessment",
+            "Оценка качества аннулирована в ГИС ЖКХ.",
+        )
 
     def _run_gis(self, command: str, success_message: str) -> None:
         payload = self._payload()
@@ -548,6 +582,14 @@ class QualityAssessmentPage(QWidget):
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
+            if result.get("cancelled"):
+                self.store.mark_cancelled(period_id)
+                self._load_table()
+                self._refresh_period_status()
+                self._refresh_year_status()
+                QMessageBox.information(self, "ГИС ЖКХ", success_message)
+                return
+
             item_guids = {
                 str(row.get("localItemId")): str(row.get("guid"))
                 for row in (result.get("items") or [])
@@ -602,6 +644,7 @@ class QualityAssessmentPage(QWidget):
             "DRAFT": "проект в ГИС ЖКХ",
             "APPROVED": "размещено в ГИС ЖКХ",
             "MODIFIED": "изменено локально",
+            "CANCELLED": "аннулировано в ГИС ЖКХ",
         }
         status = labels.get(str(period.gis_status or "LOCAL").upper(), str(period.gis_status or "локально"))
         text = f"{_MONTHS[period.month - 1]} {period.year}: {status}"
@@ -634,6 +677,8 @@ class QualityAssessmentPage(QWidget):
                         suffix = "размещено"
                     elif status == "MODIFIED":
                         suffix = "изменено"
+                    elif status == "CANCELLED":
+                        suffix = "аннулировано"
                     elif period.gis_last_error:
                         suffix = "ошибка"
                     else:
@@ -657,10 +702,34 @@ class QualityAssessmentPage(QWidget):
             and helper_supports_quality_assessment(status.helper_version)
             and not self._integration_busy
         )
-        period = self.store.get_period(self._current_period_id) if self._current_period_id else None
+        period = (
+            self.store.get_period(self._current_period_id)
+            if self._current_period_id
+            else None
+        )
         gis_status = str(period.gis_status or "").upper() if period else ""
-        self.save_button.setEnabled(bool(period) and ready and gis_status not in {"DRAFT", "APPROVED"})
-        self.publish_button.setEnabled(bool(period) and ready and gis_status != "APPROVED")
+        has_remote = bool(period and period.estimation_guid)
+
+        self.save_button.setEnabled(bool(period) and ready and not has_remote)
+        self.publish_button.setEnabled(
+            bool(period)
+            and ready
+            and (
+                not has_remote
+                or gis_status in {"DRAFT", "MODIFIED", "CANCELLED", "LOCAL"}
+            )
+        )
+        self.publish_button.setText(
+            "Разместить изменения"
+            if has_remote and gis_status == "MODIFIED"
+            else "Разместить информацию"
+        )
+        self.cancel_button.setEnabled(
+            bool(period)
+            and ready
+            and has_remote
+            and gis_status in {"DRAFT", "APPROVED", "MODIFIED"}
+        )
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
