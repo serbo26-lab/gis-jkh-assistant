@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -54,9 +54,32 @@ class MainWindow(QMainWindow):
         self.navigation = QListWidget()
         self.navigation.setFrameShape(QFrame.NoFrame)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        for title in ("Дома", "Перечни работ и услуг", "Планирование", "Фиксация работ и услуг", "Настройки"):
+        for title in (
+            "Дома",
+            "Перечни работ и услуг",
+            "Планирование",
+            "Фиксация работ и услуг",
+            "Настройки",
+        ):
             self.navigation.addItem(QListWidgetItem(title))
         sidebar_layout.addWidget(self.navigation, 1)
+
+        self.integration_card = QFrame()
+        self.integration_card.setObjectName("SidebarStatusCard")
+        integration_layout = QVBoxLayout(self.integration_card)
+        integration_layout.setContentsMargins(10, 9, 10, 9)
+        integration_layout.setSpacing(4)
+
+        integration_title = QLabel("Связь с ГИС ЖКХ")
+        integration_title.setObjectName("SidebarStatusTitle")
+        integration_layout.addWidget(integration_title)
+
+        self.integration_status = QLabel("Проверка подключения…")
+        self.integration_status.setObjectName("SidebarStatusText")
+        self.integration_status.setWordWrap(True)
+        integration_layout.addWidget(self.integration_status)
+
+        sidebar_layout.addWidget(self.integration_card)
         layout.addWidget(sidebar)
 
         self.pages = QStackedWidget()
@@ -72,7 +95,48 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.pages, 1)
 
         self.navigation.currentRowChanged.connect(self._navigation_changed)
+
+        self.integration_status_timer = QTimer(self)
+        self.integration_status_timer.setInterval(1500)
+        self.integration_status_timer.timeout.connect(self._refresh_integration_status)
+        self._refresh_integration_status()
+        self.integration_status_timer.start()
+
         self.navigation.setCurrentRow(0)
+
+    def _refresh_integration_status(self) -> None:
+        status = self.integration_gateway.status()
+        if not status.running:
+            text = "Локальный шлюз не запущен"
+            if status.error:
+                text += f"\n{status.error}"
+            color = "#b42318"
+        elif not status.helper_connected:
+            text = "Помощник не подключен"
+            color = "#8a5b00"
+        elif not status.gis_page_ready:
+            version = status.helper_version or "?"
+            text = f"Помощник {version} подключен\nВкладка ГИС ЖКХ не открыта"
+            color = "#8a5b00"
+        else:
+            version = status.helper_version or "?"
+            text = f"ГИС ЖКХ подключен\nПомощник {version}"
+            if status.session_keep_alive_error:
+                text += "\nСессия: ошибка продления"
+                color = "#8a5b00"
+            elif status.session_keep_alive_enabled:
+                text += "\nСессия: автопродление вкл."
+                color = "#107c10"
+            else:
+                text += "\nСессия: активна"
+                color = "#107c10"
+
+        self.integration_status.setText(text)
+        self.integration_status.setStyleSheet(f"color: {color};")
+
+        self.work_lists_page._refresh_integration_status()
+        self.planning_page._refresh_integration_status()
+        self.fixation_page._refresh_integration_status()
 
     def _navigation_changed(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
