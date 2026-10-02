@@ -20,6 +20,18 @@ QFrame#Card, QScrollArea#Card {
     border: 1px solid #e1e1e1;
     border-radius: 8px;
 }
+QFrame#SidebarStatusCard {
+    background: #ffffff;
+    border: 1px solid #d9d9d9;
+    border-radius: 8px;
+}
+QLabel#SidebarStatusTitle {
+    font-size: 9pt;
+    font-weight: 600;
+}
+QLabel#SidebarStatusText {
+    font-size: 9pt;
+}
 QLabel#Title {
     font-size: 18pt;
     font-weight: 600;
@@ -130,6 +142,20 @@ QPushButton#PrimaryButton:pressed {
 QPushButton#DangerButton {
     color: #b42318;
 }
+QPushButton#MonthButton {
+    padding: 6px 7px;
+    min-height: 40px;
+    font-weight: 500;
+}
+QPushButton#MonthButton:checked {
+    background: #e7f2fb;
+    border: 2px solid #0067c0;
+}
+QPushButton#MonthButton:disabled {
+    color: #8b8b8b;
+    background: #f7f7f7;
+    border-color: #e3e3e3;
+}
 QListWidget {
     background: #ffffff;
     border: 1px solid #e1e1e1;
@@ -224,6 +250,13 @@ QPushButton {
     padding: 5px 9px;
     min-height: 20px;
 }
+QPushButton#MonthButton {
+    padding: 5px 6px;
+    min-height: 34px;
+}
+QLabel#SidebarStatusTitle, QLabel#SidebarStatusText {
+    font-size: 8pt;
+}
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     padding: 4px 6px;
     min-height: 20px;
@@ -251,6 +284,13 @@ QLabel#SectionTitle {
 QPushButton {
     padding: 4px 7px;
     min-height: 18px;
+}
+QPushButton#MonthButton {
+    padding: 4px 5px;
+    min-height: 30px;
+}
+QLabel#SidebarStatusTitle, QLabel#SidebarStatusText {
+    font-size: 7pt;
 }
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     padding: 3px 5px;
