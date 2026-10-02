@@ -99,14 +99,9 @@ class WorkListsPage(QWidget):
         self._period_timer.setInterval(650)
         self._period_timer.timeout.connect(self._save_period)
 
-        self._integration_status_timer = QTimer(self)
-        self._integration_status_timer.setInterval(1500)
-        self._integration_status_timer.timeout.connect(self._refresh_integration_status)
-
         self._build_ui()
         self._refresh_export_template_status()
         self._refresh_integration_status()
-        self._integration_status_timer.start()
         self.refresh_organizations()
 
     def _build_ui(self) -> None:
@@ -205,11 +200,6 @@ class WorkListsPage(QWidget):
         self.export_template_status.setWordWrap(True)
         context_layout.addWidget(self.export_template_status, 7, 0, 1, 4)
 
-        self.browser_status = QLabel("Браузер: проверка подключения…")
-        self.browser_status.setObjectName("Muted")
-        self.browser_status.setWordWrap(True)
-        context_layout.addWidget(self.browser_status, 8, 0, 1, 4)
-
         self.load_export_template_button = QPushButton("Загрузить / обновить шаблон экспорта")
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
         self.upload_to_gis_button = QPushButton("Загрузить в ГИС ЖКХ")
@@ -227,7 +217,7 @@ class WorkListsPage(QWidget):
         gis_actions.addWidget(self.sync_gis_button, 1, 1)
         gis_actions.addWidget(self.approve_gis_button, 1, 2)
         gis_actions.setColumnStretch(1, 1)
-        context_layout.addLayout(gis_actions, 9, 0, 1, 4)
+        context_layout.addLayout(gis_actions, 8, 0, 1, 4)
 
         context_layout.setColumnStretch(1, 1)
         context_layout.setColumnStretch(3, 3)
@@ -796,39 +786,7 @@ class WorkListsPage(QWidget):
         return text + (f" • {' • '.join(details)}" if details else "")
 
     def _refresh_integration_status(self) -> None:
-        status = self.integration_gateway.status()
-        if not status.running:
-            text = "Браузер: локальная интеграция не запущена"
-            if status.error:
-                text += f" ({status.error})"
-            self.browser_status.setText(text)
-            self.browser_status.setStyleSheet("color: #b42318;")
-        elif not status.helper_connected:
-            self.browser_status.setText(
-                "Браузер: помощник не подключен. Установите расширение из папки "
-                "browser-extension и откройте личный кабинет ГИС ЖКХ."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        elif not status.gis_page_ready:
-            self.browser_status.setText(
-                "Браузер: помощник подключен, но вкладка ГИС ЖКХ не открыта."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        else:
-            if status.session_keep_alive_error:
-                self.browser_status.setText(
-                    "Браузер: ГИС ЖКХ подключен • автопродление сессии: ошибка — "
-                    f"{status.session_keep_alive_error}"
-                )
-                self.browser_status.setStyleSheet("color: #8a5b00;")
-            elif status.session_keep_alive_enabled:
-                self.browser_status.setText(
-                    "Браузер: ГИС ЖКХ подключен • автопродление сессии: включено"
-                )
-                self.browser_status.setStyleSheet("color: #107c10;")
-            else:
-                self.browser_status.setText("Браузер: ГИС ЖКХ подключен")
-                self.browser_status.setStyleSheet("color: #107c10;")
+        """Refresh GIS-dependent actions; visible status lives in the sidebar."""
 
         self._refresh_gis_action_buttons()
 

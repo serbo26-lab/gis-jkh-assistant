@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 import json
 
-from PySide6.QtCore import QDate, QTimer, Qt, Signal
+from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -196,14 +196,9 @@ class PlanningPage(QWidget):
         self._current_plan_id: str | None = None
         self._current_work_list_id: str | None = None
 
-        self._integration_status_timer = QTimer(self)
-        self._integration_status_timer.setInterval(1500)
-        self._integration_status_timer.timeout.connect(self._refresh_integration_status)
-
         self._build_ui()
         self.refresh_organizations()
         self._refresh_integration_status()
-        self._integration_status_timer.start()
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -268,11 +263,6 @@ class PlanningPage(QWidget):
         self.plan_status.setWordWrap(True)
         context_layout.addWidget(self.plan_status, 3, 2, 1, 2)
 
-        self.browser_status = QLabel("Браузер: проверка подключения…")
-        self.browser_status.setObjectName("Muted")
-        self.browser_status.setWordWrap(True)
-        context_layout.addWidget(self.browser_status, 4, 0, 1, 4)
-
         self.distribute_button = QPushButton("Распределить количество по месяцам")
         self.distribute_button.setToolTip(
             "Распределить количество из размещенного перечня по всему его периоду. "
@@ -291,7 +281,7 @@ class PlanningPage(QWidget):
         actions.addWidget(self.clear_button)
         actions.addStretch(1)
         actions.addWidget(self.publish_button)
-        context_layout.addLayout(actions, 5, 0, 1, 4)
+        context_layout.addLayout(actions, 4, 0, 1, 4)
 
         context_layout.setColumnStretch(1, 2)
         context_layout.setColumnStretch(3, 1)
@@ -875,37 +865,8 @@ class PlanningPage(QWidget):
             self.plan_status.setText(text)
 
     def _refresh_integration_status(self) -> None:
-        status = self.integration_gateway.status()
-        if not status.running:
-            text = "Браузер: локальная интеграция не запущена"
-            if status.error:
-                text += f" ({status.error})"
-            self.browser_status.setText(text)
-            self.browser_status.setStyleSheet("color: #b42318;")
-        elif not status.helper_connected:
-            self.browser_status.setText(
-                "Браузер: помощник не подключен. Установите расширение из папки "
-                "browser-extension и откройте личный кабинет ГИС ЖКХ."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        elif not status.gis_page_ready:
-            self.browser_status.setText(
-                "Браузер: помощник подключен, но вкладка ГИС ЖКХ не открыта."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        elif not helper_supports_work_plans(status.helper_version):
-            version = status.helper_version or "не определена"
-            self.browser_status.setText(
-                "Браузер: ГИС ЖКХ подключен, но версия помощника "
-                f"{version} не поддерживает размещение планов. "
-                "Обновите расширение до версии 0.1.5 из новой сборки."
-            )
-            self.browser_status.setStyleSheet("color: #8a5b00;")
-        else:
-            self.browser_status.setText(
-                f"Браузер: ГИС ЖКХ подключен • помощник {status.helper_version}"
-            )
-            self.browser_status.setStyleSheet("color: #107c10;")
+        """Refresh GIS-dependent actions; visible status lives in the sidebar."""
+
         self._refresh_gis_action_button()
 
     def _refresh_gis_action_button(self) -> None:
