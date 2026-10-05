@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from PySide6.QtCore import QEvent, Qt, QTimer
@@ -120,12 +121,10 @@ class LazyDistributionDialog(QDialog):
         )
 
         house = repository.get_house(work_list.house_id)
-        house_tariff = repository.find_house_tariff_covering_period(
+        tariff_reference_date = date(work_list.base_year, 1, 1)
+        house_tariff = repository.find_house_tariff_at_date(
             work_list.house_id,
-            start_year=work_list.start_year,
-            start_month=work_list.start_month,
-            end_year=work_list.end_year,
-            end_month=work_list.end_month,
+            tariff_reference_date,
         )
         initial_tariff = (
             work_list.planned_tariff
@@ -174,7 +173,8 @@ class LazyDistributionDialog(QDialog):
         tariff_tooltip = "Тариф, руб. за м² в месяц"
         if not work_list.planned_tariff and house_tariff:
             tariff_tooltip += (
-                f". Подставлен из карточки дома за период {house_tariff.period_label}"
+                ". Подставлен тариф, действующий на "
+                f"01.01.{work_list.base_year}: {house_tariff.amount} руб./м²"
             )
         self.tariff_edit.setToolTip(tariff_tooltip)
         controls.addWidget(self.tariff_edit, 1, 1)

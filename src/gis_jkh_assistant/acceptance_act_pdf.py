@@ -2,18 +2,37 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfgen import canvas
+from reportlab.platypus import (
+    LongTable,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    TableStyle,
+)
 
 
 _FONT_NAME = "GisJkhActSans"
 _FONT_BOLD_NAME = "GisJkhActSansBold"
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptanceActWorkRow:
+    name: str
+    unit_name: str | None = None
+    periodicity: str | int | None = None
+    actual_cost: str | None = None
 
 
 def _font_candidates() -> tuple[tuple[str, str], ...]:
@@ -54,21 +73,39 @@ def _ensure_fonts() -> tuple[str, str]:
     )
 
 
-def _wrap_text(text: str, *, font_name: str, font_size: float, width: float) -> list[str]:
-    words = str(text).split()
-    if not words:
-        return [""]
-    lines: list[str] = []
-    current = words[0]
-    for word in words[1:]:
-        candidate = f"{current} {word}"
-        if pdfmetrics.stringWidth(candidate, font_name, font_size) <= width:
-            current = candidate
-        else:
-            lines.append(current)
-            current = word
-    lines.append(current)
-    return lines
+def acceptance_act_headers(
+    work_rows: list[AcceptanceActWorkRow],
+) -> tuple[str, ...]:
+    """Return table headers, omitting units when none are available."""
+
+    has_units = any(str(row.unit_name or "").strip() for row in work_rows)
+    headers = ["№ п/п", "Наименование работы (услуги)"]
+    if has_units:
+        headers.append("Ед. измерения")
+    headers.extend(["Периодичность", "Стоимость факт., руб."])
+    return tuple(headers)
+
+
+def _format_actual_cost(value: str | None) -> str:
+    if value is None or not str(value).strip():
+        return ""
+    source = str(value).strip()
+    normalized = source.replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    try:
+        number = Decimal(normalized)
+    except InvalidOperation:
+        return source
+    return f"{number:,.2f}".replace(",", " ").replace(".", ",")
+
+
+def _paragraph(
+    text: object,
+    *,
+    style: ParagraphStyle,
+) -> Paragraph:
+    source = "" if text is None else str(text)
+    safe = source.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return Paragraph(safe, style)
 
 
 def build_acceptance_act_pdf(
@@ -79,104 +116,196 @@ def build_acceptance_act_pdf(
     act_date: str,
     period_from: str,
     period_to: str,
-    work_names: list[str],
+    work_rows: list[AcceptanceActWorkRow] | None = None,
+    work_names: list[str] | None = None,
 ) -> bytes:
-    """Build a neutral monthly acceptance act without inventing signatories."""
+    """Build a neutral monthly acceptance act from fixation facts."""
 
-    if not work_names:
+    if work_rows is None:
+        work_rows = [
+            AcceptanceActWorkRow(name=name)
+            for name in (work_names or [])
+        ]
+    if not work_rows:
         raise ValueError("Для формирования акта нужно выбрать хотя бы одну работу.")
 
     font_name, font_bold = _ensure_fonts()
     stream = BytesIO()
-    pdf = canvas.Canvas(stream, pagesize=A4)
-    page_width, page_height = A4
-    left = 20 * mm
-    right = 20 * mm
-    usable_width = page_width - left - right
-    bottom = 25 * mm
-    y = page_height - 20 * mm
-
-    def new_page() -> None:
-        nonlocal y
-        pdf.showPage()
-        y = page_height - 20 * mm
-
-    def ensure_height(required: float) -> None:
-        if y - required < bottom:
-            new_page()
-
-    pdf.setTitle(f"Акт выполненных работ № {act_number}")
-    pdf.setAuthor(str(organization_name or "Управляющая организация"))
-
-    pdf.setFont(font_bold, 14)
-    pdf.drawCentredString(page_width / 2, y, "АКТ ВЫПОЛНЕННЫХ РАБОТ")
-    y -= 8 * mm
-
-    pdf.setFont(font_name, 10.5)
-    pdf.drawCentredString(
-        page_width / 2,
-        y,
-        f"№ {act_number} от {act_date} г.",
+    document = SimpleDocTemplate(
+        stream,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=20 * mm,
+        title=f"Акт выполненных работ № {act_number}",
+        author=str(organization_name or "Управляющая организация"),
     )
-    y -= 10 * mm
 
-    label_width = 42 * mm
+    title_style = ParagraphStyle(
+        "ActTitle",
+        fontName=font_bold,
+        fontSize=14,
+        leading=17,
+        alignment=TA_CENTER,
+        spaceAfter=5 * mm,
+    )
+    subtitle_style = ParagraphStyle(
+        "ActSubtitle",
+        fontName=font_name,
+        fontSize=10.5,
+        leading=13,
+        alignment=TA_CENTER,
+        spaceAfter=7 * mm,
+    )
+    label_style = ParagraphStyle(
+        "ActLabel",
+        fontName=font_bold,
+        fontSize=9.5,
+        leading=12,
+        alignment=TA_LEFT,
+    )
+    body_style = ParagraphStyle(
+        "ActBody",
+        fontName=font_name,
+        fontSize=9.5,
+        leading=12,
+        alignment=TA_LEFT,
+    )
+    table_header_style = ParagraphStyle(
+        "ActTableHeader",
+        fontName=font_bold,
+        fontSize=8.3,
+        leading=10,
+        alignment=TA_CENTER,
+    )
+    table_text_style = ParagraphStyle(
+        "ActTableText",
+        fontName=font_name,
+        fontSize=8.5,
+        leading=10.5,
+        alignment=TA_LEFT,
+    )
+    table_center_style = ParagraphStyle(
+        "ActTableCenter",
+        fontName=font_name,
+        fontSize=8.5,
+        leading=10.5,
+        alignment=TA_CENTER,
+    )
+    table_money_style = ParagraphStyle(
+        "ActTableMoney",
+        fontName=font_name,
+        fontSize=8.5,
+        leading=10.5,
+        alignment=TA_RIGHT,
+    )
+
+    story = [
+        _paragraph("АКТ ВЫПОЛНЕННЫХ РАБОТ", style=title_style),
+        _paragraph(f"№ {act_number} от {act_date} г.", style=subtitle_style),
+    ]
+
     for label, value in (
-        ("Управляющая организация", organization_name),
-        ("Адрес дома", house_address),
-        ("Отчётный период", f"{period_from} - {period_to}"),
+        ("Управляющая организация:", organization_name),
+        ("Адрес дома:", house_address),
+        ("Отчётный период:", f"{period_from} - {period_to}"),
     ):
-        lines = _wrap_text(
-            value,
-            font_name=font_name,
-            font_size=9.5,
-            width=usable_width - label_width,
+        details = LongTable(
+            [[
+                _paragraph(label, style=label_style),
+                _paragraph(value, style=body_style),
+            ]],
+            colWidths=[42 * mm, 128 * mm],
         )
-        ensure_height(max(7 * mm, len(lines) * 5 * mm))
-        pdf.setFont(font_bold, 9.5)
-        pdf.drawString(left, y, f"{label}:")
-        pdf.setFont(font_name, 9.5)
-        value_x = left + label_width
-        for line_index, line in enumerate(lines):
-            pdf.drawString(value_x, y - line_index * 5 * mm, line)
-        y -= max(7 * mm, len(lines) * 5 * mm)
-
-    y -= 3 * mm
-    ensure_height(12 * mm)
-    pdf.setFont(font_bold, 10)
-    pdf.drawString(left, y, "Выполненные работы и услуги:")
-    y -= 7 * mm
-
-    for index, work_name in enumerate(work_names, start=1):
-        lines = _wrap_text(
-            work_name,
-            font_name=font_name,
-            font_size=9.2,
-            width=usable_width - 8 * mm,
+        details.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                    ("TOPPADDING", (0, 0), (-1, -1), 1),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ]
+            )
         )
-        required = max(5 * mm, len(lines) * 5 * mm)
-        ensure_height(required + 2 * mm)
-        pdf.setFont(font_name, 9.2)
-        pdf.drawString(left, y, f"{index}. {lines[0]}")
-        y -= 5 * mm
-        for line in lines[1:]:
-            pdf.drawString(left + 7 * mm, y, line)
-            y -= 5 * mm
+        story.append(details)
 
-    ensure_height(42 * mm)
-    y -= 8 * mm
-    pdf.setFont(font_name, 9.5)
-    pdf.drawString(
-        left,
-        y,
-        "Работы и услуги за указанный период выполнены.",
-    )
-    y -= 18 * mm
-    pdf.drawString(
-        left,
-        y,
-        "Представитель управляющей организации: __________________ / __________________",
+    story.extend(
+        [
+            Spacer(1, 4 * mm),
+            _paragraph("Выполненные работы и услуги:", style=label_style),
+            Spacer(1, 2 * mm),
+        ]
     )
 
-    pdf.save()
+    headers = acceptance_act_headers(work_rows)
+    has_units = "Ед. измерения" in headers
+    data: list[list[object]] = [
+        [_paragraph(header, style=table_header_style) for header in headers]
+    ]
+
+    for index, row in enumerate(work_rows, start=1):
+        values: list[object] = [
+            _paragraph(index, style=table_center_style),
+            _paragraph(row.name, style=table_text_style),
+        ]
+        if has_units:
+            values.append(_paragraph(row.unit_name or "", style=table_center_style))
+        values.extend(
+            [
+                _paragraph(
+                    "" if row.periodicity is None else row.periodicity,
+                    style=table_center_style,
+                ),
+                _paragraph(
+                    _format_actual_cost(row.actual_cost),
+                    style=table_money_style,
+                ),
+            ]
+        )
+        data.append(values)
+
+    if has_units:
+        col_widths = [12 * mm, 77 * mm, 22 * mm, 31 * mm, 28 * mm]
+    else:
+        col_widths = [12 * mm, 97 * mm, 31 * mm, 30 * mm]
+
+    table = LongTable(
+        data,
+        colWidths=col_widths,
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.55, colors.black),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EDEDED")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(table)
+    story.extend(
+        [
+            Spacer(1, 8 * mm),
+            _paragraph(
+                "Работы и услуги за указанный период выполнены.",
+                style=body_style,
+            ),
+            Spacer(1, 15 * mm),
+            _paragraph(
+                "Представитель управляющей организации: "
+                "__________________ / __________________",
+                style=body_style,
+            ),
+        ]
+    )
+
+    document.build(story)
     return stream.getvalue()

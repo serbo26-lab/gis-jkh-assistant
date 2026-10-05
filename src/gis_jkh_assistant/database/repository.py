@@ -886,6 +886,25 @@ class Repository:
         if existing is not None:
             self._recalculate_house_tariff_periods(existing.house_id)
 
+    def find_house_tariff_at_date(
+        self,
+        house_id: str,
+        target_date: date,
+    ) -> HouseTariff | None:
+        """Return the tariff effective on one exact calendar date."""
+
+        candidates = self.list_house_tariffs(house_id)
+        active = [
+            item
+            for item in candidates
+            if item.effective_from_date <= target_date
+            and (
+                item.effective_to_date is None
+                or target_date <= item.effective_to_date
+            )
+        ]
+        return active[-1] if active else None
+
     def find_house_tariff_covering_period(
         self,
         house_id: str,
