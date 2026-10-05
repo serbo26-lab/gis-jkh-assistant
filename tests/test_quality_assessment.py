@@ -1,3 +1,4 @@
+from gis_jkh_assistant.acceptance_act_pdf import build_acceptance_act_pdf
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
 from gis_jkh_assistant.quality_assessment import (
@@ -74,7 +75,8 @@ def test_quality_helper_version() -> None:
     assert not helper_supports_quality_assessment("0.1.9")
     assert not helper_supports_quality_assessment("0.1.10")
     assert not helper_supports_quality_assessment("0.1.11")
-    assert helper_supports_quality_assessment("0.1.12")
+    assert not helper_supports_quality_assessment("0.1.12")
+    assert helper_supports_quality_assessment("0.1.13")
     assert helper_supports_quality_assessment("0.2.0")
 
 
@@ -288,3 +290,149 @@ def test_cancelled_quality_assessment_keeps_local_data_for_reuse(tmp_path) -> No
     assert kept_act.remote_act_guid is None
     assert kept_act.content == b"act"
     repository.close()
+
+
+def test_one_quality_act_can_be_linked_to_multiple_works(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    items = store.list_items(period.id)
+    for item in items:
+        store.update_item(
+            item.id,
+            included=True,
+            cost=None,
+            days_count=None,
+            cost_reduction=None,
+        )
+
+    act = store.add_act(
+        item_id=items[0].id,
+        act_type="ACCEPTANCE_ACT",
+        number="1",
+        reg_date="31.01.2026",
+        period_from="01.01.2026",
+        period_to="31.01.2026",
+        file_name="shared.pdf",
+        description="shared.pdf",
+        content_type="application/pdf",
+        content=b"shared-pdf",
+    )
+    store.set_act_links(act.id, [item.id for item in items])
+
+    assert store.count_act_links(act.id) == 2
+    assert [row.id for row in store.list_acts(items[0].id)] == [act.id]
+    assert [row.id for row in store.list_acts(items[1].id)] == [act.id]
+
+    refreshed = store.list_items(period.id)
+    acts = {
+        item.id: store.list_acts(item.id, include_deleted=True)
+        for item in refreshed
+    }
+    payload = build_quality_command_payload(
+        fias_house_code=house.fias_house_guid or "",
+        house_object_guid=house.house_object_guid or "",
+        work_list_guid=work_list.gis_work_list_guid or "",
+        year=2026,
+        month=1,
+        items=refreshed,
+        acts_by_item=acts,
+    )
+    assert len(payload["items"]) == 2
+    assert payload["items"][0]["acts"][0]["localActId"] == act.id
+    assert payload["items"][1]["acts"][0]["localActId"] == act.id
+    assert (
+        payload["items"][0]["acts"][0]["fileBase64"]
+        == payload["items"][1]["acts"][0]["fileBase64"]
+    )
+    repository.close()
+
+
+def test_unlinking_remote_shared_act_removes_only_one_work_link(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    items = store.list_items(period.id)
+    for item in items:
+        store.update_item(
+            item.id,
+            included=True,
+            cost=None,
+            days_count=None,
+            cost_reduction=None,
+        )
+
+    act = store.add_act(
+        item_id=items[0].id,
+        act_type="ACCEPTANCE_ACT",
+        number="1",
+        reg_date="31.01.2026",
+        period_from="01.01.2026",
+        period_to="31.01.2026",
+        file_name="shared.pdf",
+        description=None,
+        content_type="application/pdf",
+        content=b"shared",
+    )
+    store.set_act_links(act.id, [item.id for item in items])
+    store.set_gis_state(
+        period.id,
+        reporting_period_guid="reporting-guid",
+        estimation_guid="estimation-guid",
+        gis_status="APPROVED",
+        act_guids={act.id: ("content-guid", "act-guid")},
+    )
+
+    store.unlink_act(act.id, items[1].id)
+
+    assert store.count_act_links(act.id) == 1
+    removed = store.list_acts(items[1].id, include_deleted=True)
+    assert len(removed) == 1
+    assert removed[0].link_deleted is True
+
+    refreshed = store.list_items(period.id)
+    payload = build_quality_command_payload(
+        fias_house_code=house.fias_house_guid or "",
+        house_object_guid=house.house_object_guid or "",
+        work_list_guid=work_list.gis_work_list_guid or "",
+        year=2026,
+        month=1,
+        items=refreshed,
+        acts_by_item={
+            item.id: store.list_acts(item.id, include_deleted=True)
+            for item in refreshed
+        },
+    )
+    by_id = {row["localItemId"]: row for row in payload["items"]}
+    assert by_id[items[0].id]["acts"][0]["remoteActGuid"] == "act-guid"
+    assert by_id[items[1].id]["acts"] == []
+    assert by_id[items[1].id]["removedRemoteActGuids"] == ["act-guid"]
+    repository.close()
+
+
+def test_generated_acceptance_act_pdf_is_valid_pdf() -> None:
+    content = build_acceptance_act_pdf(
+        organization_name='ООО "УК Тест"',
+        house_address="г Ставрополь, ул Тестовая, д. 30",
+        act_number="1",
+        act_date="31.01.2026",
+        period_from="01.01.2026",
+        period_to="31.01.2026",
+        work_names=[
+            "Услуга по управлению",
+            "Техническое обслуживание инженерных сетей входящих в состав общего имущества",
+        ],
+    )
+
+    assert content.startswith(b"%PDF-")
+    assert len(content) > 2000
