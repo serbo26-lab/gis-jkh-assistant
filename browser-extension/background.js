@@ -954,7 +954,7 @@ async function runGisCommand(command) {
       const data = await request("GET", url, undefined, STATE_WORKPLANNING);
       const item = Array.isArray(data) ? data[0] : data;
       if (!item?.guid) {
-        throw new Error("Выбранная внеплановая работа больше не найдена в справочнике.");
+        throw new Error("Выбранная работа больше не найдена в справочнике организации.");
       }
       return item;
     }
@@ -962,19 +962,28 @@ async function runGisCommand(command) {
     async function resolvePlannedWorkUnits(payload) {
       const rows = [];
       for (const localItem of Array.isArray(payload?.items) ? payload.items : []) {
-        const work = await getOrganizationWork(
-          localItem?.workCode,
-          localItem?.workGuid
-        );
-        rows.push({
-          localItemId: localItem?.localItemId || null,
-          workGuid: work?.guid || localItem?.workGuid || null,
-          workCode: String(work?.code || localItem?.workCode || ""),
-          unitName:
-            work?.dimensionsUnit?.dimensionsUnitOkei?.nationalSymbolName ||
-            work?.dimensionsUnit?.dimensionsUnitString ||
-            null
-        });
+        try {
+          const work = await getOrganizationWork(
+            localItem?.workCode,
+            localItem?.workGuid
+          );
+          rows.push({
+            localItemId: localItem?.localItemId || null,
+            workGuid: work?.guid || localItem?.workGuid || null,
+            workCode: String(work?.code || localItem?.workCode || ""),
+            unitName:
+              work?.dimensionsUnit?.dimensionsUnitOkei?.nationalSymbolName ||
+              work?.dimensionsUnit?.dimensionsUnitString ||
+              null
+          });
+        } catch (_) {
+          rows.push({
+            localItemId: localItem?.localItemId || null,
+            workGuid: localItem?.workGuid || null,
+            workCode: String(localItem?.workCode || ""),
+            unitName: null
+          });
+        }
       }
       return { items: rows };
     }
