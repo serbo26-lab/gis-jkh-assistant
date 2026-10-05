@@ -26,7 +26,7 @@ def quality_reduction(
     days_count: int | str | None,
     days_per_month: int,
 ) -> str | None:
-    """Calculate the payment reduction shown by GIS ЖКХ."""
+    """Calculate the payment reduction shown by ГИС ЖКХ."""
 
     if cost is None or days_count is None:
         return None
@@ -41,7 +41,7 @@ def quality_reduction(
         return None
     if cost_value < 0 or days < 0 or month_days <= 0 or days > month_days:
         return None
-    # GIS ЖКХ sends the exact ratio in the save payload (for example
+    # ГИС ЖКХ sends the exact ratio in the save payload (for example
     # 1 / 31 -> 0.03225806451612903) and only rounds it for visual display.
     # Keep the unrounded decimal locally; the browser helper converts it to
     # a JSON number exactly as the web interface does.
