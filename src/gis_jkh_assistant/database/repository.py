@@ -154,6 +154,7 @@ class Repository:
                 work_code TEXT,
                 work_name TEXT NOT NULL,
                 work_guid TEXT,
+                unit_name TEXT,
                 price TEXT,
                 volume TEXT,
                 quantity TEXT,
@@ -303,6 +304,7 @@ class Repository:
                 work_code TEXT,
                 work_name TEXT NOT NULL,
                 work_guid TEXT,
+                unit_name TEXT,
                 planned_price TEXT,
                 planned_amount TEXT,
                 planned_count INTEGER NOT NULL DEFAULT 0,
@@ -401,6 +403,8 @@ class Repository:
         self._ensure_column("house_tariffs", "end_day", "INTEGER NOT NULL DEFAULT 31")
         self._ensure_column("work_templates", "source_file_path", "TEXT")
         self._ensure_column("work_template_items", "allocation_percent", "TEXT")
+        self._ensure_column("work_list_items", "unit_name", "TEXT")
+        self._ensure_column("work_fixation_items", "unit_name", "TEXT")
         self._ensure_column("work_lists", "planned_total", "TEXT")
         self._ensure_column("work_lists", "planned_tariff", "TEXT")
         self._ensure_column("work_lists", "planned_area", "TEXT")
@@ -1294,8 +1298,8 @@ class Repository:
                         """
                         INSERT INTO work_list_items (
                             id, work_list_id, position, work_code, work_name, work_guid,
-                            price, volume, quantity, cost, allocation_percent
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                            unit_name, price, volume, quantity, cost, allocation_percent
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                         """,
                         (
                             str(uuid.uuid4()),
@@ -1304,6 +1308,7 @@ class Repository:
                             row["work_code"],
                             row["work_name"],
                             row["work_guid"],
+                            None,
                             row["price"],
                             row["volume"],
                             row["quantity"],
@@ -1365,8 +1370,8 @@ class Repository:
                     """
                     INSERT INTO work_list_items (
                         id, work_list_id, position, work_code, work_name, work_guid,
-                        price, volume, quantity, cost, allocation_percent
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        unit_name, price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -1375,6 +1380,7 @@ class Repository:
                         row["work_code"],
                         row["work_name"],
                         row["work_guid"],
+                        row["unit_name"],
                         row["price"],
                         row["volume"],
                         row["quantity"],
@@ -1847,10 +1853,10 @@ class Repository:
                     INSERT INTO work_fixation_items (
                         id, fixation_period_id,
                         work_list_item_id, work_plan_item_id,
-                        position, work_code, work_name, work_guid,
+                        position, work_code, work_name, work_guid, unit_name,
                         planned_price, planned_amount, planned_count,
                         planned_total_cost
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -1861,6 +1867,7 @@ class Repository:
                         _clean(list_item.work_code),
                         list_item.work_name,
                         _clean(list_item.work_guid),
+                        _clean(list_item.unit_name),
                         _clean(list_item.price),
                         _clean(list_item.volume),
                         planned_count,
@@ -1927,6 +1934,7 @@ class Repository:
                     """
                     UPDATE work_fixation_items
                     SET work_plan_item_id = ?,
+                        unit_name = ?,
                         planned_price = ?,
                         planned_amount = ?,
                         planned_count = ?,
@@ -1935,6 +1943,7 @@ class Repository:
                     """,
                     (
                         plan_item.id if plan_item else None,
+                        _clean(list_item.unit_name),
                         _clean(list_item.price),
                         _clean(list_item.volume),
                         planned_count,
@@ -2565,6 +2574,7 @@ class Repository:
             "work_code",
             "work_name",
             "work_guid",
+            "unit_name",
             "price",
             "volume",
             "quantity",
@@ -2581,6 +2591,35 @@ class Repository:
             f"UPDATE work_list_items SET {clause} WHERE id = ?", values
         )
         self.connection.commit()
+
+    def update_work_list_unit_names(
+        self,
+        work_list_id: str,
+        units: dict[str, str | None],
+    ) -> None:
+        """Store unit names by work-list item id and propagate to fixation snapshots."""
+
+        if not units:
+            return
+        with self.connection:
+            for item_id, unit_name in units.items():
+                cleaned = _clean(unit_name)
+                self.connection.execute(
+                    """
+                    UPDATE work_list_items
+                    SET unit_name = ?
+                    WHERE id = ? AND work_list_id = ?
+                    """,
+                    (cleaned, str(item_id), work_list_id),
+                )
+                self.connection.execute(
+                    """
+                    UPDATE work_fixation_items
+                    SET unit_name = ?
+                    WHERE work_list_item_id = ?
+                    """,
+                    (cleaned, str(item_id)),
+                )
 
     def apply_lazy_distribution(
         self,
