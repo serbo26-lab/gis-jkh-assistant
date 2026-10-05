@@ -208,6 +208,7 @@ class Repository:
                 work_code TEXT,
                 work_name TEXT NOT NULL,
                 work_guid TEXT,
+                unit_name TEXT,
                 price TEXT,
                 volume TEXT,
                 quantity TEXT,
