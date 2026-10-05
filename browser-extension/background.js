@@ -3,6 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
+const HELPER_CODE_VERSION = "0.1.14";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -30,7 +31,7 @@ async function hello() {
       body: JSON.stringify({
         gisPageReady: Boolean(tab && tab.id),
         pageUrl: tab?.url || null,
-        helperVersion: chrome.runtime.getManifest().version,
+        helperVersion: HELPER_CODE_VERSION,
         sessionKeepAliveEnabled: true,
         lastKeepAliveSuccessAt: lastKeepAliveSuccessMs
           ? new Date(lastKeepAliveSuccessMs).toISOString()
