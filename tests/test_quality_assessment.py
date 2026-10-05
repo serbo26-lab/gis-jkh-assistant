@@ -220,7 +220,7 @@ def test_remote_quality_act_is_marked_for_removal_and_sent_in_payload(tmp_path) 
     assert store.list_acts(item.id) == []
     all_acts = store.list_acts(item.id, include_deleted=True)
     assert len(all_acts) == 1
-    assert all_acts[0].deleted is True
+    assert all_acts[0].link_deleted is True
 
     refreshed = store.list_items(period.id)[0]
     payload = build_quality_command_payload(
