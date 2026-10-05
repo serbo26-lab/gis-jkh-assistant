@@ -460,6 +460,7 @@ class QualityAssessmentPage(QWidget):
             return
         self.store.set_items_included(self._current_period_id, included)
         self._load_table()
+        self._refresh_act_summary()
         self._refresh_period_status()
         self._refresh_year_status()
 
@@ -508,6 +509,7 @@ class QualityAssessmentPage(QWidget):
         )
         dialog.exec()
         self._load_table()
+        self._refresh_act_summary()
         self._refresh_period_status()
         self._refresh_year_status()
 
@@ -782,7 +784,14 @@ class QualityAssessmentPage(QWidget):
         gis_status = str(period.gis_status or "").upper() if period else ""
         has_remote = bool(period and period.estimation_guid)
 
-        self.save_button.setEnabled(bool(period) and ready and not has_remote)
+        self.save_button.setEnabled(
+            bool(period)
+            and ready
+            and (
+                not has_remote
+                or gis_status in {"DRAFT", "MODIFIED", "LOCAL"}
+            )
+        )
         self.publish_button.setEnabled(
             bool(period)
             and ready
