@@ -2690,7 +2690,7 @@ class Repository:
         gis_last_error: str | None = None,
         sync_time: str | None = None,
     ) -> None:
-        """Persist the last known GIS ЖКХ state for one local work list."""
+        """Persist the last known ГИС ЖКХ state for one local work list."""
 
         updates: dict[str, object] = {
             "gis_last_sync_at": sync_time or _now(),
