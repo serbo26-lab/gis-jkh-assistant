@@ -1475,7 +1475,7 @@ async function runGisCommand(command) {
       };
     }
 
-    async function createLocalQualityAct(localAct, remote, house) {
+    async function createLocalQualityAct(localAct, orgRootGuid, house) {
       const actType = String(localAct?.actType || "");
       if (!["ACCEPTANCE_ACT", "QUALITY_VIOLATION_ACT"].includes(actType)) {
         throw new Error("Неизвестный тип акта оценки качества.");
@@ -1488,7 +1488,7 @@ async function runGisCommand(command) {
           regDate: qualityActDateTime(localAct?.regDate),
           number: String(localAct?.number || ""),
           actType,
-          orgRootGuid: remote?.orgRootGuid || null,
+          orgRootGuid: String(orgRootGuid || ""),
           houseGuid: house.guid
         },
         STATE_WORKPLANNING
@@ -1554,6 +1554,8 @@ async function runGisCommand(command) {
     async function prepareNewQualityAssessment(localPayload) {
       const reportingPeriod = await findReportingPeriod(localPayload);
       const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
+      const houseContext = await getHouseInfo(localPayload.houseObjectGuid);
+      const orgRootGuid = houseContext.organizationGuid;
       const remote = await searchQualityAssessment(reportingPeriod.guid, false);
       if (!remote?.estimation || !Array.isArray(remote?.estimationList)) {
         throw new Error("ГИС ЖКХ не вернул данные формы оценки качества.");
@@ -1602,7 +1604,11 @@ async function runGisCommand(command) {
 
         const qualityActs = [];
         for (const localAct of localActs) {
-          const created = await createLocalQualityAct(localAct, remote, house);
+          const created = await createLocalQualityAct(
+            localAct,
+            orgRootGuid,
+            house
+          );
           qualityActs.push(created.act);
           actMappings.push({
             localActId: created.localActId,
@@ -1627,13 +1633,21 @@ async function runGisCommand(command) {
         });
       }
 
+      const estimation = Object.assign({}, remote.estimation, {
+        period: {
+          month: Number(localPayload.month),
+          year: Number(localPayload.year)
+        },
+        fiasHouseCode: String(localPayload.fiasHouseCode || "")
+      });
+
       return {
         reportingPeriod,
         remote,
         body: {
-          estimation: remote.estimation,
+          estimation,
           estimationList,
-          orgRootGuid: remote?.orgRootGuid || null
+          orgRootGuid
         },
         actMappings
       };
@@ -1657,6 +1671,8 @@ async function runGisCommand(command) {
       }
 
       const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
+      const houseContext = await getHouseInfo(localPayload.houseObjectGuid);
+      const orgRootGuid = houseContext.organizationGuid;
       const remoteItems = Array.isArray(remote?.estimationList)
         ? remote.estimationList
         : [];
@@ -1727,7 +1743,11 @@ async function runGisCommand(command) {
             continue;
           }
 
-          const created = await createLocalQualityAct(localAct, remote, house);
+          const created = await createLocalQualityAct(
+            localAct,
+            orgRootGuid,
+            house
+          );
           qualityActs.push(created.act);
           actMappings.push({
             localActId: created.localActId,
@@ -1773,7 +1793,7 @@ async function runGisCommand(command) {
         body: {
           estimation,
           estimationList,
-          orgRootGuid: remote?.orgRootGuid || null
+          orgRootGuid
         },
         actMappings
       };

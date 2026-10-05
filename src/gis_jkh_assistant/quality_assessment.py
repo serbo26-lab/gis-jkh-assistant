@@ -8,7 +8,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping
 
-MIN_QUALITY_HELPER_VERSION = (0, 1, 11)
+MIN_QUALITY_HELPER_VERSION = (0, 1, 12)
 
 
 def helper_supports_quality_assessment(version: str | None) -> bool:
@@ -56,6 +56,7 @@ def days_in_month(year: int, month: int) -> int:
 def build_quality_command_payload(
     *,
     fias_house_code: str,
+    house_object_guid: str,
     work_list_guid: str,
     year: int,
     month: int,
@@ -123,6 +124,7 @@ def build_quality_command_payload(
 
     return {
         "fiasHouseCode": str(fias_house_code),
+        "houseObjectGuid": str(house_object_guid),
         "workListGuid": str(work_list_guid),
         "year": int(year),
         "month": int(month),

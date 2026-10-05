@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0.dev32 — 2026-10-05
+
+### Исправление сохранения оценки качества
+- исправлена ошибка `FindQualityActCheckUniqueCriteria` при **«Сохранить проект»** и **«Разместить информацию»**;
+- причина: `search/estimations` не возвращает `orgRootGuid`, а dev30/dev31 ошибочно пытались брать его из этого ответа;
+- `orgRootGuid` теперь определяется тем же проверенным способом, который уже используется при работе с перечнями: из карточки дома `/homemanagement/api/rest/services/houses/1/{houseObjectGuid}` → `managementOrganization.registryOrganizationRootEntityGuid`;
+- `houseGuid` для `checkunique/quality-act` по-прежнему берётся из workplanning через `find/house/by/fias`;
+- новый payload оценки передаёт также `period` и `fiasHouseCode` внутри `estimation`, как это делает веб-интерфейс ГИС ЖКХ в HAR;
+- версия приложения повышена до **0.1.0.dev32**, браузерного помощника — до **0.1.12**.
+
 ## 0.1.0.dev31 — 2026-10-02
 
 ### Изменение оценки качества

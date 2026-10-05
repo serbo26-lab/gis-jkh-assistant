@@ -485,11 +485,17 @@ class QualityAssessmentPage(QWidget):
         if period is None or work_list is None:
             return None
         house = self.repository.get_house(work_list.house_id)
-        if house is None or not house.fias_house_guid or not work_list.gis_work_list_guid:
+        if (
+            house is None
+            or not house.fias_house_guid
+            or not house.house_object_guid
+            or not work_list.gis_work_list_guid
+        ):
             QMessageBox.warning(
                 self,
                 "Не хватает идентификаторов",
-                "Для обмена с ГИС ЖКХ нужны ФИАС GUID дома и GUID размещённого перечня.",
+                "Для обмена с ГИС ЖКХ нужны ФИАС GUID дома, GUID объекта "
+                "жилищного фонда и GUID размещённого перечня.",
             )
             return None
         items = self.store.list_items(period.id)
@@ -499,6 +505,7 @@ class QualityAssessmentPage(QWidget):
         }
         payload = build_quality_command_payload(
             fias_house_code=house.fias_house_guid,
+            house_object_guid=house.house_object_guid,
             work_list_guid=work_list.gis_work_list_guid,
             year=period.year,
             month=period.month,
