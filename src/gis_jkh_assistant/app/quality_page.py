@@ -476,7 +476,13 @@ class QualityAssessmentPage(QWidget):
         ):
             return
 
-        items = self.repository.list_work_list_items(self._current_work_list_id)
+        items = [
+            item
+            for item in self.repository.list_work_list_items(
+                self._current_work_list_id
+            )
+            if not str(item.unit_name or "").strip()
+        ]
         if not items:
             return
         payload = {
