@@ -1736,7 +1736,22 @@ async function runGisCommand(command) {
       const estimationList = [];
       const actMappings = [];
       const seededLocalActIds = new Set();
+      const knownRemoteActsByGuid = new Map();
+      const knownRemoteActsByContentGuid = new Map();
       const stageSharedNewActs = Boolean(options?.stageSharedNewActs);
+
+      function rememberRemoteAct(act) {
+        const normalized = normalizeRemoteQualityAct(act);
+        const guid = String(normalized?.guid || "");
+        const contentGuid = String(
+          normalized?.attachment?.contentGuid || ""
+        );
+        if (guid) knownRemoteActsByGuid.set(guid, normalized);
+        if (contentGuid) {
+          knownRemoteActsByContentGuid.set(contentGuid, normalized);
+        }
+        return normalized;
+      }
 
       for (const localItem of localItems) {
         let remoteItem = matchQualityItem(localItem, remoteItems);
@@ -1757,6 +1772,9 @@ async function runGisCommand(command) {
         const remoteActs = remoteItem?.guid
           ? await searchQualityActs(remoteItem.guid)
           : [];
+        for (const remoteAct of remoteActs) {
+          rememberRemoteAct(remoteAct);
+        }
         const removedActGuids = new Set(
           (localItem?.removedRemoteActGuids || []).map(String)
         );
@@ -1803,13 +1821,37 @@ async function runGisCommand(command) {
             continue;
           }
 
-          if (localAct?.remoteActGuid) {
-            const existingAct = await getQualityActByGuid(
-              localAct.remoteActGuid,
-              orgRootGuid,
-              house.guid
+          if (localAct?.remoteActGuid || localAct?.remoteContentGuid) {
+            const remoteActGuid = String(localAct?.remoteActGuid || "");
+            const remoteContentGuid = String(
+              localAct?.remoteContentGuid || ""
             );
-            const normalized = normalizeRemoteQualityAct(existingAct);
+            let normalized =
+              (remoteActGuid &&
+                knownRemoteActsByGuid.get(remoteActGuid)) ||
+              (remoteContentGuid &&
+                knownRemoteActsByContentGuid.get(remoteContentGuid)) ||
+              null;
+
+            if (!normalized && remoteActGuid) {
+              const existingAct = await getQualityActByGuid(
+                remoteActGuid,
+                orgRootGuid,
+                house.guid
+              );
+              normalized = rememberRemoteAct(existingAct);
+            }
+
+            if (!normalized) {
+              throw new Error(
+                "Не удалось повторно использовать сохранённый акт «" +
+                  String(localAct?.number || "") +
+                  "» для работы «" +
+                  String(localItem?.workName || "") +
+                  "»."
+              );
+            }
+
             qualityActs.push(normalized);
             actMappings.push({
               localActId: localAct?.localActId || null,
