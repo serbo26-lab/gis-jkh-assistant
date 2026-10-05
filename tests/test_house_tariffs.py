@@ -1,3 +1,4 @@
+from datetime import date
 import sqlite3
 
 from gis_jkh_assistant.database import Repository
@@ -380,4 +381,38 @@ def test_equal_repeated_tariff_points_do_not_break_period_coverage(tmp_path) -> 
     )
     assert changed_amount_period is None
 
+    repository.close()
+
+
+def test_tariff_lookup_on_january_first_ignores_later_change(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    organization = repository.create_organization(
+        name="УК Январский тариф",
+        ogrn="1022600000200",
+    )
+    house = repository.create_house(
+        organization_id=organization.id,
+        address="г Ставрополь, ул Тарифная, д. 1",
+    )
+
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="25,04",
+        start_year=2025,
+        start_month=7,
+    )
+    repository.create_house_tariff(
+        house_id=house.id,
+        amount="26,47",
+        start_year=2026,
+        start_month=7,
+    )
+
+    selected = repository.find_house_tariff_at_date(
+        house.id,
+        date(2026, 1, 1),
+    )
+
+    assert selected is not None
+    assert selected.amount == "25,04"
     repository.close()
