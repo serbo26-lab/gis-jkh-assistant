@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gis-jkh-assistant"
 dynamic = ["version"]
-description = "Local assistant for management organization workflows in GIS ЖКХ"
+description = "GIS JKH Assistant desktop application for management organizations"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

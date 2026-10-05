@@ -35,23 +35,23 @@ jobs:
         run: pytest -q
 
       - name: Build executable
-        run: pyinstaller --clean --noconfirm --onefile --windowed --paths src --name GIS-JKH-Assistant src/gis_jkh_assistant/__main__.py
+        run: pyinstaller --clean --noconfirm --onefile --windowed --paths src --name "GIS JKH Assistant" src/gis_jkh_assistant/__main__.py
 
       - name: Pack Windows build
         shell: pwsh
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
           New-Item -ItemType Directory -Path dist/package -Force | Out-Null
-          Copy-Item dist/GIS-JKH-Assistant.exe dist/package/GIS-JKH-Assistant.exe -Force
+          Copy-Item "dist/GIS JKH Assistant.exe" "dist/package/GIS JKH Assistant.exe" -Force
           Copy-Item browser-extension dist/package/browser-extension -Recurse -Force
           "Build version: $version" | Out-File -FilePath dist/package/VERSION.txt -Encoding utf8
-          Compress-Archive -Path dist/package/* -DestinationPath dist/GIS-JKH-Assistant-windows.zip -Force
+          Compress-Archive -Path dist/package/* -DestinationPath "dist/GIS JKH Assistant-windows.zip" -Force
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GIS-JKH-Assistant-0.1.0.dev36-windows
-          path: dist/GIS-JKH-Assistant-windows.zip
+          name: GIS JKH Assistant 0.1.0.dev37 windows
+          path: "dist/GIS JKH Assistant-windows.zip"
 
       - name: Publish rolling GitHub prerelease
         if: github.ref == 'refs/heads/main'
@@ -62,14 +62,14 @@ jobs:
           $version = (Get-Content VERSION -Raw).Trim()
           $repo = "${{ github.repository }}"
           $sha = "${{ github.sha }}"
-          $asset = "dist/GIS-JKH-Assistant-windows.zip"
+          $asset = "dist/GIS JKH Assistant-windows.zip"
           $notes = @"
-          Автоматическая тестовая сборка GIS ЖКХ Assistant.
+          Автоматическая тестовая сборка ГИС ЖКХ Ассистент.
 
           Версия: $version
           Коммит: $sha
 
-          Архив содержит GIS-JKH-Assistant.exe и папку browser-extension.
+          Архив содержит GIS JKH Assistant.exe и папку browser-extension с расширением ГИС ЖКХ помощник.
           Для автоматического обмена с ГИС ЖКХ установите расширение из этой папки
           в Chrome или Edge в режиме разработчика.
 
@@ -78,9 +78,10 @@ jobs:
 
           gh release view dev-latest --repo $repo *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release edit dev-latest --repo $repo --title "GIS ЖКХ Assistant — актуальная тестовая сборка" --notes $notes --prerelease
+            gh release edit dev-latest --repo $repo --title "ГИС ЖКХ Ассистент — актуальная тестовая сборка" --notes $notes --prerelease
+            gh release delete-asset dev-latest "GIS-JKH-Assistant-windows.zip" --repo $repo --yes 2>$null
             gh release upload dev-latest $asset --repo $repo --clobber
           }
           else {
-            gh release create dev-latest $asset --repo $repo --target $sha --title "GIS ЖКХ Assistant — актуальная тестовая сборка" --notes $notes --prerelease
+            gh release create dev-latest $asset --repo $repo --target $sha --title "ГИС ЖКХ Ассистент — актуальная тестовая сборка" --notes $notes --prerelease
           }

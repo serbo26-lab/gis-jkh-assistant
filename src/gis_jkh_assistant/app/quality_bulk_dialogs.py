@@ -440,6 +440,13 @@ class QualityMonthActsDialog(QDialog):
             if item.work_code
         }
 
+        list_items = (
+            self.store.repository.list_work_list_items(period.work_list_id)
+            if period is not None
+            else []
+        )
+        list_item_by_id = {item.id: item for item in list_items}
+
         rows: list[AcceptanceActWorkRow] = []
         missing_cost_names: list[str] = []
         for item in selected_items:
@@ -447,6 +454,11 @@ class QualityMonthActsDialog(QDialog):
                 by_list_item_id.get(item.work_list_item_id)
                 or (by_guid.get(item.work_guid) if item.work_guid else None)
                 or (by_code.get(item.work_code) if item.work_code else None)
+            )
+            list_item = (
+                list_item_by_id.get(item.work_list_item_id)
+                if item.work_list_item_id
+                else None
             )
             actual_cost = fixation.fact_total_cost if fixation else None
             if not actual_cost:
@@ -457,8 +469,7 @@ class QualityMonthActsDialog(QDialog):
                     name=item.work_name,
                     unit_name=(
                         getattr(fixation, "unit_name", None)
-                        if fixation is not None
-                        else None
+                        or getattr(list_item, "unit_name", None)
                     ),
                     periodicity=(
                         fixation.fact_count
