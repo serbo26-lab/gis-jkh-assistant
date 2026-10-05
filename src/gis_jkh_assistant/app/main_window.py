@@ -128,7 +128,7 @@ class MainWindow(QMainWindow):
             if not helper_supports_quality_assessment(status.helper_version):
                 text = (
                     f"ГИС ЖКХ подключен\nПомощник {version} устарел\n"
-                    "Требуется 0.1.13+"
+                    "Требуется 0.1.14+"
                 )
                 color = "#8a5b00"
             else:
