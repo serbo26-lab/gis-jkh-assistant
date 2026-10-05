@@ -30,6 +30,7 @@ from gis_jkh_assistant.quality_assessment import (
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .gis_integration_worker import GisIntegrationWorker
+from .quality_bulk_dialogs import QualityMonthActsDialog
 from .quality_dialogs import QualityActsDialog
 from .widgets import SafeComboBox
 
@@ -171,6 +172,20 @@ class QualityAssessmentPage(QWidget):
         note.setWordWrap(True)
         table_layout.addWidget(note)
 
+        bulk_actions = QHBoxLayout()
+        self.include_all_button = QPushButton("Включить все работы")
+        self.exclude_all_button = QPushButton("Снять все")
+        self.month_acts_button = QPushButton("Акты месяца…")
+        self.month_acts_summary = QLabel("Акты месяца: —")
+        self.month_acts_summary.setObjectName("Muted")
+        bulk_actions.addWidget(self.include_all_button)
+        bulk_actions.addWidget(self.exclude_all_button)
+        bulk_actions.addSpacing(12)
+        bulk_actions.addWidget(self.month_acts_button)
+        bulk_actions.addWidget(self.month_acts_summary)
+        bulk_actions.addStretch(1)
+        table_layout.addLayout(bulk_actions)
+
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
             [
@@ -202,6 +217,13 @@ class QualityAssessmentPage(QWidget):
         self.save_button.clicked.connect(self._save_project)
         self.publish_button.clicked.connect(self._publish)
         self.cancel_button.clicked.connect(self._cancel)
+        self.include_all_button.clicked.connect(
+            lambda: self._set_all_included(True)
+        )
+        self.exclude_all_button.clicked.connect(
+            lambda: self._set_all_included(False)
+        )
+        self.month_acts_button.clicked.connect(self._open_month_acts)
         self._set_enabled(False)
 
     def refresh_organizations(self) -> None:
@@ -294,6 +316,7 @@ class QualityAssessmentPage(QWidget):
             self._current_period_id = None
             self.table.setRowCount(0)
             self.month_status.setText("Период: —")
+            self._refresh_act_summary()
             self._set_enabled(False)
             self._refresh_year_status()
             return
@@ -328,6 +351,7 @@ class QualityAssessmentPage(QWidget):
             return
         self._current_period_id = period.id
         self._load_table()
+        self._refresh_act_summary()
         self._refresh_period_status()
         self._refresh_year_status()
         self._set_enabled(True)
@@ -427,8 +451,50 @@ class QualityAssessmentPage(QWidget):
             self._load_table()
             return
         self._load_table()
+        self._refresh_act_summary()
         self._refresh_period_status()
         self._refresh_year_status()
+
+    def _set_all_included(self, included: bool) -> None:
+        if not self._current_period_id:
+            return
+        self.store.set_items_included(self._current_period_id, included)
+        self._load_table()
+        self._refresh_act_summary()
+        self._refresh_period_status()
+        self._refresh_year_status()
+
+    def _open_month_acts(self) -> None:
+        if (
+            not self._current_period_id
+            or self._current_month is None
+            or self.year_combo.currentData() is None
+        ):
+            return
+        dialog = QualityMonthActsDialog(
+            self.store,
+            period_id=self._current_period_id,
+            organization_name=self.organization_combo.currentText(),
+            house_address=self.house_combo.currentText(),
+            year=int(self.year_combo.currentData()),
+            month=int(self._current_month),
+            parent=self,
+        )
+        dialog.exec()
+        self._load_table()
+        self._refresh_act_summary()
+        self._refresh_period_status()
+        self._refresh_year_status()
+
+    def _refresh_act_summary(self) -> None:
+        if not self._current_period_id:
+            self.month_acts_summary.setText("Акты месяца: —")
+            return
+        acts = self.store.list_period_acts(self._current_period_id)
+        links = sum(self.store.count_act_links(act.id) for act in acts)
+        self.month_acts_summary.setText(
+            f"Акты месяца: {len(acts)} • связей с работами: {links}"
+        )
 
     def _open_acts(self, item_id: str) -> None:
         if not self._current_period_id or self._current_month is None:
@@ -443,6 +509,7 @@ class QualityAssessmentPage(QWidget):
         )
         dialog.exec()
         self._load_table()
+        self._refresh_act_summary()
         self._refresh_period_status()
         self._refresh_year_status()
 
@@ -717,7 +784,14 @@ class QualityAssessmentPage(QWidget):
         gis_status = str(period.gis_status or "").upper() if period else ""
         has_remote = bool(period and period.estimation_guid)
 
-        self.save_button.setEnabled(bool(period) and ready and not has_remote)
+        self.save_button.setEnabled(
+            bool(period)
+            and ready
+            and (
+                not has_remote
+                or gis_status in {"DRAFT", "MODIFIED", "LOCAL"}
+            )
+        )
         self.publish_button.setEnabled(
             bool(period)
             and ready
@@ -740,6 +814,9 @@ class QualityAssessmentPage(QWidget):
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
+        self.include_all_button.setEnabled(enabled)
+        self.exclude_all_button.setEnabled(enabled)
+        self.month_acts_button.setEnabled(enabled)
         self._refresh_gis_buttons()
 
     def _relayout_month_buttons(self, columns: int | None = None) -> None:

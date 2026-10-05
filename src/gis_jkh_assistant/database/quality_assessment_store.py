@@ -72,6 +72,8 @@ class QualityAssessmentAct:
     remote_content_guid: str | None = None
     remote_act_guid: str | None = None
     deleted: bool = False
+    link_deleted: bool = False
+    generated: bool = False
     created_at: str | None = None
 
 
@@ -145,6 +147,7 @@ class QualityAssessmentStore:
                 remote_content_guid TEXT,
                 remote_act_guid TEXT,
                 deleted INTEGER NOT NULL DEFAULT 0,
+                generated INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (quality_item_id)
                     REFERENCES quality_assessment_items(id) ON DELETE CASCADE
@@ -152,6 +155,21 @@ class QualityAssessmentStore:
 
             CREATE INDEX IF NOT EXISTS ix_quality_acts_item
                 ON quality_assessment_acts(quality_item_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS quality_assessment_act_links (
+                act_id TEXT NOT NULL,
+                quality_item_id TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (act_id, quality_item_id),
+                FOREIGN KEY (act_id)
+                    REFERENCES quality_assessment_acts(id) ON DELETE CASCADE,
+                FOREIGN KEY (quality_item_id)
+                    REFERENCES quality_assessment_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_quality_act_links_item
+                ON quality_assessment_act_links(quality_item_id, deleted);
             """
         )
         columns = {
@@ -165,6 +183,19 @@ class QualityAssessmentStore:
                 "ALTER TABLE quality_assessment_acts "
                 "ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"
             )
+        if "generated" not in columns:
+            self.connection.execute(
+                "ALTER TABLE quality_assessment_acts "
+                "ADD COLUMN generated INTEGER NOT NULL DEFAULT 0"
+            )
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO quality_assessment_act_links
+                (act_id, quality_item_id, deleted, created_at)
+            SELECT id, quality_item_id, deleted, created_at
+            FROM quality_assessment_acts
+            """
+        )
         self.connection.commit()
 
     @staticmethod
@@ -181,6 +212,8 @@ class QualityAssessmentStore:
     def _act(row: sqlite3.Row) -> QualityAssessmentAct:
         data = dict(row)
         data["deleted"] = bool(data.get("deleted", 0))
+        data["link_deleted"] = bool(data.get("link_deleted", 0))
+        data["generated"] = bool(data.get("generated", 0))
         return QualityAssessmentAct(**data)
 
     def get_period(self, period_id: str) -> QualityAssessmentPeriod | None:
@@ -334,31 +367,97 @@ class QualityAssessmentStore:
             )
             self._touch_period(item.quality_period_id)
 
+    def set_items_included(self, period_id: str, included: bool) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE quality_assessment_items
+                SET included = ?
+                WHERE quality_period_id = ?
+                """,
+                (1 if included else 0, period_id),
+            )
+            self._touch_period(period_id)
+
+    def get_act(self, act_id: str) -> QualityAssessmentAct | None:
+        row = self.connection.execute(
+            """
+            SELECT a.*, 0 AS link_deleted
+            FROM quality_assessment_acts a
+            WHERE a.id = ?
+            """,
+            (act_id,),
+        ).fetchone()
+        return self._act(row) if row else None
+
     def list_acts(
         self,
         item_id: str,
         *,
         include_deleted: bool = False,
     ) -> list[QualityAssessmentAct]:
-        if include_deleted:
-            rows = self.connection.execute(
-                """
-                SELECT * FROM quality_assessment_acts
-                WHERE quality_item_id = ?
-                ORDER BY created_at, rowid
-                """,
-                (item_id,),
-            ).fetchall()
-        else:
-            rows = self.connection.execute(
-                """
-                SELECT * FROM quality_assessment_acts
-                WHERE quality_item_id = ? AND deleted = 0
-                ORDER BY created_at, rowid
-                """,
-                (item_id,),
-            ).fetchall()
+        where = "" if include_deleted else "AND a.deleted = 0 AND l.deleted = 0"
+        rows = self.connection.execute(
+            f"""
+            SELECT a.*, l.deleted AS link_deleted
+            FROM quality_assessment_acts a
+            JOIN quality_assessment_act_links l ON l.act_id = a.id
+            WHERE l.quality_item_id = ? {where}
+            ORDER BY a.created_at, a.rowid
+            """,
+            (item_id,),
+        ).fetchall()
         return [self._act(row) for row in rows]
+
+    def list_period_acts(
+        self,
+        period_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[QualityAssessmentAct]:
+        where = "" if include_deleted else "AND a.deleted = 0 AND l.deleted = 0"
+        rows = self.connection.execute(
+            f"""
+            SELECT a.*, MIN(l.deleted) AS link_deleted
+            FROM quality_assessment_acts a
+            JOIN quality_assessment_act_links l ON l.act_id = a.id
+            JOIN quality_assessment_items i ON i.id = l.quality_item_id
+            WHERE i.quality_period_id = ? {where}
+            GROUP BY a.id
+            ORDER BY a.created_at, a.rowid
+            """,
+            (period_id,),
+        ).fetchall()
+        return [self._act(row) for row in rows]
+
+    def act_link_item_ids(
+        self,
+        act_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[str]:
+        where = "" if include_deleted else "AND deleted = 0"
+        rows = self.connection.execute(
+            f"""
+            SELECT quality_item_id
+            FROM quality_assessment_act_links
+            WHERE act_id = ? {where}
+            ORDER BY rowid
+            """,
+            (act_id,),
+        ).fetchall()
+        return [str(row["quality_item_id"]) for row in rows]
+
+    def count_act_links(self, act_id: str) -> int:
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM quality_assessment_act_links
+            WHERE act_id = ? AND deleted = 0
+            """,
+            (act_id,),
+        ).fetchone()
+        return int(row["count"] if row else 0)
 
     def add_act(
         self,
@@ -373,6 +472,7 @@ class QualityAssessmentStore:
         description: str | None,
         content_type: str,
         content: bytes,
+        generated: bool = False,
     ) -> QualityAssessmentAct:
         item = self.get_item(item_id)
         if item is None:
@@ -380,14 +480,15 @@ class QualityAssessmentStore:
         if not content:
             raise ValueError("Файл акта пуст.")
         act_id = str(uuid.uuid4())
+        created_at = _now()
         with self.connection:
             self.connection.execute(
                 """
                 INSERT INTO quality_assessment_acts (
                     id, quality_item_id, act_type, number, reg_date,
                     period_from, period_to, file_name, description,
-                    content_type, file_size, content, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content_type, file_size, content, generated, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     act_id,
@@ -402,42 +503,107 @@ class QualityAssessmentStore:
                     str(content_type),
                     len(content),
                     content,
-                    _now(),
+                    1 if generated else 0,
+                    created_at,
                 ),
             )
+            self.connection.execute(
+                """
+                INSERT INTO quality_assessment_act_links
+                    (act_id, quality_item_id, deleted, created_at)
+                VALUES (?, ?, 0, ?)
+                """,
+                (act_id, item_id, created_at),
+            )
             self._touch_period(item.quality_period_id)
-        row = self.connection.execute(
-            "SELECT * FROM quality_assessment_acts WHERE id = ?",
-            (act_id,),
-        ).fetchone()
-        assert row is not None
-        return self._act(row)
+        result = self.get_act(act_id)
+        assert result is not None
+        return result
 
-    def delete_act(self, act_id: str) -> None:
-        row = self.connection.execute(
-            """
-            SELECT a.quality_item_id, i.quality_period_id,
-                   a.remote_content_guid, a.remote_act_guid
-            FROM quality_assessment_acts a
-            JOIN quality_assessment_items i ON i.id = a.quality_item_id
-            WHERE a.id = ?
-            """,
-            (act_id,),
-        ).fetchone()
-        if row is None:
-            return
+    def set_act_links(self, act_id: str, item_ids: list[str]) -> None:
+        act = self.get_act(act_id)
+        if act is None:
+            raise ValueError("Акт не найден.")
+
+        owner = self.get_item(act.quality_item_id)
+        if owner is None:
+            raise ValueError("Не найден период акта.")
+
+        target_ids = list(dict.fromkeys(str(item_id) for item_id in item_ids))
+        for item_id in target_ids:
+            item = self.get_item(item_id)
+            if item is None or item.quality_period_id != owner.quality_period_id:
+                raise ValueError("Акт можно применять только к работам одного месяца.")
+
+        existing = {
+            str(row["quality_item_id"]): bool(row["deleted"])
+            for row in self.connection.execute(
+                """
+                SELECT quality_item_id, deleted
+                FROM quality_assessment_act_links
+                WHERE act_id = ?
+                """,
+                (act_id,),
+            ).fetchall()
+        }
+        remote = bool(act.remote_act_guid or act.remote_content_guid)
         with self.connection:
-            if row["remote_content_guid"] or row["remote_act_guid"]:
-                self.connection.execute(
-                    "UPDATE quality_assessment_acts SET deleted = 1 WHERE id = ?",
-                    (act_id,),
-                )
-            else:
+            for item_id in target_ids:
+                if item_id in existing:
+                    self.connection.execute(
+                        """
+                        UPDATE quality_assessment_act_links
+                        SET deleted = 0
+                        WHERE act_id = ? AND quality_item_id = ?
+                        """,
+                        (act_id, item_id),
+                    )
+                else:
+                    self.connection.execute(
+                        """
+                        INSERT INTO quality_assessment_act_links
+                            (act_id, quality_item_id, deleted, created_at)
+                        VALUES (?, ?, 0, ?)
+                        """,
+                        (act_id, item_id, _now()),
+                    )
+
+            for item_id in set(existing) - set(target_ids):
+                if remote:
+                    self.connection.execute(
+                        """
+                        UPDATE quality_assessment_act_links
+                        SET deleted = 1
+                        WHERE act_id = ? AND quality_item_id = ?
+                        """,
+                        (act_id, item_id),
+                    )
+                else:
+                    self.connection.execute(
+                        """
+                        DELETE FROM quality_assessment_act_links
+                        WHERE act_id = ? AND quality_item_id = ?
+                        """,
+                        (act_id, item_id),
+                    )
+
+            if not target_ids and not remote:
                 self.connection.execute(
                     "DELETE FROM quality_assessment_acts WHERE id = ?",
                     (act_id,),
                 )
-            self._touch_period(str(row["quality_period_id"]))
+            self._touch_period(owner.quality_period_id)
+
+    def unlink_act(self, act_id: str, item_id: str) -> None:
+        remaining = [
+            linked_id
+            for linked_id in self.act_link_item_ids(act_id)
+            if linked_id != str(item_id)
+        ]
+        self.set_act_links(act_id, remaining)
+
+    def delete_act(self, act_id: str) -> None:
+        self.set_act_links(act_id, [])
 
     def _touch_period(self, period_id: str) -> None:
         period = self.get_period(period_id)
@@ -504,6 +670,27 @@ class QualityAssessmentStore:
 
             self.connection.execute(
                 """
+                DELETE FROM quality_assessment_act_links
+                WHERE deleted = 1
+                  AND quality_item_id IN (
+                      SELECT id
+                      FROM quality_assessment_items
+                      WHERE quality_period_id = ?
+                  )
+                """,
+                (period_id,),
+            )
+            self.connection.execute(
+                """
+                DELETE FROM quality_assessment_acts
+                WHERE id NOT IN (
+                    SELECT DISTINCT act_id
+                    FROM quality_assessment_act_links
+                )
+                """
+            )
+            self.connection.execute(
+                """
                 DELETE FROM quality_assessment_acts
                 WHERE deleted = 1
                   AND quality_item_id IN (
@@ -542,10 +729,11 @@ class QualityAssessmentStore:
                 UPDATE quality_assessment_acts
                 SET remote_act_guid = NULL,
                     deleted = 0
-                WHERE quality_item_id IN (
-                    SELECT id
-                    FROM quality_assessment_items
-                    WHERE quality_period_id = ?
+                WHERE id IN (
+                    SELECT DISTINCT l.act_id
+                    FROM quality_assessment_act_links l
+                    JOIN quality_assessment_items i ON i.id = l.quality_item_id
+                    WHERE i.quality_period_id = ?
                 )
                 """,
                 (period_id,),
