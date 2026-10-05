@@ -213,3 +213,36 @@ def test_template_distribution_requires_matching_positions(tmp_path) -> None:
         )
 
     repository.close()
+
+
+def test_planned_work_unit_is_persisted_and_propagated_to_fixation(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _org, house, template = _fixture(repository)
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+        template_id=template.id,
+    )
+    repository.update_work_list_gis_state(
+        work_list.id,
+        gis_work_list_guid="work-list-guid",
+        gis_status="APPROVED",
+    )
+    list_item = repository.list_work_list_items(work_list.id)[0]
+
+    fixation = repository.get_or_create_work_fixation_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    repository.update_work_list_unit_names(
+        work_list.id,
+        {list_item.id: "мес"},
+    )
+
+    refreshed_list_item = repository.list_work_list_items(work_list.id)[0]
+    fixation_item = repository.list_work_fixation_items(fixation.id)[0]
+
+    assert refreshed_list_item.unit_name == "мес"
+    assert fixation_item.unit_name == "мес"
+    repository.close()
