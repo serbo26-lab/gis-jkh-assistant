@@ -3,6 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
+const HELPER_CODE_VERSION = "0.1.14";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -30,7 +31,7 @@ async function hello() {
       body: JSON.stringify({
         gisPageReady: Boolean(tab && tab.id),
         pageUrl: tab?.url || null,
-        helperVersion: chrome.runtime.getManifest().version,
+        helperVersion: HELPER_CODE_VERSION,
         sessionKeepAliveEnabled: true,
         lastKeepAliveSuccessAt: lastKeepAliveSuccessMs
           ? new Date(lastKeepAliveSuccessMs).toISOString()
@@ -1718,6 +1719,10 @@ async function runGisCommand(command) {
       const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
       const houseContext = await getHouseInfo(localPayload.houseObjectGuid);
       const orgRootGuid = houseContext.organizationGuid;
+      const workList = await getWorkListDetail(localPayload.workListGuid);
+      const workListItems = Array.isArray(workList?.workListItems)
+        ? workList.workListItems
+        : [];
       const remoteItems = Array.isArray(remote?.estimationList)
         ? remote.estimationList
         : [];
@@ -1734,16 +1739,24 @@ async function runGisCommand(command) {
       const stageSharedNewActs = Boolean(options?.stageSharedNewActs);
 
       for (const localItem of localItems) {
-        const remoteItem = matchQualityItem(localItem, remoteItems);
-        if (!remoteItem?.guid) {
-          throw new Error(
-            "Не удалось найти сохранённую строку оценки качества для работы «" +
-              String(localItem?.workName || "") +
-              "»."
-          );
+        let remoteItem = matchQualityItem(localItem, remoteItems);
+        if (!remoteItem) {
+          const sourceItem = findWorkListItem(localItem, workListItems);
+          remoteItem = {
+            guid: null,
+            work: compactReference(sourceItem?.work),
+            workType: compactReference(sourceItem?.workType),
+            workName:
+              sourceItem?.workName ||
+              sourceItem?.work?.name ||
+              localItem?.workName ||
+              null
+          };
         }
 
-        const remoteActs = await searchQualityActs(remoteItem.guid);
+        const remoteActs = remoteItem?.guid
+          ? await searchQualityActs(remoteItem.guid)
+          : [];
         const removedActGuids = new Set(
           (localItem?.removedRemoteActGuids || []).map(String)
         );
