@@ -103,7 +103,8 @@ def _paragraph(
     *,
     style: ParagraphStyle,
 ) -> Paragraph:
-    safe = str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    source = "" if text is None else str(text)
+    safe = source.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return Paragraph(safe, style)
 
 
