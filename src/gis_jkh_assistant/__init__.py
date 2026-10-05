@@ -1,3 +1,3 @@
 """GIS ЖКХ Assistant."""
 
-__version__ = "0.1.0.dev34"
+__version__ = "0.1.0.dev35"
