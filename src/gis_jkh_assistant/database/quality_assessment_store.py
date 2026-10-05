@@ -367,6 +367,18 @@ class QualityAssessmentStore:
             )
             self._touch_period(item.quality_period_id)
 
+    def set_items_included(self, period_id: str, included: bool) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE quality_assessment_items
+                SET included = ?
+                WHERE quality_period_id = ?
+                """,
+                (1 if included else 0, period_id),
+            )
+            self._touch_period(period_id)
+
     def get_act(self, act_id: str) -> QualityAssessmentAct | None:
         row = self.connection.execute(
             """
