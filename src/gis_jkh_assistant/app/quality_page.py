@@ -503,9 +503,9 @@ class QualityAssessmentPage(QWidget):
             return
 
         units = {
-            str(row.get("localItemId")): row.get("unitName")
+            str(row.get("localItemId")): str(row.get("unitName")).strip()
             for row in (result.get("items") or [])
-            if row.get("localItemId")
+            if row.get("localItemId") and str(row.get("unitName") or "").strip()
         }
         self.repository.update_work_list_unit_names(
             self._current_work_list_id,
