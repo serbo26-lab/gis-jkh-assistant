@@ -8,7 +8,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping
 
-MIN_QUALITY_HELPER_VERSION = (0, 1, 12)
+MIN_QUALITY_HELPER_VERSION = (0, 1, 13)
 
 
 def helper_supports_quality_assessment(version: str | None) -> bool:
@@ -74,7 +74,9 @@ def build_quality_command_payload(
         removed_remote_act_guids = []
         removed_remote_content_guids = []
         for act in acts_by_item.get(item_id, ()):
-            if bool(getattr(act, "deleted", False)):
+            if bool(getattr(act, "deleted", False)) or bool(
+                getattr(act, "link_deleted", False)
+            ):
                 remote_act_guid = getattr(act, "remote_act_guid", None)
                 remote_content_guid = getattr(act, "remote_content_guid", None)
                 if remote_act_guid:
