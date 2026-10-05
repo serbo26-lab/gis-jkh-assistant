@@ -1657,6 +1657,10 @@ async function runGisCommand(command) {
           });
         }
 
+        if (!qualityActs.length) {
+          continue;
+        }
+
         const values = qualityValues(localItem, qualityActs);
         estimationList.push({
           guid: remoteItem?.guid || null,
@@ -1696,7 +1700,8 @@ async function runGisCommand(command) {
     async function prepareExistingQualityAssessment(
       localPayload,
       reportingPeriod,
-      remote
+      remote,
+      options = {}
     ) {
       const knownGuid = String(localPayload?.knownEstimationGuid || "");
       const remoteGuid = String(remote?.estimation?.guid || "");
@@ -1725,6 +1730,8 @@ async function runGisCommand(command) {
 
       const estimationList = [];
       const actMappings = [];
+      const seededLocalActIds = new Set();
+      const stageSharedNewActs = Boolean(options?.stageSharedNewActs);
 
       for (const localItem of localItems) {
         const remoteItem = matchQualityItem(localItem, remoteItems);
@@ -1799,11 +1806,23 @@ async function runGisCommand(command) {
             continue;
           }
 
+          const localActId = String(localAct?.localActId || "");
+          if (
+            stageSharedNewActs &&
+            localActId &&
+            seededLocalActIds.has(localActId)
+          ) {
+            continue;
+          }
+
           const created = await createLocalQualityAct(
             localAct,
             orgRootGuid,
             house
           );
+          if (stageSharedNewActs && localActId) {
+            seededLocalActIds.add(localActId);
+          }
           qualityActs.push(created.act);
           actMappings.push({
             localActId: created.localActId,
@@ -1813,6 +1832,9 @@ async function runGisCommand(command) {
         }
 
         if (!qualityActs.length) {
+          if (stageSharedNewActs) {
+            continue;
+          }
           throw new Error(
             "Для работы «" + String(localItem?.workName || "") + "» не добавлен акт."
           );
@@ -1829,7 +1851,7 @@ async function runGisCommand(command) {
           daysPerMonth: values.daysPerMonth,
           costReduction: values.costReduction,
           qualityAct: qualityActs,
-          hasQualityActs: true,
+          hasQualityActs: qualityActs.length > 0,
           hasQualityViolationActs: values.hasViolation
         });
       }
@@ -1929,6 +1951,19 @@ async function runGisCommand(command) {
       return result;
     }
 
+    function hasSharedNewQualityAct(localPayload) {
+      const counts = new Map();
+      for (const item of localPayload?.items || []) {
+        for (const act of item?.acts || []) {
+          if (act?.remoteActGuid) continue;
+          const key = String(act?.localActId || "");
+          if (!key) continue;
+          counts.set(key, (counts.get(key) || 0) + 1);
+        }
+      }
+      return Array.from(counts.values()).some((count) => count > 1);
+    }
+
     async function saveNewQualityAssessment(localPayload) {
       const prepared = await prepareNewQualityAssessment(localPayload);
       await request(
@@ -1948,18 +1983,7 @@ async function runGisCommand(command) {
         prepared.actMappings
       );
 
-      const localActUseCount = new Map();
-      for (const item of localPayload?.items || []) {
-        for (const act of item?.acts || []) {
-          if (act?.remoteActGuid) continue;
-          const key = String(act?.localActId || "");
-          if (!key) continue;
-          localActUseCount.set(key, (localActUseCount.get(key) || 0) + 1);
-        }
-      }
-      const hasSharedNewAct = Array.from(localActUseCount.values()).some(
-        (count) => count > 1
-      );
+      const hasSharedNewAct = hasSharedNewQualityAct(localPayload);
 
       if (hasSharedNewAct) {
         const effectivePayload = mergeSavedActMappings(
@@ -2001,16 +2025,19 @@ async function runGisCommand(command) {
 
     async function saveQualityAssessment(localPayload) {
       const reportingPeriod = await findReportingPeriod(localPayload);
-      const remote = await searchQualityAssessment(reportingPeriod.guid, false);
+      let remote = await searchQualityAssessment(reportingPeriod.guid, false);
 
       if (!remote?.estimation?.guid) {
         return saveNewQualityAssessment(localPayload);
       }
 
-      const prepared = await prepareExistingQualityAssessment(
-        localPayload,
+      const hasSharedNewAct = hasSharedNewQualityAct(localPayload);
+      let effectivePayload = localPayload;
+      let prepared = await prepareExistingQualityAssessment(
+        effectivePayload,
         reportingPeriod,
-        remote
+        remote,
+        { stageSharedNewActs: hasSharedNewAct }
       );
       await request(
         "POST",
@@ -2018,16 +2045,47 @@ async function runGisCommand(command) {
         prepared.body,
         STATE_WORKPLANNING
       );
-      const fresh = await searchQualityAssessment(reportingPeriod.guid, false);
+      let fresh = await searchQualityAssessment(reportingPeriod.guid, false);
+      let result = await qualityResultWithActs(
+        fresh,
+        reportingPeriod,
+        effectivePayload.items,
+        prepared.actMappings
+      );
+
+      if (hasSharedNewAct) {
+        effectivePayload = mergeSavedActMappings(
+          localPayload,
+          result.acts
+        );
+        effectivePayload.knownEstimationGuid =
+          result.estimationGuid || fresh?.estimation?.guid || null;
+        remote = fresh;
+
+        prepared = await prepareExistingQualityAssessment(
+          effectivePayload,
+          reportingPeriod,
+          remote
+        );
+        await request(
+          "POST",
+          "/workplanning/api/rest/services/save/estimation",
+          prepared.body,
+          STATE_WORKPLANNING
+        );
+        fresh = await searchQualityAssessment(reportingPeriod.guid, false);
+        result = await qualityResultWithActs(
+          fresh,
+          reportingPeriod,
+          effectivePayload.items,
+          prepared.actMappings
+        );
+      }
+
       return {
         prepared,
         fresh,
-        result: await qualityResultWithActs(
-          fresh,
-          reportingPeriod,
-          localPayload.items,
-          prepared.actMappings
-        )
+        result
       };
     }
 
@@ -2061,6 +2119,12 @@ async function runGisCommand(command) {
 
       if (!remote?.estimation?.guid) {
         const saved = await saveNewQualityAssessment(localPayload);
+        remote = saved.fresh;
+        effectivePayload = mergeSavedActMappings(localPayload, saved.result.acts);
+        effectivePayload.knownEstimationGuid =
+          saved.result.estimationGuid || remote?.estimation?.guid || null;
+      } else if (hasSharedNewQualityAct(localPayload)) {
+        const saved = await saveQualityAssessment(localPayload);
         remote = saved.fresh;
         effectivePayload = mergeSavedActMappings(localPayload, saved.result.acts);
         effectivePayload.knownEstimationGuid =
