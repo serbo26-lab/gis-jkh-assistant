@@ -19,7 +19,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from gis_jkh_assistant.acceptance_act_pdf import build_acceptance_act_pdf
+from gis_jkh_assistant.acceptance_act_pdf import (
+    AcceptanceActWorkRow,
+    build_acceptance_act_pdf,
+)
 from gis_jkh_assistant.database.quality_assessment_store import (
     QualityAssessmentAct,
     QualityAssessmentItem,
@@ -401,6 +404,73 @@ class QualityMonthActsDialog(QDialog):
             return
         self._reload(act.id)
 
+    def _act_work_rows(
+        self,
+        selected_items: list[QualityAssessmentItem],
+    ) -> tuple[list[AcceptanceActWorkRow], list[str], bool]:
+        period = self.store.get_period(self.period_id)
+        fixation_period = (
+            self.store.repository.get_work_fixation_period_for_month(
+                period.work_list_id,
+                year=self.year,
+                month=self.month,
+            )
+            if period is not None
+            else None
+        )
+        fixation_items = (
+            self.store.repository.list_work_fixation_items(fixation_period.id)
+            if fixation_period is not None
+            else []
+        )
+
+        by_list_item_id = {
+            item.work_list_item_id: item
+            for item in fixation_items
+            if item.work_list_item_id
+        }
+        by_guid = {
+            item.work_guid: item
+            for item in fixation_items
+            if item.work_guid
+        }
+        by_code = {
+            item.work_code: item
+            for item in fixation_items
+            if item.work_code
+        }
+
+        rows: list[AcceptanceActWorkRow] = []
+        missing_cost_names: list[str] = []
+        for item in selected_items:
+            fixation = (
+                by_list_item_id.get(item.work_list_item_id)
+                or (by_guid.get(item.work_guid) if item.work_guid else None)
+                or (by_code.get(item.work_code) if item.work_code else None)
+            )
+            actual_cost = fixation.fact_total_cost if fixation else None
+            if not actual_cost:
+                missing_cost_names.append(item.work_name)
+
+            rows.append(
+                AcceptanceActWorkRow(
+                    name=item.work_name,
+                    unit_name=(
+                        getattr(fixation, "unit_name", None)
+                        if fixation is not None
+                        else None
+                    ),
+                    periodicity=(
+                        fixation.fact_count
+                        if fixation is not None
+                        else None
+                    ),
+                    actual_cost=actual_cost,
+                )
+            )
+
+        return rows, missing_cost_names, fixation_period is not None
+
     def _generate(self) -> None:
         items = self._items()
         if not items:
@@ -415,7 +485,33 @@ class QualityMonthActsDialog(QDialog):
             return
         values = dialog.values()
         selected = set(values["item_ids"])
-        work_names = [item.work_name for item in items if item.id in selected]
+        selected_items = [item for item in items if item.id in selected]
+        work_rows, missing_costs, has_fixation = self._act_work_rows(
+            selected_items
+        )
+
+        if missing_costs:
+            examples = "\n".join(f"• {name}" for name in missing_costs[:5])
+            if len(missing_costs) > 5:
+                examples += f"\n… ещё: {len(missing_costs) - 5}"
+            prefix = (
+                "За выбранный месяц фиксация работ ещё не создана. "
+                if not has_fixation
+                else ""
+            )
+            answer = QMessageBox.question(
+                self,
+                "Не заполнена фактическая стоимость",
+                prefix
+                + f"Для {len(missing_costs)} из {len(work_rows)} работ нет "
+                "значения «Стоимость факт.» в разделе «Фиксация работ и услуг». "
+                "В сформированном акте эти ячейки останутся пустыми.\n\n"
+                + examples
+                + "\n\nСформировать акт?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
         try:
             pdf = build_acceptance_act_pdf(
                 organization_name=self.organization_name,
@@ -424,7 +520,7 @@ class QualityMonthActsDialog(QDialog):
                 act_date=values["reg_date"],
                 period_from=values["period_from"],
                 period_to=values["period_to"],
-                work_names=work_names,
+                work_rows=work_rows,
             )
             file_name = (
                 f"Акт_выполненных_работ_{self.month:02d}_{self.year}.pdf"
