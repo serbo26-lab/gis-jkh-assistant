@@ -1657,6 +1657,10 @@ async function runGisCommand(command) {
           });
         }
 
+        if (!qualityActs.length) {
+          continue;
+        }
+
         const values = qualityValues(localItem, qualityActs);
         estimationList.push({
           guid: remoteItem?.guid || null,
@@ -1827,7 +1831,10 @@ async function runGisCommand(command) {
           });
         }
 
-        if (!qualityActs.length && !stageSharedNewActs) {
+        if (!qualityActs.length) {
+          if (stageSharedNewActs) {
+            continue;
+          }
           throw new Error(
             "Для работы «" + String(localItem?.workName || "") + "» не добавлен акт."
           );
