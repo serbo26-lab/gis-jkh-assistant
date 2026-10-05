@@ -260,9 +260,9 @@ def build_acceptance_act_pdf(
         data.append(values)
 
     if has_units:
-        col_widths = [12 * mm, 82 * mm, 22 * mm, 27 * mm, 27 * mm]
+        col_widths = [12 * mm, 77 * mm, 22 * mm, 31 * mm, 28 * mm]
     else:
-        col_widths = [12 * mm, 101 * mm, 27 * mm, 30 * mm]
+        col_widths = [12 * mm, 97 * mm, 31 * mm, 30 * mm]
 
     table = LongTable(
         data,
