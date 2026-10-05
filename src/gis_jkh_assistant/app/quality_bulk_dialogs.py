@@ -313,7 +313,7 @@ class QualityMonthActsDialog(QDialog):
         generate = QPushButton("Сформировать PDF")
         apply_to = QPushButton("Применить к…")
         apply_all = QPushButton("Ко всем включённым")
-        save_copy = QPushButton("Сохранить копию PDF…")
+        save_copy = QPushButton("Сохранить копию файла…")
         delete = QPushButton("Удалить акт")
         actions.addWidget(add)
         actions.addWidget(generate)
@@ -496,7 +496,7 @@ class QualityMonthActsDialog(QDialog):
             self,
             "Сохранить копию акта",
             act.file_name,
-            "PDF (*.pdf);;Все файлы (*.*)",
+            "Все файлы (*.*)",
         )
         if not path:
             return
