@@ -115,10 +115,16 @@ def build_acceptance_act_pdf(
     act_date: str,
     period_from: str,
     period_to: str,
-    work_rows: list[AcceptanceActWorkRow],
+    work_rows: list[AcceptanceActWorkRow] | None = None,
+    work_names: list[str] | None = None,
 ) -> bytes:
     """Build a neutral monthly acceptance act from fixation facts."""
 
+    if work_rows is None:
+        work_rows = [
+            AcceptanceActWorkRow(name=name)
+            for name in (work_names or [])
+        ]
     if not work_rows:
         raise ValueError("Для формирования акта нужно выбрать хотя бы одну работу.")
 
