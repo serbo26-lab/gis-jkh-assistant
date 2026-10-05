@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         self.repository = repository
         self.integration_gateway = LocalIntegrationGateway()
         self.integration_gateway.start()
-        self.setWindowTitle("GIS ЖКХ Assistant")
+        self.setWindowTitle("ГИС ЖКХ Ассистент")
         self.resize(1360, 820)
         self.setMinimumSize(720, 520)
         self._view_mode = "normal"
@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(220)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
-        app_name = QLabel("GIS ЖКХ Assistant")
+        app_name = QLabel("ГИС ЖКХ Ассистент")
         app_name.setObjectName("SectionTitle")
         sidebar_layout.addWidget(app_name)
 
@@ -117,22 +117,22 @@ class MainWindow(QMainWindow):
                 text += f"\n{status.error}"
             color = "#b42318"
         elif not status.helper_connected:
-            text = "Помощник не подключен"
+            text = "ГИС ЖКХ помощник не подключен"
             color = "#8a5b00"
         elif not status.gis_page_ready:
             version = status.helper_version or "?"
-            text = f"Помощник {version} подключен\nВкладка ГИС ЖКХ не открыта"
+            text = f"ГИС ЖКХ помощник {version} подключен\nВкладка ГИС ЖКХ не открыта"
             color = "#8a5b00"
         else:
             version = status.helper_version or "?"
             if not helper_supports_quality_assessment(status.helper_version):
                 text = (
-                    f"ГИС ЖКХ подключен\nПомощник {version} устарел\n"
-                    "Требуется 0.1.15+"
+                    f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version} устарел\n"
+                    "Требуется 0.1.16+"
                 )
                 color = "#8a5b00"
             else:
-                text = f"ГИС ЖКХ подключен\nПомощник {version}"
+                text = f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version}"
                 if status.session_keep_alive_error:
                     text += "\nСессия: ошибка продления"
                     color = "#8a5b00"
