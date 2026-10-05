@@ -1999,6 +1999,38 @@ async function runGisCommand(command) {
       };
     }
 
+    async function saveQualityAssessment(localPayload) {
+      const reportingPeriod = await findReportingPeriod(localPayload);
+      const remote = await searchQualityAssessment(reportingPeriod.guid, false);
+
+      if (!remote?.estimation?.guid) {
+        return saveNewQualityAssessment(localPayload);
+      }
+
+      const prepared = await prepareExistingQualityAssessment(
+        localPayload,
+        reportingPeriod,
+        remote
+      );
+      await request(
+        "POST",
+        "/workplanning/api/rest/services/save/estimation",
+        prepared.body,
+        STATE_WORKPLANNING
+      );
+      const fresh = await searchQualityAssessment(reportingPeriod.guid, false);
+      return {
+        prepared,
+        fresh,
+        result: await qualityResultWithActs(
+          fresh,
+          reportingPeriod,
+          localPayload.items,
+          prepared.actMappings
+        )
+      };
+    }
+
     function mergeSavedActMappings(localPayload, mappings) {
       const byId = new Map(
         (mappings || [])
@@ -2087,7 +2119,7 @@ async function runGisCommand(command) {
 
 
     if (command.type === "save_quality_assessment") {
-      const saved = await saveNewQualityAssessment(payload);
+      const saved = await saveQualityAssessment(payload);
       return { ok: true, result: saved.result };
     }
 
