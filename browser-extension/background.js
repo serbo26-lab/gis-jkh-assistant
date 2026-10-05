@@ -1718,6 +1718,10 @@ async function runGisCommand(command) {
       const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
       const houseContext = await getHouseInfo(localPayload.houseObjectGuid);
       const orgRootGuid = houseContext.organizationGuid;
+      const workList = await getWorkListDetail(localPayload.workListGuid);
+      const workListItems = Array.isArray(workList?.workListItems)
+        ? workList.workListItems
+        : [];
       const remoteItems = Array.isArray(remote?.estimationList)
         ? remote.estimationList
         : [];
@@ -1734,16 +1738,24 @@ async function runGisCommand(command) {
       const stageSharedNewActs = Boolean(options?.stageSharedNewActs);
 
       for (const localItem of localItems) {
-        const remoteItem = matchQualityItem(localItem, remoteItems);
-        if (!remoteItem?.guid) {
-          throw new Error(
-            "Не удалось найти сохранённую строку оценки качества для работы «" +
-              String(localItem?.workName || "") +
-              "»."
-          );
+        let remoteItem = matchQualityItem(localItem, remoteItems);
+        if (!remoteItem) {
+          const sourceItem = findWorkListItem(localItem, workListItems);
+          remoteItem = {
+            guid: null,
+            work: compactReference(sourceItem?.work),
+            workType: compactReference(sourceItem?.workType),
+            workName:
+              sourceItem?.workName ||
+              sourceItem?.work?.name ||
+              localItem?.workName ||
+              null
+          };
         }
 
-        const remoteActs = await searchQualityActs(remoteItem.guid);
+        const remoteActs = remoteItem?.guid
+          ? await searchQualityActs(remoteItem.guid)
+          : [];
         const removedActGuids = new Set(
           (localItem?.removedRemoteActGuids || []).map(String)
         );
