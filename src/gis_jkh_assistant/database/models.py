@@ -143,6 +143,7 @@ class WorkTemplateItem:
     work_code: str | None
     work_name: str
     work_guid: str | None = None
+    unit_name: str | None = None
     price: str | None = None
     volume: str | None = None
     quantity: str | None = None
