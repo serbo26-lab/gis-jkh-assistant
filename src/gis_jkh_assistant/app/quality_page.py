@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
-from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
+from gis_jkh_assistant.gis_integration import IntegrationError, LocalIntegrationGateway
 from gis_jkh_assistant.quality_assessment import (
     build_quality_command_payload,
     helper_supports_quality_assessment,
@@ -464,6 +464,54 @@ class QualityAssessmentPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
+    def _sync_work_units_for_act(self) -> None:
+        if not self._current_work_list_id:
+            return
+        status = self.integration_gateway.status()
+        if not (
+            status.running
+            and status.helper_connected
+            and status.gis_page_ready
+            and helper_supports_quality_assessment(status.helper_version)
+        ):
+            return
+
+        items = self.repository.list_work_list_items(self._current_work_list_id)
+        if not items:
+            return
+        payload = {
+            "items": [
+                {
+                    "localItemId": item.id,
+                    "workCode": item.work_code,
+                    "workGuid": item.work_guid,
+                }
+                for item in items
+                if item.work_code or item.work_guid
+            ]
+        }
+        if not payload["items"]:
+            return
+
+        try:
+            result = self.integration_gateway.execute(
+                "resolve_planned_work_units",
+                payload,
+                timeout=45.0,
+            )
+        except IntegrationError:
+            return
+
+        units = {
+            str(row.get("localItemId")): row.get("unitName")
+            for row in (result.get("items") or [])
+            if row.get("localItemId")
+        }
+        self.repository.update_work_list_unit_names(
+            self._current_work_list_id,
+            units,
+        )
+
     def _open_month_acts(self) -> None:
         if (
             not self._current_period_id
@@ -471,6 +519,7 @@ class QualityAssessmentPage(QWidget):
             or self.year_combo.currentData() is None
         ):
             return
+        self._sync_work_units_for_act()
         dialog = QualityMonthActsDialog(
             self.store,
             period_id=self._current_period_id,
