@@ -203,7 +203,7 @@ class QualityActsDialog(QDialog):
 
         actions = QHBoxLayout()
         self.add_button = QPushButton("Добавить акт")
-        self.delete_button = QPushButton("Удалить выбранный")
+        self.delete_button = QPushButton("Отвязать от работы")
         self.add_button.setEnabled(self.editable)
         self.delete_button.setEnabled(self.editable)
         actions.addWidget(self.add_button)
@@ -271,7 +271,7 @@ class QualityActsDialog(QDialog):
         if not act_id:
             return
         try:
-            self.store.delete_act(str(act_id))
+            self.store.unlink_act(str(act_id), self.item_id)
         except ValueError as exc:
             QMessageBox.warning(self, "Нельзя удалить акт", str(exc))
             return
