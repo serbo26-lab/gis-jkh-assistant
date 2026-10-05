@@ -710,7 +710,7 @@ class WorkListsPage(QWidget):
         self.save_status.setText("Сохранено")
 
     def _apply_row_input_mode(self, row: int) -> None:
-        """Mirror the mutually exclusive input schemes used by GIS ЖКХ."""
+        """Mirror the mutually exclusive input schemes used by ГИС ЖКХ."""
 
         price_item = self.items_table.item(row, 1)
         volume_item = self.items_table.item(row, 2)
