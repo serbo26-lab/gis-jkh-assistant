@@ -1303,6 +1303,23 @@ async function runGisCommand(command) {
       return Array.isArray(data?.actList) ? data.actList : [];
     }
 
+    async function getQualityActByGuid(
+      actGuid,
+      orgRootGuid,
+      houseGuid
+    ) {
+      return request(
+        "POST",
+        "/workplanning/api/rest/services/search/quality-act",
+        {
+          guid: String(actGuid || ""),
+          orgRootGuid: String(orgRootGuid || ""),
+          houseGuid: String(houseGuid || "")
+        },
+        STATE_WORKPLANNING
+      );
+    }
+
     function matchQualityItem(localItem, remoteItems) {
       const workGuid = String(localItem?.workGuid || "");
       const workCode = String(localItem?.workCode || "");
@@ -1584,6 +1601,7 @@ async function runGisCommand(command) {
 
       const estimationList = [];
       const actMappings = [];
+      const seededLocalActIds = new Set();
 
       for (const localItem of localItems) {
         const remoteItem = matchQualityItem(localItem, remote.estimationList);
@@ -1604,11 +1622,33 @@ async function runGisCommand(command) {
 
         const qualityActs = [];
         for (const localAct of localActs) {
+          const localActId = String(localAct?.localActId || "");
+          if (localAct?.remoteActGuid) {
+            const existingAct = await getQualityActByGuid(
+              localAct.remoteActGuid,
+              orgRootGuid,
+              house.guid
+            );
+            const normalized = normalizeRemoteQualityAct(existingAct);
+            qualityActs.push(normalized);
+            actMappings.push({
+              localActId: localAct?.localActId || null,
+              contentGuid: normalized?.attachment?.contentGuid || null,
+              guid: normalized?.guid || null
+            });
+            continue;
+          }
+
+          if (localActId && seededLocalActIds.has(localActId)) {
+            continue;
+          }
+
           const created = await createLocalQualityAct(
             localAct,
             orgRootGuid,
             house
           );
+          if (localActId) seededLocalActIds.add(localActId);
           qualityActs.push(created.act);
           actMappings.push({
             localActId: created.localActId,
@@ -1628,7 +1668,7 @@ async function runGisCommand(command) {
           daysPerMonth: values.daysPerMonth,
           costReduction: values.costReduction,
           qualityAct: qualityActs,
-          hasQualityActs: true,
+          hasQualityActs: qualityActs.length > 0,
           hasQualityViolationActs: values.hasViolation
         });
       }
@@ -1734,6 +1774,22 @@ async function runGisCommand(command) {
           );
           if (matched) {
             const normalized = normalizeRemoteQualityAct(matched);
+            qualityActs.push(normalized);
+            actMappings.push({
+              localActId: localAct?.localActId || null,
+              contentGuid: normalized?.attachment?.contentGuid || null,
+              guid: normalized?.guid || null
+            });
+            continue;
+          }
+
+          if (localAct?.remoteActGuid) {
+            const existingAct = await getQualityActByGuid(
+              localAct.remoteActGuid,
+              orgRootGuid,
+              house.guid
+            );
+            const normalized = normalizeRemoteQualityAct(existingAct);
             qualityActs.push(normalized);
             actMappings.push({
               localActId: localAct?.localActId || null,
@@ -1881,19 +1937,65 @@ async function runGisCommand(command) {
         prepared.body,
         STATE_WORKPLANNING
       );
-      const fresh = await searchQualityAssessment(
+      let fresh = await searchQualityAssessment(
         prepared.reportingPeriod.guid,
         false
       );
+      let result = await qualityResultWithActs(
+        fresh,
+        prepared.reportingPeriod,
+        localPayload.items,
+        prepared.actMappings
+      );
+
+      const localActUseCount = new Map();
+      for (const item of localPayload?.items || []) {
+        for (const act of item?.acts || []) {
+          if (act?.remoteActGuid) continue;
+          const key = String(act?.localActId || "");
+          if (!key) continue;
+          localActUseCount.set(key, (localActUseCount.get(key) || 0) + 1);
+        }
+      }
+      const hasSharedNewAct = Array.from(localActUseCount.values()).some(
+        (count) => count > 1
+      );
+
+      if (hasSharedNewAct) {
+        const effectivePayload = mergeSavedActMappings(
+          localPayload,
+          result.acts
+        );
+        effectivePayload.knownEstimationGuid =
+          result.estimationGuid || fresh?.estimation?.guid || null;
+
+        const linked = await prepareExistingQualityAssessment(
+          effectivePayload,
+          prepared.reportingPeriod,
+          fresh
+        );
+        await request(
+          "POST",
+          "/workplanning/api/rest/services/save/estimation",
+          linked.body,
+          STATE_WORKPLANNING
+        );
+        fresh = await searchQualityAssessment(
+          prepared.reportingPeriod.guid,
+          false
+        );
+        result = await qualityResultWithActs(
+          fresh,
+          prepared.reportingPeriod,
+          effectivePayload.items,
+          linked.actMappings
+        );
+      }
+
       return {
         prepared,
         fresh,
-        result: await qualityResultWithActs(
-          fresh,
-          prepared.reportingPeriod,
-          localPayload.items,
-          prepared.actMappings
-        )
+        result
       };
     }
 
