@@ -58,7 +58,7 @@ _ITEM_ID_ROLE = Qt.ItemDataRole.UserRole
 
 
 class FixationPage(QWidget):
-    """Create factual monthly indicators and publish them sequentially to GIS ЖКХ."""
+    """Create factual monthly indicators and publish them sequentially to ГИС ЖКХ."""
 
     def __init__(
         self,
