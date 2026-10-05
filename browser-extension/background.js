@@ -1933,6 +1933,8 @@ async function runGisCommand(command) {
                     String(localAct?.number || "") &&
                   String(remoteAct?.actType || "") ===
                     String(localAct?.actType || "") &&
+                  qualityActDateTime(remoteAct?.regDate) ===
+                    qualityActDateTime(localAct?.regDate) &&
                   String(remoteAct?.period?.from || "") ===
                     String(localAct?.periodFrom || "") &&
                   String(remoteAct?.period?.to || "") ===
