@@ -15,7 +15,8 @@ def _fixture(repository: Repository):
     house = repository.create_house(
         organization_id=organization.id,
         address="г Ставрополь, ул Тестовая, д. 30",
-        fias_house_guid="44062768-dec0-4576-86cb-62bb82d854d2",
+        house_object_guid="house-object-guid",
+        fias_house_guid="34062768-dec0-4576-86cb-62bb82d854d2",
     )
     template = repository.create_work_template(
         organization_id=organization.id,
@@ -72,7 +73,8 @@ def test_quality_helper_version() -> None:
     assert not helper_supports_quality_assessment(None)
     assert not helper_supports_quality_assessment("0.1.9")
     assert not helper_supports_quality_assessment("0.1.10")
-    assert helper_supports_quality_assessment("0.1.11")
+    assert not helper_supports_quality_assessment("0.1.11")
+    assert helper_supports_quality_assessment("0.1.12")
     assert helper_supports_quality_assessment("0.2.0")
 
 
@@ -157,12 +159,14 @@ def test_multiple_quality_acts_are_kept_for_one_work(tmp_path) -> None:
     refreshed = store.list_items(period.id)[0]
     payload = build_quality_command_payload(
         fias_house_code=house.fias_house_guid or "",
+        house_object_guid=house.house_object_guid or "",
         work_list_guid=work_list.gis_work_list_guid or "",
         year=2026,
         month=1,
         items=[refreshed],
         acts_by_item={refreshed.id: acts},
     )
+    assert payload["houseObjectGuid"] == "house-object-guid"
     assert len(payload["items"]) == 1
     assert len(payload["items"][0]["acts"]) == 2
     assert payload["items"][0]["acts"][0]["actType"] == "ACCEPTANCE_ACT"
@@ -219,6 +223,7 @@ def test_remote_quality_act_is_marked_for_removal_and_sent_in_payload(tmp_path) 
     refreshed = store.list_items(period.id)[0]
     payload = build_quality_command_payload(
         fias_house_code=house.fias_house_guid or "",
+        house_object_guid=house.house_object_guid or "",
         work_list_guid=work_list.gis_work_list_guid or "",
         year=2026,
         month=1,
