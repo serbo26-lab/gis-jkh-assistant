@@ -14,7 +14,7 @@ from gis_jkh_assistant.database.repository import Repository
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("GIS ЖКХ Assistant")
+    app.setApplicationName("ГИС ЖКХ Ассистент")
     app.setStyleSheet(APP_STYLESHEET)
 
     repository = Repository(database_path())
