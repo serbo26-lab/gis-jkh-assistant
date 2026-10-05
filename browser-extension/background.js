@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.15";
+const HELPER_CODE_VERSION = "0.1.16";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -957,6 +957,26 @@ async function runGisCommand(command) {
         throw new Error("Выбранная внеплановая работа больше не найдена в справочнике.");
       }
       return item;
+    }
+
+    async function resolvePlannedWorkUnits(payload) {
+      const rows = [];
+      for (const localItem of Array.isArray(payload?.items) ? payload.items : []) {
+        const work = await getOrganizationWork(
+          localItem?.workCode,
+          localItem?.workGuid
+        );
+        rows.push({
+          localItemId: localItem?.localItemId || null,
+          workGuid: work?.guid || localItem?.workGuid || null,
+          workCode: String(work?.code || localItem?.workCode || ""),
+          unitName:
+            work?.dimensionsUnit?.dimensionsUnitOkei?.nationalSymbolName ||
+            work?.dimensionsUnit?.dimensionsUnitString ||
+            null
+        });
+      }
+      return { items: rows };
     }
 
     async function listUnplannedWorkOptions(payload) {
@@ -2224,6 +2244,13 @@ async function runGisCommand(command) {
         gisStatus: "CANCELLED",
         items: [],
         acts: []
+      };
+    }
+
+    if (command.type === "resolve_planned_work_units") {
+      return {
+        ok: true,
+        result: await resolvePlannedWorkUnits(payload)
       };
     }
 
