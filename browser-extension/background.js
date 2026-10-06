@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.19";
+const HELPER_CODE_VERSION = "0.1.20";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -287,6 +287,151 @@ async function runGisCommand(command) {
       }
 
       return { item, organizationGuid };
+    }
+
+    function integerOrZero(...values) {
+      for (const value of values) {
+        if (value === null || value === undefined || value === "") continue;
+        const parsed = Number(value);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          return Math.trunc(parsed);
+        }
+      }
+      return 0;
+    }
+
+    function normalizeManagedHouseRow(row) {
+      const managementOrganization = row?.managementOrganization || {};
+      const address = row?.address || {};
+      const houseAddress = address?.house || {};
+      const houseGuid = houseAddress?.houseGuid || null;
+      return {
+        address: address?.formattedAddress || "",
+        houseObjectGuid: row?.guid || null,
+        gisHouseGuid: houseGuid,
+        fiasHouseGuid: houseGuid,
+        gisUniqueHouseNumber: null,
+        cadastralNumber: row?.cadastreNumber || null,
+        residentialPremisesCount: integerOrZero(
+          row?.residentialPremiseActualCount,
+          row?.residentialPremiseConfirmedCount,
+          row?.residentialPremiseCount
+        ),
+        nonResidentialPremisesCount: integerOrZero(
+          row?.nonResidentialPremiseActualCount,
+          row?.nonResidentialPremiseConfirmedCount,
+          row?.nonResidentialPremiseCount
+        ),
+        organizationGuid: managementOrganization?.guid || null,
+        organizationRootGuid:
+          managementOrganization?.registryOrganizationRootEntityGuid || null,
+        organizationName:
+          managementOrganization?.shortName ||
+          managementOrganization?.fullName ||
+          null,
+        organizationOgrn: managementOrganization?.ogrn || null,
+        status: row?.status || null
+      };
+    }
+
+    async function listManagedHouses(payload) {
+      const pageSize = 10;
+      let regionCode = String(payload?.regionCode || "").trim() || null;
+      let organizationGuid = String(
+        payload?.organizationGuid || ""
+      ).trim() || null;
+      let organizationRootGuid = String(
+        payload?.organizationRootGuid || ""
+      ).trim() || null;
+
+      const seedHouseObjectGuid = String(
+        payload?.seedHouseObjectGuid || ""
+      ).trim();
+      if (seedHouseObjectGuid) {
+        const seed = await getHouseInfo(seedHouseObjectGuid);
+        regionCode =
+          regionCode ||
+          seed?.item?.address?.region?.aoGuid ||
+          seed?.item?.address?.region?.guid ||
+          null;
+        organizationGuid =
+          organizationGuid ||
+          seed?.item?.managementOrganization?.guid ||
+          null;
+        organizationRootGuid =
+          organizationRootGuid ||
+          seed?.item?.managementOrganization?.registryOrganizationRootEntityGuid ||
+          seed?.organizationGuid ||
+          null;
+      }
+
+      const body = {
+        regionCode,
+        statuses: ["APPROVED"],
+        houseConditionRefList: null,
+        hasIncorrectObjects: null,
+        needRepair: null,
+        fiasHouseCodeList: null,
+        calcCount: true,
+        houseManagementTypeRefList: null,
+        houseTypeRefList: null,
+        attrFundCodes: null,
+        oktmo: null,
+        managementOrganizationGuid: organizationGuid,
+        localGovernmentOrganizationGuid: null,
+        regionProperty: null,
+        municipalProperty: null,
+        hostelTypeCodes: null
+      };
+
+      const items = [];
+      const seen = new Set();
+      let total = null;
+
+      for (let page = 1; page <= 1000; page += 1) {
+        const response = await request(
+          "POST",
+          "/homemanagement/api/rest/services/houses/search;page=" +
+            page +
+            ";itemsPerPage=" +
+            pageSize,
+          body,
+          STATE_WORKPLANNING
+        );
+        const rows = Array.isArray(response?.items) ? response.items : [];
+        const responseTotal = Number(response?.total);
+        if (Number.isFinite(responseTotal) && responseTotal >= 0) {
+          total = responseTotal;
+        }
+
+        for (const row of rows) {
+          const normalized = normalizeManagedHouseRow(row);
+          const key = String(
+            normalized.houseObjectGuid ||
+            normalized.gisHouseGuid ||
+            normalized.address
+          ).trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          items.push(normalized);
+          organizationGuid =
+            organizationGuid || normalized.organizationGuid || null;
+          organizationRootGuid =
+            organizationRootGuid || normalized.organizationRootGuid || null;
+        }
+
+        if (!rows.length) break;
+        if (total !== null && items.length >= total) break;
+        if (rows.length < pageSize && total === null) break;
+      }
+
+      return {
+        pageSize,
+        total: total === null ? items.length : total,
+        items,
+        organizationGuid,
+        organizationRootGuid
+      };
     }
 
     function ruDateSortKey(value) {
@@ -1484,6 +1629,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await listPublicManagementInfo(payload)
+      };
+    }
+
+    if (command.type === "list_managed_houses") {
+      return {
+        ok: true,
+        result: await listManagedHouses(payload)
       };
     }
 
