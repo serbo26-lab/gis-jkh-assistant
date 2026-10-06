@@ -1079,6 +1079,22 @@ class WorkListsPage(QWidget):
                 "Карточка дома отсутствует в локальной базе.",
             )
             return None
+
+        period_error = self.repository.work_list_management_period_error(
+            work_list.house_id,
+            start_year=work_list.start_year,
+            start_month=work_list.start_month,
+            end_year=work_list.end_year,
+            end_month=work_list.end_month,
+        )
+        if period_error:
+            QMessageBox.warning(
+                self,
+                "Период перечня вне срока управления",
+                period_error + "\n\nИсправьте период перечня перед обменом с ГИС ЖКХ.",
+            )
+            return None
+
         if not house.house_object_guid:
             QMessageBox.warning(
                 self,
