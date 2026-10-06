@@ -961,11 +961,16 @@ class HousesPage(QWidget):
                 updated += 1
                 self.bulk_management_progress.setValue(index)
 
-            self.repository.update_organization(
-                str(organization_id),
-                gis_organization_guid=organization_guid,
-                gis_organization_root_guid=resolved_root_guid,
-            )
+            organization_updates = {}
+            if organization_guid:
+                organization_updates["gis_organization_guid"] = organization_guid
+            if resolved_root_guid:
+                organization_updates["gis_organization_root_guid"] = resolved_root_guid
+            if organization_updates:
+                self.repository.update_organization(
+                    str(organization_id),
+                    **organization_updates,
+                )
             current_house_id = self._current_house_id
             self.refresh_houses()
             if current_house_id:
