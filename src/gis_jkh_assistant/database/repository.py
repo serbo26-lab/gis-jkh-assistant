@@ -1480,7 +1480,11 @@ class Repository:
                         _clean(getattr(item, "volume", None)),
                         _clean(getattr(item, "quantity", None)),
                         _clean(getattr(item, "cost", None)),
-                        _clean(getattr(item, "allocation_percent", None)),
+                        (
+                            _clean(getattr(item, "allocation_percent", None))
+                            if items is not None
+                            else None
+                        ),
                     ),
                 )
         result = self.get_work_list(work_list_id)
