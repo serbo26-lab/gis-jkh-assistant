@@ -82,7 +82,8 @@ def test_quality_helper_version() -> None:
     assert not helper_supports_quality_assessment("0.1.16")
     assert not helper_supports_quality_assessment("0.1.17")
     assert not helper_supports_quality_assessment("0.1.18")
-    assert helper_supports_quality_assessment("0.1.19")
+    assert not helper_supports_quality_assessment("0.1.19")
+    assert helper_supports_quality_assessment("0.1.20")
     assert helper_supports_quality_assessment("0.2.0")
 
 
