@@ -230,7 +230,8 @@ class WorkListsPage(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         self.splitter = splitter
-        root.addWidget(splitter, 1)
+        splitter.setMinimumHeight(300)
+        root.addWidget(splitter, 0)
 
         left = QFrame()
         left.setObjectName("Card")
@@ -312,12 +313,21 @@ class WorkListsPage(QWidget):
         period_form.addRow("ГИС ЖКХ", self.gis_state_label)
         right_layout.addLayout(period_form)
 
+        splitter.addWidget(right)
+        splitter.setSizes([340, 900])
+
+        self.items_card = QFrame()
+        self.items_card.setObjectName("Card")
+        items_layout = QVBoxLayout(self.items_card)
+        items_layout.setContentsMargins(16, 14, 16, 16)
+        items_layout.setSpacing(10)
+
         items_header = QHBoxLayout()
         items_title = QLabel("Работы и услуги")
         items_title.setObjectName("SectionTitle")
         items_header.addWidget(items_title)
         items_header.addStretch(1)
-        right_layout.addLayout(items_header)
+        items_layout.addLayout(items_header)
 
         self.add_works_button = QPushButton("Добавить…")
         self.add_works_button.setToolTip(
@@ -339,7 +349,7 @@ class WorkListsPage(QWidget):
         self.items_actions = QGridLayout()
         self.items_actions.setHorizontalSpacing(8)
         self.items_actions.setVerticalSpacing(6)
-        right_layout.addLayout(self.items_actions)
+        items_layout.addLayout(self.items_actions)
 
         input_hint = QLabel(
             "Для каждой строки используется один из двух вариантов: "
@@ -348,7 +358,7 @@ class WorkListsPage(QWidget):
         )
         input_hint.setWordWrap(True)
         input_hint.setObjectName("Muted")
-        right_layout.addWidget(input_hint)
+        items_layout.addWidget(input_hint)
 
         self.items_table = QTableWidget(0, 5)
         self.items_table.setHorizontalHeaderLabels(
@@ -356,17 +366,16 @@ class WorkListsPage(QWidget):
         )
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.items_table.setAlternatingRowColors(True)
-        self.items_table.setMinimumHeight(360)
+        self.items_table.setMinimumHeight(440)
         self.items_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.items_table.verticalHeader().setVisible(False)
         header_view = self.items_table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in range(1, 5):
             header_view.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        right_layout.addWidget(self.items_table, 1)
+        items_layout.addWidget(self.items_table, 1)
 
-        splitter.addWidget(right)
-        splitter.setSizes([340, 840])
+        root.addWidget(self.items_card, 1)
 
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         self.house_combo.currentIndexChanged.connect(self._house_changed)
@@ -1821,7 +1830,7 @@ class WorkListsPage(QWidget):
             self.context_layout.setHorizontalSpacing(10)
             self.context_layout.setVerticalSpacing(8)
             self.splitter.setOrientation(Qt.Orientation.Horizontal)
-            self.splitter.setSizes([340, 840])
+            self.splitter.setSizes([340, 900])
 
             self.creation_actions.addWidget(self.templates_button, 0, 0)
             self.creation_actions.addWidget(self.create_button, 0, 3)
@@ -1841,7 +1850,7 @@ class WorkListsPage(QWidget):
             self.items_actions.addWidget(self.lazy_fill_button, 0, 3)
             for column in range(4):
                 self.items_actions.setColumnStretch(column, 1)
-            self.items_table.setMinimumHeight(360)
+            self.items_table.setMinimumHeight(440)
 
         elif mode == "compact":
             self.page_content.setMinimumSize(760, 660)
@@ -1851,7 +1860,7 @@ class WorkListsPage(QWidget):
             self.context_layout.setHorizontalSpacing(8)
             self.context_layout.setVerticalSpacing(6)
             self.splitter.setOrientation(Qt.Orientation.Horizontal)
-            self.splitter.setSizes([280, 540])
+            self.splitter.setSizes([280, 620])
 
             self.creation_actions.addWidget(self.templates_button, 0, 0)
             self.creation_actions.addWidget(self.create_button, 0, 3)
@@ -1871,7 +1880,7 @@ class WorkListsPage(QWidget):
             self.items_actions.addWidget(self.lazy_fill_button, 1, 1)
             self.items_actions.setColumnStretch(0, 1)
             self.items_actions.setColumnStretch(1, 1)
-            self.items_table.setMinimumHeight(320)
+            self.items_table.setMinimumHeight(400)
 
         else:
             # On a narrow window the two work areas are stacked vertically instead
@@ -1884,7 +1893,7 @@ class WorkListsPage(QWidget):
             self.context_layout.setHorizontalSpacing(6)
             self.context_layout.setVerticalSpacing(5)
             self.splitter.setOrientation(Qt.Orientation.Vertical)
-            self.splitter.setSizes([330, 560])
+            self.splitter.setSizes([260, 360])
 
             self.creation_actions.addWidget(self.templates_button, 0, 0)
             self.creation_actions.addWidget(self.create_button, 0, 1)
@@ -1905,7 +1914,7 @@ class WorkListsPage(QWidget):
             self.items_actions.addWidget(self.lazy_fill_button, 1, 1)
             self.items_actions.setColumnStretch(0, 1)
             self.items_actions.setColumnStretch(1, 1)
-            self.items_table.setMinimumHeight(380)
+            self.items_table.setMinimumHeight(360)
 
     def set_compact_mode(self, compact: bool) -> None:
         """Compatibility shim for older callers."""

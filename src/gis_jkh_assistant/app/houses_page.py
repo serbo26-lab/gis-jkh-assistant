@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QScrollArea,
     QSplitter,
     QTableWidget,
@@ -121,6 +122,20 @@ class HousesPage(QWidget):
         self.add_house_button = QPushButton("Добавить дом")
         self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
         self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
+        self.sync_all_management_button = QPushButton(
+            "Обновить управление всех домов из ГИС ЖКХ"
+        )
+        self.sync_all_management_button.setToolTip(
+            "Получить период управления и реквизиты договора для всех домов "
+            "выбранной управляющей организации."
+        )
+        self.bulk_management_progress = QProgressBar()
+        self.bulk_management_progress.setTextVisible(True)
+        self.bulk_management_progress.setMinimumWidth(240)
+        self.bulk_management_progress.hide()
+        self.bulk_management_status = QLabel("")
+        self.bulk_management_status.setObjectName("Muted")
+        self.bulk_management_status.hide()
 
         self.add_org_button.clicked.connect(self._add_organization)
         self.edit_org_button.clicked.connect(self._edit_organization)
@@ -129,6 +144,9 @@ class HousesPage(QWidget):
         self.add_house_button.clicked.connect(self._add_house)
         self.export_house_data_button.clicked.connect(self._export_house_data_template)
         self.import_house_data_button.clicked.connect(self._import_house_data)
+        self.sync_all_management_button.clicked.connect(
+            self._sync_all_management_from_gis
+        )
 
         actions_row = QHBoxLayout()
         actions_row.setSpacing(8)
@@ -168,6 +186,26 @@ class HousesPage(QWidget):
         house_data_hint.setWordWrap(True)
         house_data_hint.setObjectName("Muted")
         toolbar_layout.addWidget(house_data_hint)
+
+        management_bulk_title = QLabel("Сведения об управлении")
+        management_bulk_title.setObjectName("SectionTitle")
+        toolbar_layout.addWidget(management_bulk_title)
+
+        management_bulk_row = QHBoxLayout()
+        management_bulk_row.setSpacing(8)
+        management_bulk_row.addWidget(self.sync_all_management_button)
+        management_bulk_row.addWidget(self.bulk_management_progress, 1)
+        management_bulk_row.addWidget(self.bulk_management_status)
+        toolbar_layout.addLayout(management_bulk_row)
+
+        management_bulk_hint = QLabel(
+            "Массовое обновление получает из открытой части ГИС ЖКХ период управления "
+            "и номер/дату договора для всех домов выбранной УО. "
+            "Если в доме есть ручные сведения, программа спросит, можно ли их заменить."
+        )
+        management_bulk_hint.setWordWrap(True)
+        management_bulk_hint.setObjectName("Muted")
+        toolbar_layout.addWidget(management_bulk_hint)
 
         root.addWidget(toolbar)
 
@@ -726,6 +764,252 @@ class HousesPage(QWidget):
             return
         self._queue_change(field, value)
         self._queue_change("management_data_source", "manual")
+
+    @staticmethod
+    def _house_management_identity_values(house) -> set[str]:
+        result: set[str] = set()
+        for value in (
+            house.house_object_guid,
+            house.gis_house_guid,
+            house.fias_house_guid,
+        ):
+            text = str(value or "").strip().casefold()
+            if text:
+                result.add(text)
+        return result
+
+    @staticmethod
+    def _has_manual_management_data(house) -> bool:
+        return bool(
+            house.management_data_source == "manual"
+            and (
+                house.management_start_date
+                or house.management_end_date
+                or house.management_agreement_number
+                or house.management_agreement_date
+            )
+        )
+
+    def _sync_all_management_from_gis(self) -> None:
+        self._flush_autosave()
+        if self.integration_gateway is None:
+            return
+        organization_id = self.organization_combo.currentData()
+        if not organization_id:
+            QMessageBox.information(
+                self,
+                "Не выбрана УО",
+                "Сначала выберите управляющую организацию.",
+            )
+            return
+        if self._management_worker is not None and self._management_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Обновление уже выполняется",
+                "Дождитесь завершения текущего запроса к ГИС ЖКХ.",
+            )
+            return
+
+        houses = self.repository.list_houses(str(organization_id))
+        if not houses:
+            QMessageBox.information(
+                self,
+                "Нет домов",
+                "У выбранной управляющей организации нет домов для обновления.",
+            )
+            return
+
+        manual_houses = [
+            house for house in houses if self._has_manual_management_data(house)
+        ]
+        overwrite_manual = False
+        if manual_houses:
+            message = QMessageBox(self)
+            message.setWindowTitle("Обновить сведения по всем домам?")
+            message.setIcon(QMessageBox.Icon.Question)
+            message.setText(
+                f"Будут запрошены сведения для {len(houses)} домов. "
+                f"У {len(manual_houses)} домов есть данные, введённые вручную."
+            )
+            message.setInformativeText(
+                "Можно сохранить ручные значения или заменить их сведениями из ГИС ЖКХ."
+            )
+            keep_button = message.addButton(
+                "Не заменять ручные",
+                QMessageBox.ButtonRole.AcceptRole,
+            )
+            replace_button = message.addButton(
+                "Обновить все",
+                QMessageBox.ButtonRole.ActionRole,
+            )
+            cancel_button = message.addButton(
+                "Отмена",
+                QMessageBox.ButtonRole.RejectRole,
+            )
+            message.exec()
+            clicked = message.clickedButton()
+            if clicked is cancel_button or clicked is None:
+                return
+            overwrite_manual = clicked is replace_button
+            if clicked is keep_button:
+                overwrite_manual = False
+        else:
+            answer = QMessageBox.question(
+                self,
+                "Обновить сведения по всем домам?",
+                f"Получить из ГИС ЖКХ период управления и договор для {len(houses)} домов?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        organization = self.repository.get_organization(str(organization_id))
+        seed_house = next(
+            (house for house in houses if house.house_object_guid),
+            None,
+        )
+        organization_root_guid = (
+            organization.gis_organization_root_guid
+            if organization is not None
+            else None
+        )
+        if not organization_root_guid and seed_house is None:
+            QMessageBox.warning(
+                self,
+                "Недостаточно идентификаторов",
+                "Не удалось определить GUID организации: ни у одного дома нет "
+                "GUID объекта жилищного фонда.",
+            )
+            return
+
+        self.sync_all_management_button.setEnabled(False)
+        self.sync_management_button.setEnabled(False)
+        self.bulk_management_progress.show()
+        self.bulk_management_status.show()
+        self.bulk_management_progress.setRange(0, 0)
+        self.bulk_management_status.setText(
+            f"Получение сведений из ГИС ЖКХ для {len(houses)} домов…"
+        )
+
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "list_house_management_info",
+            {
+                "organizationRootGuid": organization_root_guid,
+                "seedHouseObjectGuid": (
+                    seed_house.house_object_guid if seed_house else None
+                ),
+            },
+            timeout=180.0,
+            parent=self,
+        )
+        self._management_worker = worker
+
+        def succeeded(result: dict) -> None:
+            remote_items = list(result.get("items") or [])
+            indexed_items: list[tuple[set[str], dict]] = []
+            for item in remote_items:
+                identities = {
+                    str(value).strip().casefold()
+                    for value in (item.get("identities") or [])
+                    if str(value or "").strip()
+                }
+                if identities:
+                    indexed_items.append((identities, item))
+
+            self.bulk_management_progress.setRange(0, len(houses))
+            self.bulk_management_progress.setValue(0)
+
+            updated = 0
+            not_found = 0
+            skipped_manual = 0
+            organization_guid = None
+            resolved_root_guid = result.get("organizationRootGuid")
+
+            for index, house in enumerate(houses, start=1):
+                if self._has_manual_management_data(house) and not overwrite_manual:
+                    skipped_manual += 1
+                    self.bulk_management_progress.setValue(index)
+                    continue
+
+                local_ids = self._house_management_identity_values(house)
+                match = None
+                if local_ids:
+                    for remote_ids, remote_item in indexed_items:
+                        if local_ids.intersection(remote_ids):
+                            match = remote_item
+                            break
+
+                if match is None:
+                    not_found += 1
+                    self.bulk_management_progress.setValue(index)
+                    continue
+
+                self.repository.update_house(
+                    house.id,
+                    management_start_date=match.get("managementStartDate"),
+                    management_end_date=match.get("managementEndDate"),
+                    management_agreement_number=match.get("agreementNumber"),
+                    management_agreement_date=match.get("agreementDate"),
+                    management_data_source="gis_public",
+                )
+                organization_guid = (
+                    organization_guid or match.get("organizationGuid")
+                )
+                resolved_root_guid = (
+                    resolved_root_guid or match.get("organizationRootGuid")
+                )
+                updated += 1
+                self.bulk_management_progress.setValue(index)
+
+            organization_updates = {}
+            if organization_guid:
+                organization_updates["gis_organization_guid"] = organization_guid
+            if resolved_root_guid:
+                organization_updates["gis_organization_root_guid"] = resolved_root_guid
+            if organization_updates:
+                self.repository.update_organization(
+                    str(organization_id),
+                    **organization_updates,
+                )
+            current_house_id = self._current_house_id
+            self.refresh_houses()
+            if current_house_id:
+                self._load_house(current_house_id)
+
+            self.bulk_management_status.setText(
+                f"Готово: обновлено {updated} из {len(houses)}"
+            )
+            details = [f"Обновлено: {updated}."]
+            if not_found:
+                details.append(f"Не найдено в открытых сведениях: {not_found}.")
+            if skipped_manual:
+                details.append(f"Сохранены ручные сведения: {skipped_manual}.")
+            QMessageBox.information(
+                self,
+                "Массовое обновление завершено",
+                "\n".join(details),
+            )
+
+        def failed(message: str) -> None:
+            self.bulk_management_progress.setRange(0, 1)
+            self.bulk_management_progress.setValue(0)
+            self.bulk_management_status.setText("Ошибка обновления")
+            QMessageBox.critical(
+                self,
+                "Не удалось обновить дома",
+                message,
+            )
+
+        def finished() -> None:
+            self._management_worker = None
+            self.sync_all_management_button.setEnabled(True)
+            if self._current_house_id:
+                self.sync_management_button.setEnabled(True)
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
 
     def _sync_management_from_gis(self) -> None:
         self._flush_autosave()
