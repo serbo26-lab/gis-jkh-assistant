@@ -42,7 +42,6 @@ from gis_jkh_assistant.gis_files.house_data import (
 )
 from gis_jkh_assistant.gis_files.housing_objects import (
     HousingObjectsImportError,
-    ImportedHouse,
     parse_housing_objects_export,
 )
 
@@ -1711,7 +1710,7 @@ class HousesPage(QWidget):
             "Выбрать файл…",
             QMessageBox.ButtonRole.AcceptRole,
         )
-        cancel_button = message.addButton(
+        message.addButton(
             "Отмена",
             QMessageBox.ButtonRole.RejectRole,
         )
