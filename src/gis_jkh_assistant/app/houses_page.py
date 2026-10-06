@@ -42,6 +42,7 @@ from gis_jkh_assistant.gis_files.house_data import (
 )
 from gis_jkh_assistant.gis_files.housing_objects import (
     HousingObjectsImportError,
+    ImportedHouse,
     parse_housing_objects_export,
 )
 
@@ -65,6 +66,7 @@ class HousesPage(QWidget):
         self.repository = repository
         self.integration_gateway = integration_gateway
         self._management_worker: GisIntegrationWorker | None = None
+        self._houses_sync_worker: GisIntegrationWorker | None = None
         self._current_house_id: str | None = None
         self._pending_house_id: str | None = None
         self._pending_fields: dict[str, object] = {}
@@ -110,14 +112,20 @@ class HousesPage(QWidget):
         self.add_org_button = QPushButton("Добавить УО")
         self.edit_org_button = QPushButton("Изменить УО")
         self.delete_org_button = QPushButton("Удалить УО")
-        self.import_button = QPushButton("Импорт домов из ГИС ЖКХ…")
-        self.import_button.setObjectName("PrimaryButton")
+        self.import_button = QPushButton("Импорт домов из XLSX…")
         self.import_button.setToolTip(
-            "Нужен XLSX из выгрузки ГИС ЖКХ: "
-            "«Реестр объектов жилищного фонда» → «Выгрузить информацию». "
-            "ГИС формирует архив «Объекты жилищного фонда.zip» — "
-            "распакуйте его и выберите XLSX внутри."
+            "Резервный импорт домов из ранее выгруженного XLSX-файла ГИС ЖКХ."
         )
+        self.sync_houses_button = QPushButton(
+            "Загрузить сведения о МКД из ГИС ЖКХ"
+        )
+        self.sync_houses_button.setObjectName("PrimaryButton")
+        self.sync_houses_button.setToolTip(
+            "Получить все дома текущей управляющей организации напрямую из ГИС ЖКХ."
+        )
+        self.houses_sync_status = QLabel("")
+        self.houses_sync_status.setObjectName("Muted")
+        self.houses_sync_status.hide()
         self.add_house_button = QPushButton("Добавить дом")
         self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
         self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
@@ -136,6 +144,7 @@ class HousesPage(QWidget):
         self.edit_org_button.clicked.connect(self._edit_organization)
         self.delete_org_button.clicked.connect(self._delete_organization)
         self.import_button.clicked.connect(self._import_file)
+        self.sync_houses_button.clicked.connect(self._sync_houses_from_gis)
         self.add_house_button.clicked.connect(self._add_house)
         self.export_house_data_button.clicked.connect(self._export_house_data_template)
         self.import_house_data_button.clicked.connect(self._import_house_data)
@@ -149,21 +158,11 @@ class HousesPage(QWidget):
             self.add_org_button,
             self.edit_org_button,
             self.delete_org_button,
-            self.import_button,
             self.add_house_button,
         ):
             actions_row.addWidget(button)
         actions_row.addStretch(1)
         toolbar_layout.addLayout(actions_row)
-
-        import_hint = QLabel(
-            "Для импорта домов используйте выгрузку ГИС ЖКХ: "
-            "«Реестр объектов жилищного фонда» → «Выгрузить информацию». "
-            "Из архива «Объекты жилищного фонда.zip» распакуйте и выберите XLSX-файл."
-        )
-        import_hint.setWordWrap(True)
-        import_hint.setObjectName("Muted")
-        toolbar_layout.addWidget(import_hint)
 
         house_data_row = QHBoxLayout()
         house_data_row.setSpacing(8)
@@ -182,25 +181,19 @@ class HousesPage(QWidget):
         house_data_hint.setObjectName("Muted")
         toolbar_layout.addWidget(house_data_hint)
 
-        management_bulk_title = QLabel("Сведения об управлении")
-        management_bulk_title.setObjectName("SectionTitle")
-        toolbar_layout.addWidget(management_bulk_title)
+        gis_houses_title = QLabel("Сведения о МКД")
+        gis_houses_title.setObjectName("SectionTitle")
+        toolbar_layout.addWidget(gis_houses_title)
 
-        management_bulk_row = QHBoxLayout()
-        management_bulk_row.setSpacing(8)
-        management_bulk_row.addWidget(self.sync_all_management_button)
-        management_bulk_row.addWidget(self.bulk_management_status)
-        management_bulk_row.addStretch(1)
-        toolbar_layout.addLayout(management_bulk_row)
-
-        management_bulk_hint = QLabel(
-            "Массовое обновление получает из открытой части ГИС ЖКХ период управления "
-            "и номер/дату договора для всех домов выбранной УО. "
-            "Если в доме есть ручные сведения, программа спросит, можно ли их заменить."
-        )
-        management_bulk_hint.setWordWrap(True)
-        management_bulk_hint.setObjectName("Muted")
-        toolbar_layout.addWidget(management_bulk_hint)
+        gis_houses_row = QHBoxLayout()
+        gis_houses_row.setSpacing(8)
+        gis_houses_row.addWidget(self.sync_houses_button)
+        gis_houses_row.addWidget(self.sync_all_management_button)
+        gis_houses_row.addWidget(self.import_button)
+        gis_houses_row.addWidget(self.houses_sync_status)
+        gis_houses_row.addWidget(self.bulk_management_status)
+        gis_houses_row.addStretch(1)
+        toolbar_layout.addLayout(gis_houses_row)
 
         root.addWidget(toolbar)
 
@@ -759,6 +752,243 @@ class HousesPage(QWidget):
             return
         self._queue_change(field, value)
         self._queue_change("management_data_source", "manual")
+
+    @staticmethod
+    def _house_sync_identity_values(house) -> set[str]:
+        values: set[str] = set()
+        for value in (
+            house.house_object_guid,
+            house.gis_house_guid,
+            house.fias_house_guid,
+        ):
+            text = str(value or "").strip().casefold()
+            if text:
+                values.add(text)
+        return values
+
+    def _local_house_for_gis_item(self, houses, item: dict):
+        remote_ids = {
+            str(value or "").strip().casefold()
+            for value in (
+                item.get("houseObjectGuid"),
+                item.get("gisHouseGuid"),
+                item.get("fiasHouseGuid"),
+            )
+            if str(value or "").strip()
+        }
+        for house in houses:
+            if remote_ids.intersection(self._house_sync_identity_values(house)):
+                return house
+        return None
+
+    @staticmethod
+    def _gis_house_changed(house, item: dict) -> bool:
+        comparable = {
+            "address": str(item.get("address") or "").strip(),
+            "house_object_guid": str(item.get("houseObjectGuid") or "").strip() or None,
+            "gis_house_guid": str(item.get("gisHouseGuid") or "").strip() or None,
+            "fias_house_guid": str(item.get("fiasHouseGuid") or "").strip() or None,
+            "cadastral_number": str(item.get("cadastralNumber") or "").strip() or None,
+            "residential_premises_count": int(item.get("residentialPremisesCount") or 0),
+            "non_residential_premises_count": int(item.get("nonResidentialPremisesCount") or 0),
+        }
+        return any(getattr(house, field) != value for field, value in comparable.items())
+
+    def _sync_houses_from_gis(self) -> None:
+        self._flush_autosave()
+        if self.integration_gateway is None:
+            return
+        organization_id = self.organization_combo.currentData()
+        if not organization_id:
+            QMessageBox.information(
+                self,
+                "Не выбрана УО",
+                "Сначала выберите управляющую организацию.",
+            )
+            return
+        if self._houses_sync_worker is not None and self._houses_sync_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Загрузка уже выполняется",
+                "Дождитесь завершения текущей загрузки сведений о МКД.",
+            )
+            return
+
+        status = self.integration_gateway.status()
+        if not (status.running and status.helper_connected and status.gis_page_ready):
+            QMessageBox.information(
+                self,
+                "Нет подключения к ГИС ЖКХ",
+                "Откройте личный кабинет ГИС ЖКХ и убедитесь, что "
+                "ГИС ЖКХ помощник подключен.",
+            )
+            return
+
+        organization = self.repository.get_organization(str(organization_id))
+        if organization is None:
+            return
+        local_houses = self.repository.list_houses(str(organization_id))
+        seed_house = next(
+            (house for house in local_houses if house.house_object_guid),
+            None,
+        )
+
+        self.sync_houses_button.setEnabled(False)
+        self.houses_sync_status.show()
+        self.houses_sync_status.setText("получение…")
+
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "list_managed_houses",
+            {
+                "organizationGuid": organization.gis_organization_guid,
+                "organizationRootGuid": organization.gis_organization_root_guid,
+                "seedHouseObjectGuid": (
+                    seed_house.house_object_guid if seed_house else None
+                ),
+            },
+            timeout=180.0,
+            parent=self,
+        )
+        self._houses_sync_worker = worker
+
+        def succeeded(result: dict) -> None:
+            remote_items = list(result.get("items") or [])
+            total = int(result.get("total") or len(remote_items))
+            if not remote_items:
+                QMessageBox.information(
+                    self,
+                    "Дома не найдены",
+                    "ГИС ЖКХ не вернул дома для текущей организации.",
+                )
+                self.houses_sync_status.setText("0")
+                return
+
+            returned_ogrns = {
+                str(item.get("organizationOgrn") or "").strip()
+                for item in remote_items
+                if str(item.get("organizationOgrn") or "").strip()
+            }
+            if returned_ogrns and organization.ogrn not in returned_ogrns:
+                QMessageBox.critical(
+                    self,
+                    "Другая управляющая организация",
+                    "Открытая сессия ГИС ЖКХ вернула дома другой организации. "
+                    "Переключитесь в личном кабинете на нужную УО и повторите загрузку.",
+                )
+                self.houses_sync_status.setText("ошибка")
+                return
+
+            created_preview = 0
+            updated_preview = 0
+            unchanged_preview = 0
+            for item in remote_items:
+                existing = self._local_house_for_gis_item(local_houses, item)
+                if existing is None:
+                    created_preview += 1
+                elif self._gis_house_changed(existing, item):
+                    updated_preview += 1
+                else:
+                    unchanged_preview += 1
+
+            preview = (
+                f"Получено из ГИС ЖКХ: {len(remote_items)} из {total}.\n"
+                f"Новые дома: {created_preview}.\n"
+                f"Будут обновлены: {updated_preview}.\n"
+                f"Без изменений: {unchanged_preview}.\n\n"
+                "Локальные тарифы, периоды управления, перечни и планы не изменяются.\n"
+                "Применить сведения о МКД?"
+            )
+            answer = QMessageBox.question(
+                self,
+                "Загрузить сведения о МКД?",
+                preview,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.houses_sync_status.setText("отменено")
+                return
+
+            created = 0
+            updated = 0
+            unchanged = 0
+            current_house_id = self._current_house_id
+
+            for item in remote_items:
+                existing = self._local_house_for_gis_item(local_houses, item)
+                payload = dict(
+                    address=str(item.get("address") or "").strip(),
+                    house_object_guid=item.get("houseObjectGuid"),
+                    gis_house_guid=item.get("gisHouseGuid"),
+                    fias_house_guid=item.get("fiasHouseGuid"),
+                    cadastral_number=item.get("cadastralNumber"),
+                    residential_premises_count=int(
+                        item.get("residentialPremisesCount") or 0
+                    ),
+                    non_residential_premises_count=int(
+                        item.get("nonResidentialPremisesCount") or 0
+                    ),
+                )
+                if existing is None:
+                    self.repository.create_house(
+                        organization_id=str(organization_id),
+                        source=RecordSource.IMPORT,
+                        **payload,
+                    )
+                    created += 1
+                    continue
+
+                if self._gis_house_changed(existing, item):
+                    self.repository.update_house(existing.id, **payload)
+                    updated += 1
+                else:
+                    unchanged += 1
+
+            org_updates = {}
+            if result.get("organizationGuid"):
+                org_updates["gis_organization_guid"] = result.get("organizationGuid")
+            if result.get("organizationRootGuid"):
+                org_updates["gis_organization_root_guid"] = result.get(
+                    "organizationRootGuid"
+                )
+            if org_updates:
+                self.repository.update_organization(
+                    str(organization_id),
+                    **org_updates,
+                )
+
+            self.refresh_houses()
+            if current_house_id:
+                self._load_house(current_house_id)
+            self.houses_sync_status.setText(
+                f"готово: +{created}, обновлено {updated}"
+            )
+            QMessageBox.information(
+                self,
+                "Загрузка завершена",
+                (
+                    f"Получено домов: {len(remote_items)}.\n"
+                    f"Добавлено: {created}.\n"
+                    f"Обновлено: {updated}.\n"
+                    f"Без изменений: {unchanged}."
+                ),
+            )
+
+        def failed(message: str) -> None:
+            self.houses_sync_status.setText("ошибка")
+            QMessageBox.critical(
+                self,
+                "Не удалось загрузить сведения о МКД",
+                message,
+            )
+
+        def finished() -> None:
+            self._houses_sync_worker = None
+            self.sync_houses_button.setEnabled(True)
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
 
     @staticmethod
     def _house_management_identity_values(house) -> set[str]:
@@ -1469,6 +1699,26 @@ class HousesPage(QWidget):
         )
 
     def _import_file(self) -> None:
+        message = QMessageBox(self)
+        message.setWindowTitle("Импорт домов из XLSX")
+        message.setIcon(QMessageBox.Icon.Information)
+        message.setText(
+            "Для импорта домов используйте выгрузку ГИС ЖКХ:\n"
+            "«Реестр объектов жилищного фонда» → «Выгрузить информацию».\n\n"
+            "Из архива «Объекты жилищного фонда.zip» распакуйте XLSX-файл."
+        )
+        choose_button = message.addButton(
+            "Выбрать файл…",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        cancel_button = message.addButton(
+            "Отмена",
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        message.exec()
+        if message.clickedButton() is not choose_button:
+            return
+
         filename, _ = QFileDialog.getOpenFileName(
             self,
             "Выберите XLSX из выгрузки «Объекты жилищного фонда»",
