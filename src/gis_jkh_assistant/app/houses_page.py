@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from collections import defaultdict
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database import RecordSource, Repository
+from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 from gis_jkh_assistant.gis_files.house_data import (
     HouseDataImportError,
     normalize_positive_decimal,
@@ -44,6 +46,7 @@ from gis_jkh_assistant.gis_files.housing_objects import (
 )
 
 from .dialogs import HouseDialog, HouseTariffDialog, OrganizationDialog
+from .gis_integration_worker import GisIntegrationWorker
 from .widgets import SafeSpinBox
 
 
@@ -52,9 +55,16 @@ class HousesPage(QWidget):
 
     AUTOSAVE_DELAY_MS = 500
 
-    def __init__(self, repository: Repository, parent=None) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        integration_gateway: LocalIntegrationGateway | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.repository = repository
+        self.integration_gateway = integration_gateway
+        self._management_worker: GisIntegrationWorker | None = None
         self._current_house_id: str | None = None
         self._pending_house_id: str | None = None
         self._pending_fields: dict[str, object] = {}
@@ -241,6 +251,54 @@ class HousesPage(QWidget):
         ids_form.addRow("Кадастровый номер", self.cadastral_edit)
         self.card_layout.addLayout(ids_form)
 
+        management_title = QLabel("Управление домом")
+        management_title.setObjectName("SectionTitle")
+        self.card_layout.addWidget(management_title)
+
+        management_hint = QLabel(
+            "Начало и окончание используются для проверки периода перечня. "
+            "Поле «Окончание управления» означает дату, с которой дом уже не "
+            "находится в управлении. Если оно пустое, управление считается действующим."
+        )
+        management_hint.setWordWrap(True)
+        management_hint.setObjectName("Muted")
+        self.card_layout.addWidget(management_hint)
+
+        self.management_start_edit = QLineEdit()
+        self.management_start_edit.setPlaceholderText("ДД.ММ.ГГГГ")
+        self.management_end_edit = QLineEdit()
+        self.management_end_edit.setPlaceholderText("ДД.ММ.ГГГГ или пусто")
+        self.management_end_edit.setToolTip(
+            "Дата, с которой дом больше не находится в управлении. "
+            "Например, 01.03.2022 означает, что последний месяц управления — февраль 2022."
+        )
+        self.management_agreement_number_edit = QLineEdit()
+        self.management_agreement_date_edit = QLineEdit()
+        self.management_agreement_date_edit.setPlaceholderText("ДД.ММ.ГГГГ")
+        self.management_source_label = QLabel("—")
+        self.sync_management_button = QPushButton(
+            "Обновить сведения об управлении из ГИС ЖКХ"
+        )
+        self.sync_management_button.setToolTip(
+            "Получить период управления и номер/дату договора из открытых сведений ГИС ЖКХ."
+        )
+        self.sync_management_button.clicked.connect(self._sync_management_from_gis)
+
+        management_form = QFormLayout()
+        management_form.addRow("Начало управления", self.management_start_edit)
+        management_form.addRow("Окончание управления", self.management_end_edit)
+        management_form.addRow(
+            "Номер договора управления",
+            self.management_agreement_number_edit,
+        )
+        management_form.addRow(
+            "Дата договора управления",
+            self.management_agreement_date_edit,
+        )
+        management_form.addRow("Источник сведений", self.management_source_label)
+        management_form.addRow("", self.sync_management_button)
+        self.card_layout.addLayout(management_form)
+
         premises_title = QLabel("Помещения")
         premises_title.setObjectName("SectionTitle")
         self.card_layout.addWidget(premises_title)
@@ -336,11 +394,34 @@ class HousesPage(QWidget):
             self.unique_number_edit: "gis_unique_house_number",
             self.cadastral_edit: "cadastral_number",
             self.charge_area_edit: "charge_area",
+            self.management_agreement_number_edit: "management_agreement_number",
         }
         for widget, field in field_bindings.items():
             widget.textEdited.connect(
                 lambda _text, field=field, widget=widget: self._queue_text(field, widget)
             )
+
+        self.management_start_edit.editingFinished.connect(
+            lambda: self._queue_management_date(
+                "management_start_date",
+                self.management_start_edit,
+            )
+        )
+        self.management_end_edit.editingFinished.connect(
+            lambda: self._queue_management_date(
+                "management_end_date",
+                self.management_end_edit,
+            )
+        )
+        self.management_agreement_date_edit.editingFinished.connect(
+            lambda: self._queue_management_date(
+                "management_agreement_date",
+                self.management_agreement_date_edit,
+            )
+        )
+        self.management_agreement_number_edit.textEdited.connect(
+            lambda _text: self._mark_management_manual()
+        )
 
         self.comment_edit.textChanged.connect(self._queue_comment)
         self.residential_spin.valueChanged.connect(
@@ -454,6 +535,28 @@ class HousesPage(QWidget):
             self.unique_number_edit.setText(house.gis_unique_house_number or "")
             self.cadastral_edit.setText(house.cadastral_number or "")
             self.charge_area_edit.setText(house.charge_area or "")
+            self.management_start_edit.setText(
+                house.management_start_date or ""
+            )
+            self.management_end_edit.setText(
+                house.management_end_date or ""
+            )
+            self.management_agreement_number_edit.setText(
+                house.management_agreement_number or ""
+            )
+            self.management_agreement_date_edit.setText(
+                house.management_agreement_date or ""
+            )
+            source_labels = {
+                "gis_public": "ГИС ЖКХ",
+                "manual": "Вручную",
+            }
+            self.management_source_label.setText(
+                source_labels.get(
+                    str(house.management_data_source or ""),
+                    "—",
+                )
+            )
             self.residential_spin.setValue(house.residential_premises_count)
             self.non_residential_spin.setValue(house.non_residential_premises_count)
             self.total_label.setText(str(house.total_premises_count))
@@ -576,6 +679,11 @@ class HousesPage(QWidget):
             self.unique_number_edit,
             self.cadastral_edit,
             self.charge_area_edit,
+            self.management_start_edit,
+            self.management_end_edit,
+            self.management_agreement_number_edit,
+            self.management_agreement_date_edit,
+            self.sync_management_button,
             self.residential_spin,
             self.non_residential_spin,
             self.comment_edit,
@@ -589,6 +697,128 @@ class HousesPage(QWidget):
 
     def _queue_text(self, field: str, widget: QLineEdit) -> None:
         self._queue_change(field, widget.text().strip() or None)
+
+    @staticmethod
+    def _validated_management_date(text: str) -> str | None:
+        value = str(text or "").strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.strptime(value, "%d.%m.%Y")
+        except ValueError as exc:
+            raise ValueError("Используйте дату в формате ДД.ММ.ГГГГ.") from exc
+        return parsed.strftime("%d.%m.%Y")
+
+    def _mark_management_manual(self) -> None:
+        if self._loading_card:
+            return
+        self._queue_change("management_data_source", "manual")
+
+    def _queue_management_date(self, field: str, widget: QLineEdit) -> None:
+        if self._loading_card:
+            return
+        try:
+            value = self._validated_management_date(widget.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Проверьте дату", str(exc))
+            house = self.repository.get_house(self._current_house_id) if self._current_house_id else None
+            widget.setText(str(getattr(house, field, "") or "") if house else "")
+            return
+        self._queue_change(field, value)
+        self._queue_change("management_data_source", "manual")
+
+    def _sync_management_from_gis(self) -> None:
+        self._flush_autosave()
+        if not self._current_house_id or self.integration_gateway is None:
+            return
+        house = self.repository.get_house(self._current_house_id)
+        if house is None:
+            return
+        if not house.house_object_guid:
+            QMessageBox.warning(
+                self,
+                "Нет GUID дома",
+                "Для получения сведений нужен GUID объекта жилищного фонда.",
+            )
+            return
+        if (
+            house.management_data_source == "manual"
+            and (
+                house.management_start_date
+                or house.management_end_date
+                or house.management_agreement_number
+                or house.management_agreement_date
+            )
+        ):
+            answer = QMessageBox.question(
+                self,
+                "Заменить ручные сведения?",
+                "В карточке есть сведения об управлении, введённые вручную. "
+                "Заменить их данными из открытой части ГИС ЖКХ?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        if self._management_worker is not None and self._management_worker.isRunning():
+            return
+
+        self.sync_management_button.setEnabled(False)
+        self.sync_management_button.setText("Получение сведений…")
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "get_house_management_info",
+            {
+                "houseObjectGuid": house.house_object_guid,
+                "gisHouseGuid": house.gis_house_guid,
+                "fiasHouseGuid": house.fias_house_guid,
+            },
+            timeout=60.0,
+            parent=self,
+        )
+        self._management_worker = worker
+        house_id = house.id
+        organization_id = house.organization_id
+
+        def succeeded(result: dict) -> None:
+            self.repository.update_house(
+                house_id,
+                management_start_date=result.get("managementStartDate"),
+                management_end_date=result.get("managementEndDate"),
+                management_agreement_number=result.get("agreementNumber"),
+                management_agreement_date=result.get("agreementDate"),
+                management_data_source="gis_public",
+            )
+            self.repository.update_organization(
+                organization_id,
+                gis_organization_guid=result.get("organizationGuid"),
+                gis_organization_root_guid=result.get("organizationRootGuid"),
+            )
+            if self._current_house_id == house_id:
+                self._load_house(house_id)
+            QMessageBox.information(
+                self,
+                "Сведения обновлены",
+                "Период управления и реквизиты договора получены из ГИС ЖКХ.",
+            )
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(
+                self,
+                "Не удалось получить сведения",
+                message,
+            )
+
+        def finished() -> None:
+            self._management_worker = None
+            if self._current_house_id:
+                self.sync_management_button.setEnabled(True)
+            self.sync_management_button.setText(
+                "Обновить сведения об управлении из ГИС ЖКХ"
+            )
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
 
     def _queue_comment(self) -> None:
         if not self._loading_card:
