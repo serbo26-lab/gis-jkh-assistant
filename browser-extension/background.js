@@ -382,13 +382,19 @@ async function runGisCommand(command) {
       }
 
       candidates.sort((left, right) => {
+        const updateDiff =
+          Number(right?.lastUpdateDate || 0) -
+          Number(left?.lastUpdateDate || 0);
+        if (updateDiff) return updateDiff;
+
+        const startDiff =
+          ruDateSortKey(right?.managedDateStart) -
+          ruDateSortKey(left?.managedDateStart);
+        if (startDiff) return startDiff;
+
         const leftCurrent = left?.managedDateEnd ? 0 : 1;
         const rightCurrent = right?.managedDateEnd ? 0 : 1;
-        if (leftCurrent !== rightCurrent) return rightCurrent - leftCurrent;
-        const leftStart = ruDateSortKey(left?.managedDateStart);
-        const rightStart = ruDateSortKey(right?.managedDateStart);
-        if (leftStart !== rightStart) return rightStart - leftStart;
-        return Number(right?.lastUpdateDate || 0) - Number(left?.lastUpdateDate || 0);
+        return rightCurrent - leftCurrent;
       });
 
       const row = candidates[0];
