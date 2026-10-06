@@ -1489,6 +1489,38 @@ class Repository:
 
         target_base_year = int(target_base_year)
         year_shift = target_base_year - source.base_year
+        start_year = source.start_year + year_shift
+        start_month = source.start_month
+        end_year = source.end_year + year_shift
+        end_month = source.end_month
+
+        house = self.get_house(source.house_id)
+        if house is None:
+            raise ValueError("Дом не найден.")
+        management_start = self._parse_house_management_date(
+            house.management_start_date
+        )
+        management_end = self._parse_house_management_date(
+            house.management_end_date
+        )
+        if management_start:
+            first_allowed = (management_start.year, management_start.month)
+            if (start_year, start_month) < first_allowed:
+                start_year, start_month = first_allowed
+        if management_end:
+            last_day = (
+                management_end - timedelta(days=1)
+                if management_end.day == 1
+                else management_end
+            )
+            last_allowed = (last_day.year, last_day.month)
+            if (end_year, end_month) > last_allowed:
+                end_year, end_month = last_allowed
+        if (start_year, start_month) > (end_year, end_month):
+            raise ValueError(
+                "Новый перечень не пересекается с периодом управления домом."
+            )
+
         work_list_id = str(uuid.uuid4())
         timestamp = _now()
 
@@ -1507,10 +1539,10 @@ class Repository:
                     source.house_id,
                     source.template_id,
                     target_base_year,
-                    source.start_year + year_shift,
-                    source.start_month,
-                    source.end_year + year_shift,
-                    source.end_month,
+                    start_year,
+                    start_month,
+                    end_year,
+                    end_month,
                     source.planned_total,
                     source.planned_tariff,
                     source.planned_area,
