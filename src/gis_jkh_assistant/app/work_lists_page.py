@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import base64
+import sqlite3
 import shutil
 import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
@@ -35,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database.paths import gis_export_template_dir
+from gis_jkh_assistant.database.models import TemplateSource
 from gis_jkh_assistant.database.repository import Repository
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 from gis_jkh_assistant.gis_files.work_lists import (
@@ -47,6 +50,7 @@ from gis_jkh_assistant.gis_files.work_lists import (
 from .gis_integration_worker import GisIntegrationWorker
 from .lazy_distribution_dialog import LazyDistributionDialog
 from .widgets import SafeComboBox, SafeSpinBox
+from .work_directory_dialog import WorkDirectorySelectionDialog
 from .work_row_rules import editable_columns_for_mode, infer_work_row_mode
 from .work_templates_dialog import WorkTemplatesDialog
 
@@ -313,7 +317,13 @@ class WorkListsPage(QWidget):
         items_title.setObjectName("SectionTitle")
         items_header.addWidget(items_title)
         items_header.addStretch(1)
+        self.add_works_button = QPushButton("Добавить работы…")
+        self.remove_works_button = QPushButton("Удалить выбранные")
+        self.save_as_template_button = QPushButton("Сохранить состав как шаблон…")
         self.lazy_fill_button = QPushButton("Распределить от итоговой суммы…")
+        items_header.addWidget(self.add_works_button)
+        items_header.addWidget(self.remove_works_button)
+        items_header.addWidget(self.save_as_template_button)
         items_header.addWidget(self.lazy_fill_button)
         right_layout.addLayout(items_header)
 
@@ -353,6 +363,9 @@ class WorkListsPage(QWidget):
         self.create_button.clicked.connect(self._create_work_list)
         self.create_from_current_button.clicked.connect(self._clone_current_work_list)
         self.delete_button.clicked.connect(self._delete_work_list)
+        self.add_works_button.clicked.connect(self._add_works_from_directory)
+        self.remove_works_button.clicked.connect(self._remove_selected_works)
+        self.save_as_template_button.clicked.connect(self._save_current_as_template)
         self.lazy_fill_button.clicked.connect(self._open_lazy_distribution)
         self.work_lists.currentItemChanged.connect(self._work_list_changed)
 
@@ -407,9 +420,15 @@ class WorkListsPage(QWidget):
 
         self.template_combo.blockSignals(True)
         self.template_combo.clear()
-        self.template_combo.addItem("Без шаблона (пустой)", None)
+        self.template_combo.addItem("Пустой перечень", None)
         if organization_id:
             for template in self.repository.list_work_templates(organization_id):
+                legacy_basic = (
+                    template.name.strip().casefold() == "базовый"
+                    and template.source in {TemplateSource.IMPORT, TemplateSource.BUILTIN}
+                )
+                if template.source == TemplateSource.BUILTIN or legacy_basic:
+                    continue
                 self.template_combo.addItem(template.name, template.id)
         if current:
             index = self.template_combo.findData(current)
@@ -439,7 +458,7 @@ class WorkListsPage(QWidget):
                 if work_list.template_id
                 else None
             )
-            template_name = template.name if template else "Без шаблона"
+            template_name = template.name if template else "Пустой перечень"
             status = self._work_list_status_text(work_list)
             item = QListWidgetItem(
                 f"{work_list.period_label}\n{template_name} • {status}"
@@ -464,6 +483,90 @@ class WorkListsPage(QWidget):
         self.year_spin.interpretText()
         return self.year_spin.value()
 
+    @staticmethod
+    def _directory_option_item(
+        option: dict,
+        *,
+        position: int,
+        template_item=None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            position=position,
+            work_code=str(option.get("code") or "").strip() or None,
+            work_name=str(option.get("name") or "").strip(),
+            work_guid=str(option.get("guid") or "").strip() or None,
+            unit_name=str(option.get("unitName") or "").strip() or None,
+            price=getattr(template_item, "price", None),
+            volume=getattr(template_item, "volume", None),
+            quantity=getattr(template_item, "quantity", None),
+            cost=getattr(template_item, "cost", None),
+            allocation_percent=getattr(template_item, "allocation_percent", None),
+        )
+
+    def _directory_ready(self) -> bool:
+        status = self.integration_gateway.status()
+        return bool(
+            status.running
+            and status.helper_connected
+            and status.gis_page_ready
+        )
+
+    def _load_organization_directory(
+        self,
+        on_success,
+        *,
+        busy_text: str,
+    ) -> None:
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Операция уже выполняется",
+                "Дождитесь завершения текущей операции с ГИС ЖКХ.",
+            )
+            return
+        if not self._directory_ready():
+            QMessageBox.information(
+                self,
+                "Нет подключения к ГИС ЖКХ",
+                "Для получения справочника работ откройте личный кабинет ГИС ЖКХ "
+                "и убедитесь, что ГИС ЖКХ помощник подключен.",
+            )
+            return
+
+        self._integration_busy = True
+        self.save_status.setText(busy_text)
+        self._refresh_gis_action_buttons()
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "list_organization_work_options",
+            {},
+            timeout=60.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            options = list(result.get("items") or [])
+            on_success(options)
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(
+                self,
+                "Не удалось получить справочник",
+                message,
+            )
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._integration_busy = False
+            self.save_status.setText("Сохранено")
+            self._refresh_gis_action_buttons()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
     def _create_work_list(self) -> None:
         self._save_period()
         house_id = self.house_combo.currentData()
@@ -476,20 +579,113 @@ class WorkListsPage(QWidget):
             return
 
         template_id = self.template_combo.currentData()
-        try:
-            work_list = self.repository.create_work_list(
-                house_id=house_id,
-                base_year=self._creation_year(),
-                template_id=template_id,
-            )
-        except ValueError as exc:
+        if not template_id:
+            try:
+                work_list = self.repository.create_work_list(
+                    house_id=house_id,
+                    base_year=self._creation_year(),
+                    template_id=None,
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self, "Нельзя создать перечень", str(exc))
+                return
+            self.refresh_work_lists(select_id=work_list.id)
+            return
+
+        template = self.repository.get_work_template(template_id)
+        template_items = self.repository.list_work_template_items(template_id)
+        if not template or not template_items:
             QMessageBox.warning(
                 self,
-                "Нельзя создать перечень",
-                str(exc),
+                "Пустой шаблон",
+                "В выбранном шаблоне нет работ. Создайте пустой перечень "
+                "и добавьте работы из справочника ГИС ЖКХ.",
             )
             return
-        self.refresh_work_lists(select_id=work_list.id)
+
+        def create_from_directory(options: list[dict]) -> None:
+            by_guid = {
+                str(option.get("guid") or ""): option
+                for option in options
+                if option.get("guid")
+            }
+            by_code = {
+                str(option.get("code") or ""): option
+                for option in options
+                if option.get("code")
+            }
+
+            matched = []
+            missing = []
+            for item in template_items:
+                option = (
+                    by_guid.get(str(item.work_guid or ""))
+                    or by_code.get(str(item.work_code or ""))
+                )
+                if option is None:
+                    missing.append(item)
+                    continue
+                matched.append(
+                    self._directory_option_item(
+                        option,
+                        position=len(matched) + 1,
+                        template_item=item,
+                    )
+                )
+
+            if not matched:
+                QMessageBox.warning(
+                    self,
+                    "Работы шаблона недоступны",
+                    "Ни одна работа выбранного шаблона не найдена в актуальном "
+                    "справочнике этой управляющей организации.",
+                )
+                return
+
+            if missing:
+                names = "\n".join(f"• {item.work_name}" for item in missing[:8])
+                if len(missing) > 8:
+                    names += f"\n… ещё: {len(missing) - 8}"
+                message = QMessageBox(self)
+                message.setWindowTitle("Часть работ шаблона недоступна")
+                message.setIcon(QMessageBox.Icon.Warning)
+                message.setText(
+                    f"В справочнике организации найдено {len(matched)} из "
+                    f"{len(template_items)} работ шаблона «{template.name}»."
+                )
+                message.setInformativeText(
+                    "Не найдены:\n"
+                    + names
+                    + "\n\nСоздать перечень только из доступных работ?"
+                )
+                create_button = message.addButton(
+                    "Создать из доступных",
+                    QMessageBox.ButtonRole.AcceptRole,
+                )
+                message.addButton(
+                    "Отмена",
+                    QMessageBox.ButtonRole.RejectRole,
+                )
+                message.exec()
+                if message.clickedButton() is not create_button:
+                    return
+
+            try:
+                work_list = self.repository.create_work_list(
+                    house_id=house_id,
+                    base_year=self._creation_year(),
+                    template_id=template_id,
+                    items=matched,
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self, "Нельзя создать перечень", str(exc))
+                return
+            self.refresh_work_lists(select_id=work_list.id)
+
+        self._load_organization_directory(
+            create_from_directory,
+            busy_text="Проверка шаблона по справочнику ГИС ЖКХ…",
+        )
 
     def _clone_current_work_list(self) -> None:
         self._save_period()
@@ -576,7 +772,7 @@ class WorkListsPage(QWidget):
                 if work_list.template_id
                 else None
             )
-            self.template_label.setText(template.name if template else "Без шаблона")
+            self.template_label.setText(template.name if template else "Пустой перечень")
             self.status_label.setText(self._work_list_status_text(work_list))
             self.planned_total_label.setText(
                 f"{work_list.planned_total} руб." if work_list.planned_total else "—"
@@ -1347,6 +1543,147 @@ class WorkListsPage(QWidget):
             timeout=90.0,
         )
 
+    def _add_works_from_directory(self) -> None:
+        self._save_period()
+        if not self._current_work_list_id:
+            return
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if not work_list:
+            return
+        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+            QMessageBox.information(
+                self,
+                "Состав уже передан в ГИС ЖКХ",
+                "Добавление и удаление работ доступно только у локального перечня, "
+                "который ещё не загружен в ГИС ЖКХ.",
+            )
+            return
+
+        existing = self.repository.list_work_list_items(work_list.id)
+        guids = {str(item.work_guid) for item in existing if item.work_guid}
+        codes = {str(item.work_code) for item in existing if item.work_code}
+
+        def show_directory(options: list[dict]) -> None:
+            dialog = WorkDirectorySelectionDialog(
+                options,
+                existing_guids=guids,
+                existing_codes=codes,
+                parent=self,
+            )
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            selected = dialog.selected_options()
+            if not selected:
+                return
+            rows = [
+                self._directory_option_item(option, position=index)
+                for index, option in enumerate(selected, start=1)
+            ]
+            try:
+                added = self.repository.add_work_list_items(work_list.id, rows)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Не удалось добавить работы", str(exc))
+                return
+            self._load_items(work_list.id)
+            self.save_status.setText(
+                f"Добавлено работ: {added}" if added else "Новых работ нет"
+            )
+
+        self._load_organization_directory(
+            show_directory,
+            busy_text="Получение справочника работ…",
+        )
+
+    def _remove_selected_works(self) -> None:
+        self._save_period()
+        if not self._current_work_list_id:
+            return
+        selected_rows = sorted(
+            {item.row() for item in self.items_table.selectedItems()}
+        )
+        if not selected_rows:
+            QMessageBox.information(
+                self,
+                "Не выбраны работы",
+                "Выделите одну или несколько строк таблицы.",
+            )
+            return
+
+        item_ids = []
+        for row in selected_rows:
+            item = self.items_table.item(row, 0)
+            if not item:
+                continue
+            item_id = item.data(Qt.ItemDataRole.UserRole)
+            if item_id:
+                item_ids.append(str(item_id))
+
+        if not item_ids:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Удалить выбранные работы?",
+            f"Из перечня будут удалены строки: {len(item_ids)}. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.repository.delete_work_list_items(
+                self._current_work_list_id,
+                item_ids,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Не удалось удалить работы", str(exc))
+            return
+        self._load_items(self._current_work_list_id)
+        self.save_status.setText("Сохранено")
+
+    def _save_current_as_template(self) -> None:
+        self._save_period()
+        if not self._current_work_list_id:
+            return
+        items = self.repository.list_work_list_items(self._current_work_list_id)
+        if not items:
+            QMessageBox.information(
+                self,
+                "Пустой перечень",
+                "Сначала добавьте работы из справочника ГИС ЖКХ.",
+            )
+            return
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Сохранить состав как шаблон",
+            "Название шаблона:",
+        )
+        if not ok or not name.strip():
+            return
+        try:
+            template = self.repository.create_work_template_from_work_list(
+                work_list_id=self._current_work_list_id,
+                name=name.strip(),
+            )
+        except sqlite3.IntegrityError:
+            QMessageBox.warning(
+                self,
+                "Название уже используется",
+                "У этой управляющей организации уже есть шаблон с таким названием.",
+            )
+            return
+        except ValueError as exc:
+            QMessageBox.warning(self, "Не удалось сохранить шаблон", str(exc))
+            return
+
+        self._refresh_templates()
+        index = self.template_combo.findData(template.id)
+        if index >= 0:
+            self.template_combo.setCurrentIndex(index)
+        QMessageBox.information(
+            self,
+            "Шаблон сохранён",
+            f"Состав перечня сохранён как шаблон «{template.name}».",
+        )
+
     def _open_lazy_distribution(self) -> None:
         self._save_period()
         if not self._current_work_list_id:
@@ -1362,7 +1699,7 @@ class WorkListsPage(QWidget):
                 self,
                 "Нет позиций для распределения",
                 "В выбранном перечне нет работ и услуг. "
-                "Сначала создайте перечень на основе пользовательского шаблона.",
+                "Нажмите «Добавить работы…» и выберите позиции из справочника ГИС ЖКХ.",
             )
             return
 
@@ -1415,6 +1752,15 @@ class WorkListsPage(QWidget):
         self.refresh_work_lists()
 
     def _set_editor_enabled(self, enabled: bool) -> None:
+        work_list = (
+            self.repository.get_work_list(self._current_work_list_id)
+            if enabled and self._current_work_list_id
+            else None
+        )
+        composition_editable = bool(
+            work_list
+            and str(work_list.gis_status or "").upper() in {"", "NOT_FOUND"}
+        )
         for widget in (
             self.start_month,
             self.start_year,
@@ -1425,8 +1771,11 @@ class WorkListsPage(QWidget):
             self.create_from_current_button,
             self.export_button,
             self.lazy_fill_button,
+            self.save_as_template_button,
         ):
             widget.setEnabled(enabled)
+        self.add_works_button.setEnabled(enabled and composition_editable)
+        self.remove_works_button.setEnabled(enabled and composition_editable)
         self._refresh_gis_action_buttons()
 
     def set_view_mode(self, mode: str) -> None:

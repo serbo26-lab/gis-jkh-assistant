@@ -335,3 +335,163 @@ def test_missing_management_dates_do_not_restrict_work_list(tmp_path) -> None:
     assert refreshed is not None
     assert refreshed.period_label == "06.2019 — 05.2021"
     repository.close()
+
+
+def test_empty_work_list_can_receive_and_remove_directory_works(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК Каталог", ogrn="1022600000500")
+    house = repository.create_house(
+        organization_id=org.id,
+        address="г. М..., ул. Б..., д. 0",
+    )
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+    )
+    assert repository.list_work_list_items(work_list.id) == []
+
+    first = Item(
+        position=1,
+        work_code="12",
+        work_name="Услуга по управлению",
+        work_guid="guid-12",
+    )
+    second = Item(
+        position=2,
+        work_code="13",
+        work_name="Техническое обслуживание",
+        work_guid="guid-13",
+    )
+
+    added = repository.add_work_list_items(work_list.id, [first, second, first])
+    assert added == 2
+    items = repository.list_work_list_items(work_list.id)
+    assert [item.work_code for item in items] == ["12", "13"]
+
+    removed = repository.delete_work_list_items(work_list.id, [items[0].id])
+    assert removed == 1
+    remaining = repository.list_work_list_items(work_list.id)
+    assert len(remaining) == 1
+    assert remaining[0].work_code == "13"
+    assert remaining[0].position == 1
+    repository.close()
+
+
+def test_template_can_be_created_from_current_work_list_composition(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК Шаблон", ogrn="1022600000501")
+    house = repository.create_house(
+        organization_id=org.id,
+        address="г. М..., ул. Б..., д. 0",
+    )
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+    )
+    repository.add_work_list_items(
+        work_list.id,
+        [
+            type(
+                "DirectoryItem",
+                (),
+                {
+                    "position": 1,
+                    "work_code": "12",
+                    "work_name": "Услуга по управлению",
+                    "work_guid": "guid-12",
+                    "unit_name": "мес",
+                    "price": "99",
+                    "volume": "2",
+                    "quantity": "12",
+                    "cost": None,
+                    "allocation_percent": "100",
+                },
+            )()
+        ],
+    )
+
+    template = repository.create_work_template_from_work_list(
+        work_list_id=work_list.id,
+        name="Основной",
+    )
+    template_items = repository.list_work_template_items(template.id)
+
+    assert template.organization_id == org.id
+    assert len(template_items) == 1
+    assert template_items[0].work_code == "12"
+    assert template_items[0].unit_name == "мес"
+    assert template_items[0].price is None
+    assert template_items[0].volume is None
+    assert template_items[0].quantity is None
+    assert template_items[0].allocation_percent == "100"
+    repository.close()
+
+
+def test_create_work_list_can_use_validated_template_subset(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org, house, template = _fixture(repository)
+    original = repository.list_work_template_items(template.id)[0]
+    current_directory_row = type(
+        "DirectoryItem",
+        (),
+        {
+            "position": 1,
+            "work_code": original.work_code,
+            "work_name": original.work_name,
+            "work_guid": original.work_guid,
+            "unit_name": "мес",
+            "price": original.price,
+            "volume": original.volume,
+            "quantity": original.quantity,
+            "cost": original.cost,
+            "allocation_percent": original.allocation_percent,
+        },
+    )()
+
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+        template_id=template.id,
+        items=[current_directory_row],
+    )
+    items = repository.list_work_list_items(work_list.id)
+
+    assert len(items) == 1
+    assert items[0].work_guid == original.work_guid
+    assert items[0].unit_name == "мес"
+    repository.close()
+
+
+def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
+    import pytest
+
+    repository = Repository(tmp_path / "app.db")
+    _org, house, template = _fixture(repository)
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+        template_id=template.id,
+    )
+    repository.update_work_list_gis_state(
+        work_list.id,
+        gis_work_list_guid="gis-list",
+        gis_status="DRAFT",
+    )
+
+    with pytest.raises(ValueError, match="локального перечня"):
+        repository.add_work_list_items(
+            work_list.id,
+            [
+                Item(
+                    position=2,
+                    work_code="13",
+                    work_name="Работа",
+                    work_guid="guid-13",
+                )
+            ],
+        )
+
+    item = repository.list_work_list_items(work_list.id)[0]
+    with pytest.raises(ValueError, match="локального перечня"):
+        repository.delete_work_list_items(work_list.id, [item.id])
+    repository.close()

@@ -41,9 +41,10 @@ class WorkTemplatesDialog(QDialog):
         layout.addWidget(title)
 
         hint = QLabel(
-            "Здесь хранятся пользовательские шаблоны состава перечня: набор работ и "
-            "при необходимости исходные значения. Это не технический шаблон экспорта "
-            "ГИС ЖКХ — он загружается отдельно на вкладке «Перечни работ и услуг»."
+            "Здесь хранятся пользовательские шаблоны состава перечня. "
+            "Новый шаблон удобнее всего создать из готового локального перечня "
+            "кнопкой «Сохранить состав как шаблон…». При применении состав "
+            "проверяется по актуальному справочнику работ организации в ГИС ЖКХ."
         )
         hint.setWordWrap(True)
         hint.setObjectName("Muted")
@@ -56,20 +57,17 @@ class WorkTemplatesDialog(QDialog):
         buttons = QHBoxLayout()
         self.import_button = QPushButton("Импортировать состав из Excel")
         self.import_button.setObjectName("PrimaryButton")
-        self.empty_button = QPushButton("Пустой шаблон")
         self.rename_button = QPushButton("Переименовать")
         self.delete_button = QPushButton("Удалить")
         self.close_button = QPushButton("Закрыть")
 
         self.import_button.clicked.connect(self._import_excel)
-        self.empty_button.clicked.connect(self._create_empty)
         self.rename_button.clicked.connect(self._rename)
         self.delete_button.clicked.connect(self._delete)
         self.close_button.clicked.connect(self.accept)
 
         for button in (
             self.import_button,
-            self.empty_button,
             self.rename_button,
             self.delete_button,
         ):
@@ -84,6 +82,12 @@ class WorkTemplatesDialog(QDialog):
         self.list_widget.clear()
         templates = self.repository.list_work_templates(self.organization_id)
         for template in templates:
+            legacy_basic = (
+                template.name.strip().casefold() == "базовый"
+                and template.source in {TemplateSource.IMPORT, TemplateSource.BUILTIN}
+            )
+            if template.source == TemplateSource.BUILTIN or legacy_basic:
+                continue
             count = len(self.repository.list_work_template_items(template.id))
             source = "Excel" if template.source == TemplateSource.IMPORT else "Вручную"
             text = f"{template.name}\n{count} строк • {source}"
@@ -117,8 +121,7 @@ class WorkTemplatesDialog(QDialog):
             QMessageBox.critical(self, "Не удалось импортировать шаблон", str(exc))
             return
 
-        existing = self.repository.list_work_templates(self.organization_id)
-        default_name = "Базовый" if not existing else Path(filename).stem
+        default_name = Path(filename).stem
         name, ok = QInputDialog.getText(
             self,
             "Название шаблона",
@@ -172,25 +175,6 @@ class WorkTemplatesDialog(QDialog):
             "Шаблон импортирован",
             f"Импортировано строк: {len(imported.items)}{period}",
         )
-        self.refresh(select_id=template.id)
-
-    def _create_empty(self) -> None:
-        name, ok = QInputDialog.getText(self, "Новый шаблон", "Название:")
-        if not ok or not name.strip():
-            return
-        try:
-            template = self.repository.create_work_template(
-                organization_id=self.organization_id,
-                name=name.strip(),
-                source=TemplateSource.MANUAL,
-            )
-        except sqlite3.IntegrityError:
-            QMessageBox.warning(
-                self,
-                "Название уже используется",
-                "У этой УО уже есть шаблон с таким названием.",
-            )
-            return
         self.refresh(select_id=template.id)
 
     def _rename(self) -> None:

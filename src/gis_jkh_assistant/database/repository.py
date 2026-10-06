@@ -1216,8 +1216,8 @@ class Repository:
                     """
                     INSERT INTO work_template_items (
                         id, template_id, position, work_code, work_name, work_guid,
-                        price, volume, quantity, cost, allocation_percent
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        unit_name, price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -1226,6 +1226,7 @@ class Repository:
                         _clean(getattr(item, "work_code", None)),
                         str(getattr(item, "work_name", "")).strip(),
                         _clean(getattr(item, "work_guid", None)),
+                        _clean(getattr(item, "unit_name", None)),
                         _clean(getattr(item, "price", None)),
                         _clean(getattr(item, "volume", None)),
                         _clean(getattr(item, "quantity", None)),
@@ -1413,6 +1414,7 @@ class Repository:
         house_id: str,
         base_year: int,
         template_id: str | None = None,
+        items: Iterable[object] | None = None,
     ) -> WorkList:
         (
             start_year,
@@ -1447,37 +1449,44 @@ class Repository:
                     timestamp,
                 ),
             )
-            if template_id:
-                rows = self.connection.execute(
+            source_items: Iterable[object]
+            if items is not None:
+                source_items = items
+            elif template_id:
+                source_items = self.list_work_template_items(template_id)
+            else:
+                source_items = ()
+
+            for position, item in enumerate(source_items, start=1):
+                self.connection.execute(
                     """
-                    SELECT * FROM work_template_items
-                    WHERE template_id = ?
-                    ORDER BY position
+                    INSERT INTO work_list_items (
+                        id, work_list_id, position, work_code, work_name, work_guid,
+                        unit_name, price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (template_id,),
-                ).fetchall()
-                for row in rows:
-                    self.connection.execute(
-                        """
-                        INSERT INTO work_list_items (
-                            id, work_list_id, position, work_code, work_name, work_guid,
-                            unit_name, price, volume, quantity, cost, allocation_percent
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-                        """,
-                        (
-                            str(uuid.uuid4()),
-                            work_list_id,
-                            row["position"],
-                            row["work_code"],
-                            row["work_name"],
-                            row["work_guid"],
-                            row["unit_name"],
-                            row["price"],
-                            row["volume"],
-                            row["quantity"],
-                            row["cost"],
+                    (
+                        str(uuid.uuid4()),
+                        work_list_id,
+                        int(getattr(item, "position", position) or position),
+                        _clean(getattr(item, "work_code", None)),
+                        _required_text(
+                            getattr(item, "work_name", None),
+                            "Наименование работы",
                         ),
-                    )
+                        _clean(getattr(item, "work_guid", None)),
+                        _clean(getattr(item, "unit_name", None)),
+                        _clean(getattr(item, "price", None)),
+                        _clean(getattr(item, "volume", None)),
+                        _clean(getattr(item, "quantity", None)),
+                        _clean(getattr(item, "cost", None)),
+                        (
+                            _clean(getattr(item, "allocation_percent", None))
+                            if items is not None
+                            else None
+                        ),
+                    ),
+                )
         result = self.get_work_list(work_list_id)
         assert result is not None
         return result
@@ -2776,6 +2785,172 @@ class Repository:
             ),
         )
         self.connection.commit()
+
+    def add_work_list_items(
+        self,
+        work_list_id: str,
+        items: Iterable[object],
+    ) -> int:
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень не найден.")
+        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+            raise ValueError(
+                "Состав можно изменять только у локального перечня, "
+                "который ещё не загружен в ГИС ЖКХ."
+            )
+
+        existing = self.list_work_list_items(work_list_id)
+        existing_guids = {
+            str(item.work_guid).strip()
+            for item in existing
+            if str(item.work_guid or "").strip()
+        }
+        existing_codes = {
+            str(item.work_code).strip()
+            for item in existing
+            if str(item.work_code or "").strip()
+        }
+        next_position = max((int(item.position) for item in existing), default=0) + 1
+        added = 0
+
+        with self.connection:
+            for item in items:
+                guid = _clean(getattr(item, "work_guid", None))
+                code = _clean(getattr(item, "work_code", None))
+                name = _required_text(
+                    getattr(item, "work_name", None),
+                    "Наименование работы",
+                )
+                if (guid and guid in existing_guids) or (
+                    code and code in existing_codes
+                ):
+                    continue
+
+                self.connection.execute(
+                    """
+                    INSERT INTO work_list_items (
+                        id, work_list_id, position, work_code, work_name, work_guid,
+                        unit_name, price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        work_list_id,
+                        next_position,
+                        code,
+                        name,
+                        guid,
+                        _clean(getattr(item, "unit_name", None)),
+                        _clean(getattr(item, "price", None)),
+                        _clean(getattr(item, "volume", None)),
+                        _clean(getattr(item, "quantity", None)),
+                        _clean(getattr(item, "cost", None)),
+                        _clean(getattr(item, "allocation_percent", None)),
+                    ),
+                )
+                if guid:
+                    existing_guids.add(guid)
+                if code:
+                    existing_codes.add(code)
+                next_position += 1
+                added += 1
+
+            if added:
+                self.connection.execute(
+                    "UPDATE work_lists SET updated_at = ? WHERE id = ?",
+                    (_now(), work_list_id),
+                )
+        return added
+
+    def delete_work_list_items(
+        self,
+        work_list_id: str,
+        item_ids: Iterable[str],
+    ) -> int:
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень не найден.")
+        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+            raise ValueError(
+                "Состав можно изменять только у локального перечня, "
+                "который ещё не загружен в ГИС ЖКХ."
+            )
+
+        ids = [str(item_id) for item_id in dict.fromkeys(item_ids) if item_id]
+        if not ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in ids)
+        with self.connection:
+            cursor = self.connection.execute(
+                f"""
+                DELETE FROM work_list_items
+                WHERE work_list_id = ? AND id IN ({placeholders})
+                """,
+                [work_list_id, *ids],
+            )
+            remaining = self.connection.execute(
+                """
+                SELECT id
+                FROM work_list_items
+                WHERE work_list_id = ?
+                ORDER BY position, rowid
+                """,
+                (work_list_id,),
+            ).fetchall()
+            for position, row in enumerate(remaining, start=1):
+                self.connection.execute(
+                    "UPDATE work_list_items SET position = ? WHERE id = ?",
+                    (position, row["id"]),
+                )
+            if cursor.rowcount:
+                self.connection.execute(
+                    "UPDATE work_lists SET updated_at = ? WHERE id = ?",
+                    (_now(), work_list_id),
+                )
+        return int(cursor.rowcount or 0)
+
+    def create_work_template_from_work_list(
+        self,
+        *,
+        work_list_id: str,
+        name: str,
+    ) -> WorkTemplate:
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень не найден.")
+        house = self.get_house(work_list.house_id)
+        if house is None:
+            raise ValueError("Дом не найден.")
+        items = self.list_work_list_items(work_list_id)
+        if not items:
+            raise ValueError("В перечне нет работ и услуг.")
+
+        return self.create_work_template(
+            organization_id=house.organization_id,
+            name=name,
+            items=[
+                type(
+                    "_TemplateItem",
+                    (),
+                    {
+                        "position": item.position,
+                        "work_code": item.work_code,
+                        "work_name": item.work_name,
+                        "work_guid": item.work_guid,
+                        "unit_name": item.unit_name,
+                        "price": None,
+                        "volume": None,
+                        "quantity": None,
+                        "cost": None,
+                        "allocation_percent": item.allocation_percent,
+                    },
+                )()
+                for item in items
+            ],
+            source=TemplateSource.MANUAL,
+        )
 
     def update_work_list_item(self, item_id: str, **fields: object) -> None:
         allowed = {
