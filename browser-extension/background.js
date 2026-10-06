@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.17";
+const HELPER_CODE_VERSION = "0.1.18";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -1144,7 +1144,7 @@ async function runGisCommand(command) {
       return { items: rows };
     }
 
-    async function listUnplannedWorkOptions(payload) {
+    async function listOrganizationWorkOptions() {
       const roots = await request(
         "POST",
         "/orgnsi/api/rest/services/organizations/hierarchical/dictionaries/nodes/roots",
@@ -1155,18 +1155,7 @@ async function runGisCommand(command) {
         },
         STATE_WORKPLANNING
       );
-      const plannedGuids = new Set(
-        (payload?.plannedWorkGuids || []).filter(Boolean).map(String)
-      );
-      const plannedCodes = new Set(
-        (payload?.plannedWorkCodes || []).filter(Boolean).map(String)
-      );
       return (Array.isArray(roots) ? roots : [])
-        .filter((item) => {
-          const guid = String(item?.guid || "");
-          const code = String(item?.code || item?.fieldValue1 || "");
-          return !plannedGuids.has(guid) && !plannedCodes.has(code);
-        })
         .map((item) => ({
           guid: item?.guid || null,
           code: String(item?.code || item?.fieldValue1 || ""),
@@ -1175,6 +1164,21 @@ async function runGisCommand(command) {
           unitName: item?.fieldValue4 || ""
         }))
         .filter((item) => item.guid && item.code && item.name);
+    }
+
+    async function listUnplannedWorkOptions(payload) {
+      const options = await listOrganizationWorkOptions();
+      const plannedGuids = new Set(
+        (payload?.plannedWorkGuids || []).filter(Boolean).map(String)
+      );
+      const plannedCodes = new Set(
+        (payload?.plannedWorkCodes || []).filter(Boolean).map(String)
+      );
+      return options.filter(
+        (item) =>
+          !plannedGuids.has(String(item?.guid || "")) &&
+          !plannedCodes.has(String(item?.code || ""))
+      );
     }
 
     async function buildFixedWorksSavePayload(localPayload, reportingPeriod, remoteData) {
@@ -2423,6 +2427,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await resolvePlannedWorkUnits(payload)
+      };
+    }
+
+    if (command.type === "list_organization_work_options") {
+      return {
+        ok: true,
+        result: { items: await listOrganizationWorkOptions() }
       };
     }
 
