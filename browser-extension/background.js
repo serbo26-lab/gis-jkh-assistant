@@ -289,6 +289,13 @@ async function runGisCommand(command) {
       return { item, organizationGuid };
     }
 
+    function ruDateSortKey(value) {
+      const text = String(value || "").trim();
+      const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(text);
+      if (!match) return 0;
+      return Number(match[3] + match[2] + match[1]);
+    }
+
     function nextDayRuDate(value) {
       const text = String(value || "").trim();
       const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(text);
@@ -378,9 +385,9 @@ async function runGisCommand(command) {
         const leftCurrent = left?.managedDateEnd ? 0 : 1;
         const rightCurrent = right?.managedDateEnd ? 0 : 1;
         if (leftCurrent !== rightCurrent) return rightCurrent - leftCurrent;
-        const leftStart = String(left?.managedDateStart || "");
-        const rightStart = String(right?.managedDateStart || "");
-        if (leftStart !== rightStart) return rightStart.localeCompare(leftStart);
+        const leftStart = ruDateSortKey(left?.managedDateStart);
+        const rightStart = ruDateSortKey(right?.managedDateStart);
+        if (leftStart !== rightStart) return rightStart - leftStart;
         return Number(right?.lastUpdateDate || 0) - Number(left?.lastUpdateDate || 0);
       });
 
