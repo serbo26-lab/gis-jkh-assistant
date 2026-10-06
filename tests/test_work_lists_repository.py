@@ -1,3 +1,4 @@
+import sqlite3
 from dataclasses import dataclass
 
 from gis_jkh_assistant.database import Repository, TemplateSource
@@ -494,4 +495,39 @@ def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
     item = repository.list_work_list_items(work_list.id)[0]
     with pytest.raises(ValueError, match="локального перечня"):
         repository.delete_work_list_items(work_list.id, [item.id])
+    repository.close()
+
+
+def test_existing_database_adds_template_unit_name_column(tmp_path) -> None:
+    database_path = tmp_path / "old.db"
+    connection = sqlite3.connect(database_path)
+    connection.execute(
+        """
+        CREATE TABLE work_template_items (
+            id TEXT PRIMARY KEY,
+            template_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            work_code TEXT,
+            work_name TEXT NOT NULL,
+            work_guid TEXT,
+            price TEXT,
+            volume TEXT,
+            quantity TEXT,
+            cost TEXT,
+            allocation_percent TEXT
+        )
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    repository = Repository(database_path)
+    columns = {
+        row["name"]
+        for row in repository.connection.execute(
+            "PRAGMA table_info(work_template_items)"
+        ).fetchall()
+    }
+
+    assert "unit_name" in columns
     repository.close()
