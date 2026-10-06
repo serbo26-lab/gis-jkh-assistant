@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.18";
+const HELPER_CODE_VERSION = "0.1.19";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -326,29 +326,24 @@ async function runGisCommand(command) {
       return result;
     }
 
-    async function getPublicManagementInfo(payload) {
-      const houseContext = await getHouseInfo(payload?.houseObjectGuid);
-      const organizationRootGuid = String(
-        houseContext?.organizationGuid || ""
-      ).trim();
-      if (!organizationRootGuid) {
-        throw new Error("Не удалось определить организацию для публичного реестра.");
-      }
+    function publicManagementRowSort(left, right) {
+      const updateDiff =
+        Number(right?.lastUpdateDate || 0) -
+        Number(left?.lastUpdateDate || 0);
+      if (updateDiff) return updateDiff;
 
-      const localIds = new Set();
-      const addLocal = (candidate) => {
-        const text = String(candidate || "").trim().toLowerCase();
-        if (text) localIds.add(text);
-      };
-      addLocal(payload?.houseObjectGuid);
-      addLocal(payload?.gisHouseGuid);
-      addLocal(payload?.fiasHouseGuid);
-      addLocal(houseContext?.item?.guid);
-      addLocal(houseContext?.item?.rootGuid);
-      addLocal(houseContext?.item?.address?.house?.houseGuid);
-      addLocal(houseContext?.item?.address?.house?.aoGuid);
+      const startDiff =
+        ruDateSortKey(right?.managedDateStart) -
+        ruDateSortKey(left?.managedDateStart);
+      if (startDiff) return startDiff;
 
-      const candidates = [];
+      const leftCurrent = left?.managedDateEnd ? 0 : 1;
+      const rightCurrent = right?.managedDateEnd ? 0 : 1;
+      return rightCurrent - leftCurrent;
+    }
+
+    async function fetchPublicManagementRows(organizationRootGuid) {
+      const result = [];
       const seenRemoteRows = new Set();
       for (let pageIndex = 1; pageIndex <= 100; pageIndex += 1) {
         const body = {
@@ -383,44 +378,18 @@ async function runGisCommand(command) {
           if (seenRemoteRows.has(rowKey)) continue;
           seenRemoteRows.add(rowKey);
           newRows += 1;
-
-          const ids = houseIdentityValues(row);
-          if (Array.from(localIds).some((id) => ids.has(id))) {
-            candidates.push(row);
-          }
+          result.push(row);
         }
-
-        // Some versions of the public service cap page size below the requested
-        // value. Stop on an empty/repeated page rather than assuming that a
-        // short page is necessarily the final page.
         if (!newRows) break;
       }
+      result.sort(publicManagementRowSort);
+      return result;
+    }
 
-      if (!candidates.length) {
-        throw new Error(
-          "Дом не найден в открытых сведениях о деятельности по управлению."
-        );
-      }
-
-      candidates.sort((left, right) => {
-        const updateDiff =
-          Number(right?.lastUpdateDate || 0) -
-          Number(left?.lastUpdateDate || 0);
-        if (updateDiff) return updateDiff;
-
-        const startDiff =
-          ruDateSortKey(right?.managedDateStart) -
-          ruDateSortKey(left?.managedDateStart);
-        if (startDiff) return startDiff;
-
-        const leftCurrent = left?.managedDateEnd ? 0 : 1;
-        const rightCurrent = right?.managedDateEnd ? 0 : 1;
-        return rightCurrent - leftCurrent;
-      });
-
-      const row = candidates[0];
+    function normalizePublicManagementRow(row, organizationRootGuid) {
       const agreement = row?.agreement || {};
       return {
+        identities: Array.from(houseIdentityValues(row)),
         managementStartDate: row?.managedDateStart || null,
         managementEndDate: row?.managedDateEnd
           ? nextDayRuDate(row.managedDateEnd)
@@ -441,8 +410,79 @@ async function runGisCommand(command) {
           row?.orgRootGuid ||
           row?.managementOrg?.rootEntityGuid ||
           organizationRootGuid,
+        lastUpdateDate: row?.lastUpdateDate || null,
         source: "gis_public"
       };
+    }
+
+    async function listPublicManagementInfo(payload) {
+      let organizationRootGuid = String(
+        payload?.organizationRootGuid || ""
+      ).trim();
+      if (!organizationRootGuid) {
+        const seedHouseObjectGuid = String(
+          payload?.seedHouseObjectGuid || ""
+        ).trim();
+        if (!seedHouseObjectGuid) {
+          throw new Error(
+            "Не удалось определить организацию: не передан дом для получения GUID."
+          );
+        }
+        const houseContext = await getHouseInfo(seedHouseObjectGuid);
+        organizationRootGuid = String(
+          houseContext?.organizationGuid || ""
+        ).trim();
+      }
+      if (!organizationRootGuid) {
+        throw new Error("Не удалось определить организацию для публичного реестра.");
+      }
+      const rows = await fetchPublicManagementRows(organizationRootGuid);
+      return {
+        organizationRootGuid,
+        items: rows.map((row) =>
+          normalizePublicManagementRow(row, organizationRootGuid)
+        )
+      };
+    }
+
+    async function getPublicManagementInfo(payload) {
+      const houseContext = await getHouseInfo(payload?.houseObjectGuid);
+      const organizationRootGuid = String(
+        houseContext?.organizationGuid || ""
+      ).trim();
+      if (!organizationRootGuid) {
+        throw new Error("Не удалось определить организацию для публичного реестра.");
+      }
+
+      const localIds = new Set();
+      const addLocal = (candidate) => {
+        const text = String(candidate || "").trim().toLowerCase();
+        if (text) localIds.add(text);
+      };
+      addLocal(payload?.houseObjectGuid);
+      addLocal(payload?.gisHouseGuid);
+      addLocal(payload?.fiasHouseGuid);
+      addLocal(houseContext?.item?.guid);
+      addLocal(houseContext?.item?.rootGuid);
+      addLocal(houseContext?.item?.address?.house?.houseGuid);
+      addLocal(houseContext?.item?.address?.house?.aoGuid);
+
+      const rows = await fetchPublicManagementRows(organizationRootGuid);
+      const candidates = rows.filter((row) => {
+        const ids = houseIdentityValues(row);
+        return Array.from(localIds).some((id) => ids.has(id));
+      });
+
+      if (!candidates.length) {
+        throw new Error(
+          "Дом не найден в открытых сведениях о деятельности по управлению."
+        );
+      }
+
+      return normalizePublicManagementRow(
+        candidates[0],
+        organizationRootGuid
+      );
     }
 
     function periodMatches(item, payload) {
@@ -1437,6 +1477,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await getPublicManagementInfo(payload)
+      };
+    }
+
+    if (command.type === "list_house_management_info") {
+      return {
+        ok: true,
+        result: await listPublicManagementInfo(payload)
       };
     }
 
