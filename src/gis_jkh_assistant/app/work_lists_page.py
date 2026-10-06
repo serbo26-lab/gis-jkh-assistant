@@ -317,15 +317,29 @@ class WorkListsPage(QWidget):
         items_title.setObjectName("SectionTitle")
         items_header.addWidget(items_title)
         items_header.addStretch(1)
-        self.add_works_button = QPushButton("Добавить работы…")
-        self.remove_works_button = QPushButton("Удалить выбранные")
-        self.save_as_template_button = QPushButton("Сохранить состав как шаблон…")
-        self.lazy_fill_button = QPushButton("Распределить от итоговой суммы…")
-        items_header.addWidget(self.add_works_button)
-        items_header.addWidget(self.remove_works_button)
-        items_header.addWidget(self.save_as_template_button)
-        items_header.addWidget(self.lazy_fill_button)
         right_layout.addLayout(items_header)
+
+        self.add_works_button = QPushButton("Добавить…")
+        self.add_works_button.setToolTip(
+            "Добавить работы и услуги из актуального справочника организации в ГИС ЖКХ."
+        )
+        self.remove_works_button = QPushButton("Удалить")
+        self.remove_works_button.setToolTip(
+            "Удалить выбранные строки из локального перечня."
+        )
+        self.save_as_template_button = QPushButton("В шаблон…")
+        self.save_as_template_button.setToolTip(
+            "Сохранить текущий состав перечня как пользовательский шаблон."
+        )
+        self.lazy_fill_button = QPushButton("Распределить сумму…")
+        self.lazy_fill_button.setToolTip(
+            "Распределить планируемую итоговую сумму между работами и услугами."
+        )
+
+        self.items_actions = QGridLayout()
+        self.items_actions.setHorizontalSpacing(8)
+        self.items_actions.setVerticalSpacing(6)
+        right_layout.addLayout(self.items_actions)
 
         input_hint = QLabel(
             "Для каждой строки используется один из двух вариантов: "
@@ -342,6 +356,8 @@ class WorkListsPage(QWidget):
         )
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.items_table.setAlternatingRowColors(True)
+        self.items_table.setMinimumHeight(360)
+        self.items_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.items_table.verticalHeader().setVisible(False)
         header_view = self.items_table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -1670,6 +1686,13 @@ class WorkListsPage(QWidget):
                 "У этой управляющей организации уже есть шаблон с таким названием.",
             )
             return
+        except sqlite3.Error as exc:
+            QMessageBox.critical(
+                self,
+                "Не удалось сохранить шаблон",
+                f"Ошибка локальной базы данных: {exc}",
+            )
+            return
         except ValueError as exc:
             QMessageBox.warning(self, "Не удалось сохранить шаблон", str(exc))
             return
@@ -1812,6 +1835,14 @@ class WorkListsPage(QWidget):
             self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
+            self.items_actions.addWidget(self.add_works_button, 0, 0)
+            self.items_actions.addWidget(self.remove_works_button, 0, 1)
+            self.items_actions.addWidget(self.save_as_template_button, 0, 2)
+            self.items_actions.addWidget(self.lazy_fill_button, 0, 3)
+            for column in range(4):
+                self.items_actions.setColumnStretch(column, 1)
+            self.items_table.setMinimumHeight(360)
+
         elif mode == "compact":
             self.page_content.setMinimumSize(760, 660)
             self.page_layout.setContentsMargins(14, 12, 14, 14)
@@ -1833,6 +1864,14 @@ class WorkListsPage(QWidget):
             self.gis_actions.addWidget(self.sync_gis_button, 1, 1)
             self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
             self.gis_actions.setColumnStretch(1, 1)
+
+            self.items_actions.addWidget(self.add_works_button, 0, 0)
+            self.items_actions.addWidget(self.remove_works_button, 0, 1)
+            self.items_actions.addWidget(self.save_as_template_button, 1, 0)
+            self.items_actions.addWidget(self.lazy_fill_button, 1, 1)
+            self.items_actions.setColumnStretch(0, 1)
+            self.items_actions.setColumnStretch(1, 1)
+            self.items_table.setMinimumHeight(320)
 
         else:
             # On a narrow window the two work areas are stacked vertically instead
@@ -1859,6 +1898,14 @@ class WorkListsPage(QWidget):
             self.gis_actions.addWidget(self.approve_gis_button, 3, 1)
             self.gis_actions.setColumnStretch(0, 1)
             self.gis_actions.setColumnStretch(1, 1)
+
+            self.items_actions.addWidget(self.add_works_button, 0, 0)
+            self.items_actions.addWidget(self.remove_works_button, 0, 1)
+            self.items_actions.addWidget(self.save_as_template_button, 1, 0)
+            self.items_actions.addWidget(self.lazy_fill_button, 1, 1)
+            self.items_actions.setColumnStretch(0, 1)
+            self.items_actions.setColumnStretch(1, 1)
+            self.items_table.setMinimumHeight(380)
 
     def set_compact_mode(self, compact: bool) -> None:
         """Compatibility shim for older callers."""
