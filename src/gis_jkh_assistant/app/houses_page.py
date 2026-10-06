@@ -7,7 +7,7 @@ from datetime import datetime
 from collections import defaultdict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QCoreApplication, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QProgressBar,
     QScrollArea,
     QSplitter,
     QTableWidget,
@@ -123,16 +122,12 @@ class HousesPage(QWidget):
         self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
         self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
         self.sync_all_management_button = QPushButton(
-            "Обновить управление всех домов из ГИС ЖКХ"
+            "Загрузить сведения об управлении МКД из ГИС ЖКХ"
         )
         self.sync_all_management_button.setToolTip(
             "Получить период управления и реквизиты договора для всех домов "
             "выбранной управляющей организации."
         )
-        self.bulk_management_progress = QProgressBar()
-        self.bulk_management_progress.setTextVisible(True)
-        self.bulk_management_progress.setMinimumWidth(240)
-        self.bulk_management_progress.hide()
         self.bulk_management_status = QLabel("")
         self.bulk_management_status.setObjectName("Muted")
         self.bulk_management_status.hide()
@@ -194,8 +189,8 @@ class HousesPage(QWidget):
         management_bulk_row = QHBoxLayout()
         management_bulk_row.setSpacing(8)
         management_bulk_row.addWidget(self.sync_all_management_button)
-        management_bulk_row.addWidget(self.bulk_management_progress, 1)
         management_bulk_row.addWidget(self.bulk_management_status)
+        management_bulk_row.addStretch(1)
         toolbar_layout.addLayout(management_bulk_row)
 
         management_bulk_hint = QLabel(
@@ -883,12 +878,8 @@ class HousesPage(QWidget):
 
         self.sync_all_management_button.setEnabled(False)
         self.sync_management_button.setEnabled(False)
-        self.bulk_management_progress.show()
         self.bulk_management_status.show()
-        self.bulk_management_progress.setRange(0, 0)
-        self.bulk_management_status.setText(
-            f"Получение сведений из ГИС ЖКХ для {len(houses)} домов…"
-        )
+        self.bulk_management_status.setText(f"0/{len(houses)}")
 
         worker = GisIntegrationWorker(
             self.integration_gateway,
@@ -916,9 +907,6 @@ class HousesPage(QWidget):
                 if identities:
                     indexed_items.append((identities, item))
 
-            self.bulk_management_progress.setRange(0, len(houses))
-            self.bulk_management_progress.setValue(0)
-
             updated = 0
             not_found = 0
             skipped_manual = 0
@@ -928,7 +916,8 @@ class HousesPage(QWidget):
             for index, house in enumerate(houses, start=1):
                 if self._has_manual_management_data(house) and not overwrite_manual:
                     skipped_manual += 1
-                    self.bulk_management_progress.setValue(index)
+                    self.bulk_management_status.setText(f"{index}/{len(houses)}")
+                    QCoreApplication.processEvents()
                     continue
 
                 local_ids = self._house_management_identity_values(house)
@@ -941,7 +930,8 @@ class HousesPage(QWidget):
 
                 if match is None:
                     not_found += 1
-                    self.bulk_management_progress.setValue(index)
+                    self.bulk_management_status.setText(f"{index}/{len(houses)}")
+                    QCoreApplication.processEvents()
                     continue
 
                 self.repository.update_house(
@@ -959,7 +949,8 @@ class HousesPage(QWidget):
                     resolved_root_guid or match.get("organizationRootGuid")
                 )
                 updated += 1
-                self.bulk_management_progress.setValue(index)
+                self.bulk_management_status.setText(f"{index}/{len(houses)}")
+                QCoreApplication.processEvents()
 
             organization_updates = {}
             if organization_guid:
@@ -976,9 +967,7 @@ class HousesPage(QWidget):
             if current_house_id:
                 self._load_house(current_house_id)
 
-            self.bulk_management_status.setText(
-                f"Готово: обновлено {updated} из {len(houses)}"
-            )
+            self.bulk_management_status.setText(f"{len(houses)}/{len(houses)} • готово")
             details = [f"Обновлено: {updated}."]
             if not_found:
                 details.append(f"Не найдено в открытых сведениях: {not_found}.")
@@ -991,9 +980,7 @@ class HousesPage(QWidget):
             )
 
         def failed(message: str) -> None:
-            self.bulk_management_progress.setRange(0, 1)
-            self.bulk_management_progress.setValue(0)
-            self.bulk_management_status.setText("Ошибка обновления")
+            self.bulk_management_status.setText("ошибка")
             QMessageBox.critical(
                 self,
                 "Не удалось обновить дома",
