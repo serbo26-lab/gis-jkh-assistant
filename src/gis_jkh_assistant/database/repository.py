@@ -71,6 +71,8 @@ class Repository:
                 name TEXT NOT NULL,
                 ogrn TEXT NOT NULL UNIQUE,
                 kpp TEXT,
+                gis_organization_guid TEXT,
+                gis_organization_root_guid TEXT,
                 comment TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -86,6 +88,11 @@ class Repository:
                 gis_unique_house_number TEXT,
                 cadastral_number TEXT,
                 charge_area TEXT,
+                management_start_date TEXT,
+                management_end_date TEXT,
+                management_agreement_number TEXT,
+                management_agreement_date TEXT,
+                management_data_source TEXT,
                 residential_premises_count INTEGER NOT NULL DEFAULT 0,
                 non_residential_premises_count INTEGER NOT NULL DEFAULT 0,
                 source TEXT NOT NULL DEFAULT 'manual',
@@ -410,6 +417,13 @@ class Repository:
         self._ensure_column("work_lists", "planned_tariff", "TEXT")
         self._ensure_column("work_lists", "planned_area", "TEXT")
         self._ensure_column("work_lists", "planned_months", "TEXT")
+        self._ensure_column("management_organizations", "gis_organization_guid", "TEXT")
+        self._ensure_column("management_organizations", "gis_organization_root_guid", "TEXT")
+        self._ensure_column("houses", "management_start_date", "TEXT")
+        self._ensure_column("houses", "management_end_date", "TEXT")
+        self._ensure_column("houses", "management_agreement_number", "TEXT")
+        self._ensure_column("houses", "management_agreement_date", "TEXT")
+        self._ensure_column("houses", "management_data_source", "TEXT")
         self._ensure_column("work_lists", "gis_work_list_guid", "TEXT")
         self._ensure_column("work_lists", "gis_file_guid", "TEXT")
         self._ensure_column("work_lists", "gis_import_job_guid", "TEXT")
@@ -498,8 +512,12 @@ class Repository:
         self.connection.execute(
             """
             INSERT INTO management_organizations
-                (id, name, ogrn, kpp, comment, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (
+                    id, name, ogrn, kpp,
+                    gis_organization_guid, gis_organization_root_guid,
+                    comment, created_at, updated_at
+                )
+            VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)
             """,
             (org_id, name.strip(), ogrn.strip(), _clean(kpp), _clean(comment), timestamp, timestamp),
         )
@@ -509,7 +527,14 @@ class Repository:
         return result
 
     def update_organization(self, organization_id: str, **fields: object) -> None:
-        allowed = {"name", "ogrn", "kpp", "comment"}
+        allowed = {
+            "name",
+            "ogrn",
+            "kpp",
+            "gis_organization_guid",
+            "gis_organization_root_guid",
+            "comment",
+        }
         updates = {key: value for key, value in fields.items() if key in allowed}
         if not updates:
             return
@@ -571,6 +596,11 @@ class Repository:
         gis_unique_house_number: str | None = None,
         cadastral_number: str | None = None,
         charge_area: str | None = None,
+        management_start_date: str | None = None,
+        management_end_date: str | None = None,
+        management_agreement_number: str | None = None,
+        management_agreement_date: str | None = None,
+        management_data_source: str | None = None,
         residential_premises_count: int = 0,
         non_residential_premises_count: int = 0,
         source: RecordSource = RecordSource.MANUAL,
@@ -583,9 +613,12 @@ class Repository:
             INSERT INTO houses (
                 id, organization_id, address, house_object_guid, gis_house_guid,
                 fias_house_guid, gis_unique_house_number, cadastral_number, charge_area,
+                management_start_date, management_end_date,
+                management_agreement_number, management_agreement_date,
+                management_data_source,
                 residential_premises_count, non_residential_premises_count,
                 source, comment, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 house_id,
@@ -597,6 +630,11 @@ class Repository:
                 _clean(gis_unique_house_number),
                 _clean(cadastral_number),
                 _clean(charge_area),
+                _clean(management_start_date),
+                _clean(management_end_date),
+                _clean(management_agreement_number),
+                _clean(management_agreement_date),
+                _clean(management_data_source),
                 max(0, int(residential_premises_count)),
                 max(0, int(non_residential_premises_count)),
                 str(source),
@@ -620,6 +658,11 @@ class Repository:
             "gis_unique_house_number",
             "cadastral_number",
             "charge_area",
+            "management_start_date",
+            "management_end_date",
+            "management_agreement_number",
+            "management_agreement_date",
+            "management_data_source",
             "residential_premises_count",
             "non_residential_premises_count",
             "comment",
@@ -1254,6 +1297,116 @@ class Repository:
         ).fetchall()
         return [self._work_list_item_from_row(row) for row in rows]
 
+    @staticmethod
+    def _parse_house_management_date(value: str | None) -> date | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text, "%d.%m.%Y").date()
+        except ValueError:
+            return None
+
+    def work_list_management_period_error(
+        self,
+        house_id: str,
+        *,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+    ) -> str | None:
+        house = self.get_house(house_id)
+        if house is None:
+            return "Дом не найден."
+
+        period_start = date(int(start_year), int(start_month), 1)
+        period_end = date(
+            int(end_year),
+            int(end_month),
+            1,
+        )
+        if period_start > period_end:
+            return "Дата начала перечня не может быть позже даты окончания."
+
+        management_start = self._parse_house_management_date(
+            house.management_start_date
+        )
+        management_end = self._parse_house_management_date(
+            house.management_end_date
+        )
+
+        if management_start:
+            first_allowed = date(
+                management_start.year,
+                management_start.month,
+                1,
+            )
+            if period_start < first_allowed:
+                return (
+                    "Перечень не может начинаться раньше начала управления домом "
+                    f"({house.management_start_date})."
+                )
+
+        if management_end:
+            if management_end.day == 1:
+                last_day = management_end - timedelta(days=1)
+            else:
+                last_day = management_end
+            last_allowed = date(last_day.year, last_day.month, 1)
+            if period_end > last_allowed:
+                return (
+                    "Перечень не может заканчиваться после окончания управления домом "
+                    f"({house.management_end_date})."
+                )
+
+        return None
+
+    def _default_work_list_period(
+        self,
+        house_id: str,
+        base_year: int,
+    ) -> tuple[int, int, int, int]:
+        year = int(base_year)
+        start_year, start_month = year, 1
+        end_year, end_month = year, 12
+        house = self.get_house(house_id)
+        if house is None:
+            raise ValueError("Дом не найден.")
+
+        management_start = self._parse_house_management_date(
+            house.management_start_date
+        )
+        management_end = self._parse_house_management_date(
+            house.management_end_date
+        )
+
+        if management_start and management_start.year == year:
+            start_month = management_start.month
+        elif management_start and management_start.year > year:
+            raise ValueError(
+                "На выбранный год управление домом ещё не началось."
+            )
+
+        if management_end:
+            last_day = (
+                management_end - timedelta(days=1)
+                if management_end.day == 1
+                else management_end
+            )
+            if last_day.year == year:
+                end_month = last_day.month
+            elif last_day.year < year:
+                raise ValueError(
+                    "На выбранный год управление домом уже прекращено."
+                )
+
+        if (start_year, start_month) > (end_year, end_month):
+            raise ValueError(
+                "В выбранном году нет периода, когда дом находился в управлении."
+            )
+        return start_year, start_month, end_year, end_month
+
     def create_work_list(
         self,
         *,
@@ -1261,6 +1414,13 @@ class Repository:
         base_year: int,
         template_id: str | None = None,
     ) -> WorkList:
+        (
+            start_year,
+            start_month,
+            end_year,
+            end_month,
+        ) = self._default_work_list_period(house_id, int(base_year))
+
         work_list_id = str(uuid.uuid4())
         timestamp = _now()
         with self.connection:
@@ -1271,15 +1431,17 @@ class Repository:
                     start_year, start_month, end_year, end_month,
                     planned_total, planned_tariff, planned_area, planned_months,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 1, ?, 12, NULL, NULL, NULL, NULL, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     work_list_id,
                     house_id,
                     template_id,
                     int(base_year),
-                    int(base_year),
-                    int(base_year),
+                    start_year,
+                    start_month,
+                    end_year,
+                    end_month,
                     str(WorkListStatus.LOCAL),
                     timestamp,
                     timestamp,
@@ -1309,7 +1471,7 @@ class Repository:
                             row["work_code"],
                             row["work_name"],
                             row["work_guid"],
-                            None,
+                            row["unit_name"],
                             row["price"],
                             row["volume"],
                             row["quantity"],
@@ -2553,6 +2715,19 @@ class Repository:
         end_year: int,
         end_month: int,
     ) -> None:
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень не найден.")
+        error = self.work_list_management_period_error(
+            work_list.house_id,
+            start_year=start_year,
+            start_month=start_month,
+            end_year=end_year,
+            end_month=end_month,
+        )
+        if error:
+            raise ValueError(error)
+
         self.connection.execute(
             """
             UPDATE work_lists
