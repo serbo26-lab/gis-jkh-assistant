@@ -476,11 +476,19 @@ class WorkListsPage(QWidget):
             return
 
         template_id = self.template_combo.currentData()
-        work_list = self.repository.create_work_list(
-            house_id=house_id,
-            base_year=self._creation_year(),
-            template_id=template_id,
-        )
+        try:
+            work_list = self.repository.create_work_list(
+                house_id=house_id,
+                base_year=self._creation_year(),
+                template_id=template_id,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                "Нельзя создать перечень",
+                str(exc),
+            )
+            return
         self.refresh_work_lists(select_id=work_list.id)
 
     def _clone_current_work_list(self) -> None:
@@ -509,7 +517,15 @@ class WorkListsPage(QWidget):
         if not ok:
             return
 
-        cloned = self.repository.clone_work_list(source.id, target_year)
+        try:
+            cloned = self.repository.clone_work_list(source.id, target_year)
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                "Нельзя создать перечень",
+                str(exc),
+            )
+            return
         self.year_spin.setValue(target_year)
         self.refresh_work_lists(select_id=cloned.id)
 
@@ -632,13 +648,39 @@ class WorkListsPage(QWidget):
             self.save_status.setText("Некорректный период")
             return
 
-        self.repository.update_work_list_period(
-            self._current_work_list_id,
-            start_year=start_year,
-            start_month=start_month,
-            end_year=end_year,
-            end_month=end_month,
-        )
+        try:
+            self.repository.update_work_list_period(
+                self._current_work_list_id,
+                start_year=start_year,
+                start_month=start_month,
+                end_year=end_year,
+                end_month=end_month,
+            )
+        except ValueError as exc:
+            self.save_status.setText("Период вне срока управления")
+            QMessageBox.warning(
+                self,
+                "Проверьте период перечня",
+                str(exc),
+            )
+            if self._loaded_period:
+                (
+                    old_start_year,
+                    old_start_month,
+                    old_end_year,
+                    old_end_month,
+                ) = self._loaded_period
+                self._loading = True
+                try:
+                    self.start_month.setCurrentIndex(old_start_month - 1)
+                    self.start_year.setValue(old_start_year)
+                    self.end_month.setCurrentIndex(old_end_month - 1)
+                    self.end_year.setValue(old_end_year)
+                finally:
+                    self._loading = False
+            self._period_dirty = False
+            return
+
         self._loaded_period = (start_year, start_month, end_year, end_month)
         self._period_dirty = False
         self.save_status.setText("Сохранено")
