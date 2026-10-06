@@ -349,6 +349,7 @@ async function runGisCommand(command) {
       addLocal(houseContext?.item?.address?.house?.aoGuid);
 
       const candidates = [];
+      const seenRemoteRows = new Set();
       for (let pageIndex = 1; pageIndex <= 100; pageIndex += 1) {
         const body = {
           period: { from: null, to: null },
@@ -366,13 +367,33 @@ async function runGisCommand(command) {
           STATE_WORKPLANNING
         );
         const rows = Array.isArray(response) ? response : [];
+        if (!rows.length) break;
+
+        let newRows = 0;
         for (const row of rows) {
+          const rowKey = String(
+            row?.guid ||
+            [
+              row?.hmHouseShortInfoDto?.houseHmGuid,
+              row?.managedDateStart,
+              row?.managedDateEnd,
+              row?.agreementNumber
+            ].join("|")
+          );
+          if (seenRemoteRows.has(rowKey)) continue;
+          seenRemoteRows.add(rowKey);
+          newRows += 1;
+
           const ids = houseIdentityValues(row);
           if (Array.from(localIds).some((id) => ids.has(id))) {
             candidates.push(row);
           }
         }
-        if (rows.length < 100) break;
+
+        // Some versions of the public service cap page size below the requested
+        // value. Stop on an empty/repeated page rather than assuming that a
+        // short page is necessarily the final page.
+        if (!newRows) break;
       }
 
       if (!candidates.length) {
