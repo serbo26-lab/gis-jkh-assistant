@@ -38,6 +38,7 @@ class MainWindow(QMainWindow):
         self.resize(1360, 820)
         self.setMinimumSize(720, 520)
         self._view_mode = "normal"
+        self._last_context_page_index = 0
         self._applying_shared_context = False
         self._shared_context = {
             "organization_id": self.repository.get_setting("ui.context.organization_id"),
@@ -251,6 +252,8 @@ class MainWindow(QMainWindow):
         if not enabled:
             return
         current_index = self.pages.currentIndex()
+        if current_index not in range(5):
+            current_index = self._last_context_page_index
         source = {
             0: "houses",
             1: "work_lists",
@@ -411,6 +414,8 @@ class MainWindow(QMainWindow):
 
     def _navigation_changed(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
+        if 0 <= index <= 4:
+            self._last_context_page_index = index
         if index == 1:
             self.work_lists_page.refresh_organizations()
         elif index == 2:
