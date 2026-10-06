@@ -246,3 +246,92 @@ def test_planned_work_unit_is_persisted_and_propagated_to_fixation(tmp_path) -> 
     assert refreshed_list_item.unit_name == "мес"
     assert fixation_item.unit_name == "мес"
     repository.close()
+
+
+def test_work_list_defaults_are_clipped_to_management_period(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК Период", ogrn="1022600000300")
+    house = repository.create_house(
+        organization_id=org.id,
+        address="г. М..., ул. Б..., д. 0",
+        management_start_date="01.06.2020",
+        management_end_date="01.03.2022",
+        management_agreement_number="Д-1",
+        management_agreement_date="15.05.2020",
+        management_data_source="manual",
+    )
+
+    first = repository.create_work_list(house_id=house.id, base_year=2020)
+    middle = repository.create_work_list(house_id=house.id, base_year=2021)
+    last = repository.create_work_list(house_id=house.id, base_year=2022)
+
+    assert first.period_label == "06.2020 — 12.2020"
+    assert middle.period_label == "01.2021 — 12.2021"
+    assert last.period_label == "01.2022 — 02.2022"
+
+    repository.close()
+
+
+def test_work_list_period_cannot_leave_management_period(tmp_path) -> None:
+    import pytest
+
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК Границы", ogrn="1022600000301")
+    house = repository.create_house(
+        organization_id=org.id,
+        address="г. М..., ул. Б..., д. 0",
+        management_start_date="01.06.2020",
+        management_end_date="01.03.2022",
+    )
+    work_list = repository.create_work_list(house_id=house.id, base_year=2021)
+
+    with pytest.raises(ValueError, match="раньше начала управления"):
+        repository.update_work_list_period(
+            work_list.id,
+            start_year=2020,
+            start_month=5,
+            end_year=2021,
+            end_month=5,
+        )
+
+    with pytest.raises(ValueError, match="после окончания управления"):
+        repository.update_work_list_period(
+            work_list.id,
+            start_year=2021,
+            start_month=6,
+            end_year=2022,
+            end_month=3,
+        )
+
+    repository.update_work_list_period(
+        work_list.id,
+        start_year=2020,
+        start_month=6,
+        end_year=2022,
+        end_month=2,
+    )
+    refreshed = repository.get_work_list(work_list.id)
+    assert refreshed is not None
+    assert refreshed.period_label == "06.2020 — 02.2022"
+    repository.close()
+
+
+def test_missing_management_dates_do_not_restrict_work_list(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК Без дат", ogrn="1022600000302")
+    house = repository.create_house(
+        organization_id=org.id,
+        address="г. М..., ул. Б..., д. 0",
+    )
+    work_list = repository.create_work_list(house_id=house.id, base_year=2020)
+    repository.update_work_list_period(
+        work_list.id,
+        start_year=2019,
+        start_month=6,
+        end_year=2021,
+        end_month=5,
+    )
+    refreshed = repository.get_work_list(work_list.id)
+    assert refreshed is not None
+    assert refreshed.period_label == "06.2019 — 05.2021"
+    repository.close()

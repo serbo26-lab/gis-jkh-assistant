@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from PySide6.QtWidgets import (
@@ -89,6 +89,21 @@ class HouseDialog(QDialog):
         self.cadastral_edit = QLineEdit((house.cadastral_number or "") if house else "")
         self.charge_area_edit = QLineEdit((house.charge_area or "") if house else "")
         self.charge_area_edit.setPlaceholderText("Например: 395,6")
+        self.management_start_edit = QLineEdit(
+            (house.management_start_date or "") if house else ""
+        )
+        self.management_start_edit.setPlaceholderText("ДД.ММ.ГГГГ")
+        self.management_end_edit = QLineEdit(
+            (house.management_end_date or "") if house else ""
+        )
+        self.management_end_edit.setPlaceholderText("ДД.ММ.ГГГГ или пусто")
+        self.management_agreement_number_edit = QLineEdit(
+            (house.management_agreement_number or "") if house else ""
+        )
+        self.management_agreement_date_edit = QLineEdit(
+            (house.management_agreement_date or "") if house else ""
+        )
+        self.management_agreement_date_edit.setPlaceholderText("ДД.ММ.ГГГГ")
         self.residential_spin = SafeSpinBox()
         self.residential_spin.setRange(0, 100000)
         self.residential_spin.setValue(house.residential_premises_count if house else 0)
@@ -104,6 +119,10 @@ class HouseDialog(QDialog):
         form.addRow("Уникальный номер дома", self.unique_number_edit)
         form.addRow("Кадастровый номер", self.cadastral_edit)
         form.addRow("Площадь к начислению, м²", self.charge_area_edit)
+        form.addRow("Начало управления", self.management_start_edit)
+        form.addRow("Окончание управления", self.management_end_edit)
+        form.addRow("Номер договора управления", self.management_agreement_number_edit)
+        form.addRow("Дата договора управления", self.management_agreement_date_edit)
         form.addRow("Жилых помещений", self.residential_spin)
         form.addRow("Нежилых помещений", self.non_residential_spin)
 
@@ -131,6 +150,11 @@ class HouseDialog(QDialog):
             "gis_unique_house_number": self.unique_number_edit.text().strip() or None,
             "cadastral_number": self.cadastral_edit.text().strip() or None,
             "charge_area": self.charge_area_edit.text().strip() or None,
+            "management_start_date": self.management_start_edit.text().strip() or None,
+            "management_end_date": self.management_end_edit.text().strip() or None,
+            "management_agreement_number": self.management_agreement_number_edit.text().strip() or None,
+            "management_agreement_date": self.management_agreement_date_edit.text().strip() or None,
+            "management_data_source": "manual",
             "residential_premises_count": self.residential_spin.value(),
             "non_residential_premises_count": self.non_residential_spin.value(),
         }
@@ -140,6 +164,24 @@ class HouseDialog(QDialog):
             QMessageBox.warning(self, "Не заполнено поле", "Укажите адрес дома.")
             self.address_edit.setFocus()
             return
+        for label, widget in (
+            ("Начало управления", self.management_start_edit),
+            ("Окончание управления", self.management_end_edit),
+            ("Дата договора управления", self.management_agreement_date_edit),
+        ):
+            value = widget.text().strip()
+            if not value:
+                continue
+            try:
+                datetime.strptime(value, "%d.%m.%Y")
+            except ValueError:
+                QMessageBox.warning(
+                    self,
+                    "Проверьте дату",
+                    f"Поле «{label}» должно быть в формате ДД.ММ.ГГГГ.",
+                )
+                widget.setFocus()
+                return
         super().accept()
 
 

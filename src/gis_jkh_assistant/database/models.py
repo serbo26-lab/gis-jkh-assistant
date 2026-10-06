@@ -37,6 +37,8 @@ class ManagementOrganization:
     name: str
     ogrn: str
     kpp: str | None = None
+    gis_organization_guid: str | None = None
+    gis_organization_root_guid: str | None = None
     comment: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -53,6 +55,11 @@ class House:
     gis_unique_house_number: str | None = None
     cadastral_number: str | None = None
     charge_area: str | None = None
+    management_start_date: str | None = None
+    management_end_date: str | None = None
+    management_agreement_number: str | None = None
+    management_agreement_date: str | None = None
+    management_data_source: str | None = None
     residential_premises_count: int = 0
     non_residential_premises_count: int = 0
     source: RecordSource = RecordSource.MANUAL
