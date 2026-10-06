@@ -410,6 +410,7 @@ class Repository:
         )
         self._ensure_column("house_tariffs", "end_day", "INTEGER NOT NULL DEFAULT 31")
         self._ensure_column("work_templates", "source_file_path", "TEXT")
+        self._ensure_column("work_template_items", "unit_name", "TEXT")
         self._ensure_column("work_template_items", "allocation_percent", "TEXT")
         self._ensure_column("work_list_items", "unit_name", "TEXT")
         self._ensure_column("work_fixation_items", "unit_name", "TEXT")
