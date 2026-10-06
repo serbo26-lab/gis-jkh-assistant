@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.16";
+const HELPER_CODE_VERSION = "0.1.17";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -287,6 +287,128 @@ async function runGisCommand(command) {
       }
 
       return { item, organizationGuid };
+    }
+
+    function nextDayRuDate(value) {
+      const text = String(value || "").trim();
+      const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(text);
+      if (!match) return text || null;
+      const date = new Date(
+        Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1]))
+      );
+      date.setUTCDate(date.getUTCDate() + 1);
+      const day = String(date.getUTCDate()).padStart(2, "0");
+      const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+      return day + "." + month + "." + String(date.getUTCFullYear());
+    }
+
+    function houseIdentityValues(value) {
+      const result = new Set();
+      const add = (candidate) => {
+        const text = String(candidate || "").trim().toLowerCase();
+        if (text) result.add(text);
+      };
+      add(value?.guid);
+      add(value?.rootGuid);
+      add(value?.houseHMGuid);
+      add(value?.hmHouseShortInfoDto?.houseHmGuid);
+      add(value?.fiasHouseAddress?.house?.guid);
+      add(value?.fiasHouseAddress?.house?.code);
+      add(value?.hmHouseShortInfoDto?.fiasHouse?.guid);
+      add(value?.hmHouseShortInfoDto?.fiasHouse?.code);
+      return result;
+    }
+
+    async function getPublicManagementInfo(payload) {
+      const houseContext = await getHouseInfo(payload?.houseObjectGuid);
+      const organizationRootGuid = String(
+        houseContext?.organizationGuid || ""
+      ).trim();
+      if (!organizationRootGuid) {
+        throw new Error("Не удалось определить организацию для публичного реестра.");
+      }
+
+      const localIds = new Set();
+      const addLocal = (candidate) => {
+        const text = String(candidate || "").trim().toLowerCase();
+        if (text) localIds.add(text);
+      };
+      addLocal(payload?.houseObjectGuid);
+      addLocal(payload?.gisHouseGuid);
+      addLocal(payload?.fiasHouseGuid);
+      addLocal(houseContext?.item?.guid);
+      addLocal(houseContext?.item?.rootGuid);
+      addLocal(houseContext?.item?.address?.house?.houseGuid);
+      addLocal(houseContext?.item?.address?.house?.aoGuid);
+
+      const candidates = [];
+      for (let pageIndex = 1; pageIndex <= 100; pageIndex += 1) {
+        const body = {
+          period: { from: null, to: null },
+          organizationRootGuid,
+          archived: false,
+          managementPeriod: "ALL_HOUSE",
+          fullAddressSearchCriteria: {},
+          pageIndex,
+          elementsPerPage: 100
+        };
+        const response = await request(
+          "POST",
+          "/licenses/api/rest/services/public/house/search-by-org",
+          body,
+          STATE_WORKPLANNING
+        );
+        const rows = Array.isArray(response) ? response : [];
+        for (const row of rows) {
+          const ids = houseIdentityValues(row);
+          if (Array.from(localIds).some((id) => ids.has(id))) {
+            candidates.push(row);
+          }
+        }
+        if (rows.length < 100) break;
+      }
+
+      if (!candidates.length) {
+        throw new Error(
+          "Дом не найден в открытых сведениях о деятельности по управлению."
+        );
+      }
+
+      candidates.sort((left, right) => {
+        const leftCurrent = left?.managedDateEnd ? 0 : 1;
+        const rightCurrent = right?.managedDateEnd ? 0 : 1;
+        if (leftCurrent !== rightCurrent) return rightCurrent - leftCurrent;
+        const leftStart = String(left?.managedDateStart || "");
+        const rightStart = String(right?.managedDateStart || "");
+        if (leftStart !== rightStart) return rightStart.localeCompare(leftStart);
+        return Number(right?.lastUpdateDate || 0) - Number(left?.lastUpdateDate || 0);
+      });
+
+      const row = candidates[0];
+      const agreement = row?.agreement || {};
+      return {
+        managementStartDate: row?.managedDateStart || null,
+        managementEndDate: row?.managedDateEnd
+          ? nextDayRuDate(row.managedDateEnd)
+          : null,
+        publicManagedDateEnd: row?.managedDateEnd || null,
+        agreementNumber:
+          row?.agreementNumber || agreement?.number || null,
+        agreementDate:
+          row?.documentDate ||
+          agreement?.signDateText ||
+          agreement?.signDate ||
+          null,
+        organizationGuid:
+          row?.orgGuid ||
+          row?.managementOrg?.guid ||
+          null,
+        organizationRootGuid:
+          row?.orgRootGuid ||
+          row?.managementOrg?.rootEntityGuid ||
+          organizationRootGuid,
+        source: "gis_public"
+      };
     }
 
     function periodMatches(item, payload) {
@@ -1270,6 +1392,13 @@ async function runGisCommand(command) {
           pageUrl: location.href,
           pageTitle: document.title
         }
+      };
+    }
+
+    if (command.type === "get_house_management_info") {
+      return {
+        ok: true,
+        result: await getPublicManagementInfo(payload)
       };
     }
 
