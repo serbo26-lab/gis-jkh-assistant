@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QTableWidget,
@@ -25,6 +26,10 @@ from gis_jkh_assistant.gis_integration import IntegrationError, LocalIntegration
 from gis_jkh_assistant.work_lists.gis_quality_sync import (
     apply_remote_quality_assessment,
     local_quality_has_data,
+)
+from gis_jkh_assistant.quality_automation import (
+    fill_quality_period_from_fixation,
+    generate_acceptance_act_for_period,
 )
 from gis_jkh_assistant.quality_assessment import (
     build_quality_command_payload,
@@ -64,6 +69,12 @@ class QualityAssessmentPage(QWidget):
         self._current_period_id: str | None = None
         self._current_month: int | None = None
         self._month_button_columns = 12
+        self._queue_period_ids: list[str] = []
+        self._queue_index = 0
+        self._queue_successes = 0
+        self._queue_failed_period_id: str | None = None
+        self._queue_command: str | None = None
+        self._queue_title = ""
         self._build_ui()
         self.refresh_organizations()
 
@@ -152,20 +163,65 @@ class QualityAssessmentPage(QWidget):
         self.month_status.setObjectName("Muted")
         month_layout.addWidget(self.month_status)
 
-        actions = QHBoxLayout()
+        automation = QGridLayout()
+        automation.setHorizontalSpacing(8)
+        automation.setVerticalSpacing(6)
+        self.form_month_button = QPushButton("Сформировать оценку за месяц")
+        self.form_year_button = QPushButton(
+            "Сформировать оценку за доступные месяцы года"
+        )
+        self.auto_act_month_button = QPushButton("Сформировать акт месяца")
+        self.auto_act_year_button = QPushButton(
+            "Сформировать акты доступных месяцев года"
+        )
+        automation.addWidget(self.form_month_button, 0, 0)
+        automation.addWidget(self.form_year_button, 0, 1)
+        automation.addWidget(self.auto_act_month_button, 1, 0)
+        automation.addWidget(self.auto_act_year_button, 1, 1)
+        automation.setColumnStretch(0, 1)
+        automation.setColumnStretch(1, 1)
+        month_layout.addLayout(automation)
+
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(8)
+        actions.setVerticalSpacing(6)
         self.load_gis_button = QPushButton("Загрузить оценку качества из ГИС ЖКХ")
         self.load_gis_button.setToolTip(
             "Получить существующую оценку качества выбранного месяца из ГИС ЖКХ."
         )
-        self.save_button = QPushButton("Сохранить проект")
-        self.publish_button = QPushButton("Разместить информацию")
-        self.cancel_button = QPushButton("Аннулировать информацию")
-        actions.addWidget(self.load_gis_button)
-        actions.addWidget(self.save_button)
-        actions.addWidget(self.publish_button)
-        actions.addWidget(self.cancel_button)
-        actions.addStretch(1)
+        self.save_button = QPushButton("Сохранить проект месяца")
+        self.publish_button = QPushButton("Разместить месяц")
+        self.save_year_button = QPushButton("Сохранить проекты года")
+        self.publish_year_button = QPushButton(
+            "Разместить доступные месяцы года"
+        )
+        self.publish_year_button.setObjectName("PrimaryButton")
+        self.cancel_button = QPushButton("Аннулировать месяц")
+        self.continue_queue_button = QPushButton("Продолжить очередь")
+        self.continue_queue_button.setVisible(False)
+
+        actions.addWidget(self.load_gis_button, 0, 0)
+        actions.addWidget(self.save_button, 0, 1)
+        actions.addWidget(self.publish_button, 0, 2)
+        actions.addWidget(self.save_year_button, 1, 0)
+        actions.addWidget(self.publish_year_button, 1, 1)
+        actions.addWidget(self.cancel_button, 1, 2)
+        for column in range(3):
+            actions.setColumnStretch(column, 1)
         month_layout.addLayout(actions)
+
+        self.queue_progress = QProgressBar()
+        self.queue_progress.setVisible(False)
+        self.queue_progress.setTextVisible(True)
+        month_layout.addWidget(self.queue_progress)
+
+        queue_row = QHBoxLayout()
+        self.queue_label = QLabel("")
+        self.queue_label.setObjectName("Muted")
+        self.queue_label.setWordWrap(True)
+        queue_row.addWidget(self.queue_label, 1)
+        queue_row.addWidget(self.continue_queue_button)
+        month_layout.addLayout(queue_row)
         root.addWidget(month_card)
 
         table_card = QFrame()
@@ -223,9 +279,16 @@ class QualityAssessmentPage(QWidget):
         self.work_list_combo.currentIndexChanged.connect(self._work_list_changed)
         self.year_combo.currentIndexChanged.connect(self._year_changed)
         self.table.itemChanged.connect(self._table_item_changed)
+        self.form_month_button.clicked.connect(self._form_month_from_fixation)
+        self.form_year_button.clicked.connect(self._form_year_from_fixation)
+        self.auto_act_month_button.clicked.connect(self._auto_generate_month_act)
+        self.auto_act_year_button.clicked.connect(self._auto_generate_year_acts)
         self.load_gis_button.clicked.connect(self._load_from_gis)
         self.save_button.clicked.connect(self._save_project)
         self.publish_button.clicked.connect(self._publish)
+        self.save_year_button.clicked.connect(self._save_year_projects)
+        self.publish_year_button.clicked.connect(self._publish_year)
+        self.continue_queue_button.clicked.connect(self._continue_queue)
         self.cancel_button.clicked.connect(self._cancel)
         self.include_all_button.clicked.connect(
             lambda: self._set_all_included(True)
