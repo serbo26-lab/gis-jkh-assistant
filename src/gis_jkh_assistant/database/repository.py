@@ -3149,6 +3149,8 @@ class Repository:
         self,
         work_list_id: str,
         items: Iterable[object],
+        *,
+        template_id: str | None = None,
     ) -> int:
         """Replace the whole editable work-list composition atomically."""
 
@@ -3218,9 +3220,7 @@ class Repository:
                 WHERE id = ?
                 """,
                 (
-                    _clean(getattr(prepared[0], "template_id", None))
-                    if prepared
-                    else None,
+                    _clean(template_id),
                     _now(),
                     work_list_id,
                 ),
