@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 
@@ -152,6 +152,22 @@ class LocalIntegrationGateway:
                     self._send_json(HTTPStatus.OK, {"ok": True})
                     return
 
+                if path == "/api/integration/progress":
+                    command_id = _optional_text(payload.get("id"))
+                    progress = payload.get("progress")
+                    if not command_id or not isinstance(progress, dict):
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"error": "id and progress required"},
+                        )
+                        return
+                    with state.lock:
+                        target = state.results.get(command_id)
+                    if target is not None:
+                        target.put({"_progress": progress})
+                    self._send_json(HTTPStatus.OK, {"ok": True})
+                    return
+
                 if path == "/api/integration/result":
                     command_id = _optional_text(payload.get("id"))
                     if not command_id:
@@ -160,10 +176,7 @@ class LocalIntegrationGateway:
                     with state.lock:
                         target = state.results.get(command_id)
                     if target is not None:
-                        try:
-                            target.put_nowait(payload)
-                        except queue.Full:
-                            pass
+                        target.put(payload)
                     self._send_json(HTTPStatus.OK, {"ok": True})
                     return
 
@@ -220,6 +233,7 @@ class LocalIntegrationGateway:
         payload: dict[str, Any] | None = None,
         *,
         timeout: float = 120.0,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         if self._server is None:
             detail = f": {self._error}" if self._error else ""
@@ -237,7 +251,7 @@ class LocalIntegrationGateway:
             )
 
         command_id = str(uuid.uuid4())
-        result_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+        result_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 
         with self._state.lock:
             self._state.results[command_id] = result_queue
@@ -245,8 +259,20 @@ class LocalIntegrationGateway:
             {"id": command_id, "type": str(command_type), "payload": payload or {}}
         )
 
+        deadline = time.monotonic() + float(timeout)
+        response: dict[str, Any] | None = None
         try:
-            response = result_queue.get(timeout=float(timeout))
+            while response is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise queue.Empty
+                message = result_queue.get(timeout=remaining)
+                progress = message.get("_progress")
+                if isinstance(progress, dict):
+                    if progress_callback is not None:
+                        progress_callback(progress)
+                    continue
+                response = message
         except queue.Empty as exc:
             raise IntegrationError(
                 "Помощник браузера не ответил вовремя. Проверьте открытую вкладку ГИС ЖКХ."
