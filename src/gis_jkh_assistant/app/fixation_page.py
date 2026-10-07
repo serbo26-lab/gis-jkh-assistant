@@ -1331,7 +1331,9 @@ class FixationPage(QWidget):
         self._queue_period_ids = [period.id for period in periods]
         self._queue_index = 0
         self._queue_successes = 0
+        self._queue_skipped = 0
         self._queue_failed_period_id = None
+        self._queue_mode = "publish"
         self.continue_queue_button.setVisible(False)
         self.queue_progress.setVisible(True)
         self.queue_progress.setRange(0, len(self._queue_period_ids))
@@ -1355,19 +1357,137 @@ class FixationPage(QWidget):
     def _start_next_queue_item(self) -> None:
         if self._queue_index >= len(self._queue_period_ids):
             self.queue_progress.setValue(len(self._queue_period_ids))
-            self.queue_label.setText(
-                f"Очередь завершена. Успешно размещено месяцев: {self._queue_successes}."
-            )
+            if self._queue_mode == "load":
+                self.queue_label.setText(
+                    f"Очередь завершена. Загружено месяцев: "
+                    f"{self._queue_successes} • не найдено в ГИС ЖКХ: "
+                    f"{self._queue_skipped}."
+                )
+            else:
+                self.queue_label.setText(
+                    f"Очередь завершена. Успешно размещено месяцев: "
+                    f"{self._queue_successes}."
+                )
             self._refresh_year_status()
             return
+
         period_id = self._queue_period_ids[self._queue_index]
         period = self.repository.get_work_fixation_period(period_id)
         if period:
+            action = "Загружается" if self._queue_mode == "load" else "Размещается"
             self.queue_label.setText(
-                f"Размещается {_MONTHS[period.month - 1]} {period.year} "
+                f"{action} {_MONTHS[period.month - 1]} {period.year} "
                 f"({self._queue_index + 1} из {len(self._queue_period_ids)})…"
             )
-        self._send_period(period_id, queue_mode=True)
+        if self._queue_mode == "load":
+            self._send_load_period(period_id)
+        else:
+            self._send_period(period_id, queue_mode=True)
+
+    def _send_load_period(self, period_id: str) -> None:
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+
+        period = self.repository.get_work_fixation_period(period_id)
+        if period is None:
+            return
+        work_list = self.repository.get_work_list(period.work_list_id)
+        house = (
+            self.repository.get_house(work_list.house_id)
+            if work_list is not None
+            else None
+        )
+        fias = (
+            (house.fias_house_guid or house.gis_house_guid)
+            if house is not None
+            else None
+        )
+        if (
+            work_list is None
+            or not work_list.gis_work_list_guid
+            or not fias
+        ):
+            self._queue_failed_period_id = period_id
+            self.queue_label.setText(
+                "Очередь остановлена: не хватает идентификаторов ГИС ЖКХ."
+            )
+            self.continue_queue_button.setVisible(True)
+            return
+
+        self._integration_busy = True
+        self._refresh_gis_buttons()
+        command_succeeded = {"value": False}
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "load_work_fixation",
+            {
+                "fiasHouseCode": fias,
+                "workListGuid": work_list.gis_work_list_guid,
+                "year": period.year,
+                "month": period.month,
+            },
+            timeout=120.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            command_succeeded["value"] = True
+            if result.get("found"):
+                try:
+                    apply_remote_work_fixation(
+                        self.repository,
+                        work_list_id=period.work_list_id,
+                        year=period.year,
+                        month=period.month,
+                        remote=result,
+                    )
+                except ValueError as exc:
+                    command_succeeded["value"] = False
+                    failed(str(exc))
+                    return
+                self._queue_successes += 1
+            else:
+                self._queue_skipped += 1
+
+            self._queue_index += 1
+            self.queue_progress.setValue(self._queue_index)
+            self._refresh_year_status()
+            if self._current_period_id == period_id:
+                self._load_table()
+                self._load_unplanned_table()
+                self._refresh_period_status()
+
+        def failed(message: str) -> None:
+            self.repository.update_work_fixation_gis_state(
+                period_id,
+                gis_status="ERROR",
+                gis_last_error=message,
+            )
+            self._queue_failed_period_id = period_id
+            self.queue_label.setText(
+                f"Очередь остановлена на {_MONTHS[period.month - 1]} "
+                f"{period.year}: {message}"
+            )
+            self.continue_queue_button.setText(
+                f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"
+            )
+            self.continue_queue_button.setVisible(True)
+            self._refresh_year_status()
+            if self._current_period_id == period_id:
+                self._refresh_period_status()
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._integration_busy = False
+            self._refresh_integration_status()
+            if command_succeeded["value"] and self._queue_failed_period_id is None:
+                QTimer.singleShot(250, self._start_next_queue_item)
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
 
     def _send_period(self, period_id: str, *, queue_mode: bool) -> None:
         if self._integration_worker is not None and self._integration_worker.isRunning():
