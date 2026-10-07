@@ -1337,7 +1337,6 @@ class FixationPage(QWidget):
         self._queue_mode = "load"
         self.continue_queue_button.setVisible(False)
         self.queue_status_strip.setVisible(True)
-        self.queue_status_strip.setVisible(True)
         self.queue_progress.setVisible(True)
         self.queue_progress.setRange(0, len(self._queue_period_ids))
         self.queue_progress.setValue(0)
@@ -1400,6 +1399,7 @@ class FixationPage(QWidget):
         self._queue_failed_period_id = None
         self._queue_mode = "publish"
         self.continue_queue_button.setVisible(False)
+        self.queue_status_strip.setVisible(True)
         self.queue_progress.setVisible(True)
         self.queue_progress.setRange(0, len(self._queue_period_ids))
         self.queue_progress.setValue(0)
