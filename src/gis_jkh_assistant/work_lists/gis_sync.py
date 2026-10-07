@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import sqlite3
 from typing import Any
 
 from gis_jkh_assistant.database.repository import Repository
@@ -164,7 +165,7 @@ def apply_gis_work_list_sync(
                 house_id=house_id,
                 remote=remote,
             )
-        except (ValueError, OSError) as exc:
+        except (sqlite3.Error, ValueError, OSError) as exc:
             result.errors.append(str(exc))
             continue
         result.imported += 1
