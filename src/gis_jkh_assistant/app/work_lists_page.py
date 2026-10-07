@@ -1096,6 +1096,8 @@ class WorkListsPage(QWidget):
             return "Проект в ГИС ЖКХ"
         if value == "placed":
             return "Размещен в ГИС ЖКХ"
+        if value == "cancelled":
+            return "Отменён в ГИС ЖКХ"
         return value
 
     @staticmethod
@@ -1104,6 +1106,8 @@ class WorkListsPage(QWidget):
             text = "Проект"
         elif work_list.gis_status == "APPROVED":
             text = "Размещен"
+        elif work_list.gis_status == "CANCELLED":
+            text = "Отменён"
         elif work_list.gis_status == "IMPORT_SENT":
             text = "Файл отправлен на обработку"
         elif work_list.gis_status == "NOT_FOUND":
@@ -1153,6 +1157,10 @@ class WorkListsPage(QWidget):
         self.sync_gis_button.setEnabled(enabled)
         self.upload_to_gis_button.setEnabled(
             enabled and gis_status in {None, "", "NOT_FOUND"}
+        )
+        self.cancel_gis_button.setEnabled(enabled and gis_status == "APPROVED")
+        self.save_editable_gis_button.setEnabled(
+            enabled and gis_status in {"CANCELLED", "DRAFT"}
         )
         self.approve_gis_button.setEnabled(enabled and gis_status == "DRAFT")
 
@@ -2173,7 +2181,8 @@ class WorkListsPage(QWidget):
         )
         composition_editable = bool(
             work_list
-            and str(work_list.gis_status or "").upper() in {"", "NOT_FOUND"}
+            and str(work_list.gis_status or "").upper()
+            in {"", "NOT_FOUND", "CANCELLED", "DRAFT"}
         )
         for widget in (
             self.start_month,
@@ -2190,6 +2199,10 @@ class WorkListsPage(QWidget):
             widget.setEnabled(enabled)
         self.add_works_button.setEnabled(enabled and composition_editable)
         self.remove_works_button.setEnabled(enabled and composition_editable)
+        self.clear_works_button.setEnabled(enabled and composition_editable)
+        self.replace_from_template_button.setEnabled(
+            enabled and composition_editable
+        )
         self._refresh_gis_action_buttons()
 
     def set_view_mode(self, mode: str) -> None:
