@@ -237,16 +237,16 @@ class WorkListsPage(QWidget):
 
         self.files_actions_button = QPushButton("Файлы и шаблоны ▾")
         files_menu = QMenu(self.files_actions_button)
-        files_menu.addAction(
+        self.download_template_action = files_menu.addAction(
             "Получить / обновить официальный шаблон",
             self.load_export_template_button.click,
         )
-        files_menu.addAction(
+        self.manual_template_action = files_menu.addAction(
             "Выбрать официальный XLSX вручную…",
             self.load_export_template_file_button.click,
         )
         files_menu.addSeparator()
-        files_menu.addAction(
+        self.export_xlsx_action = files_menu.addAction(
             "Сформировать XLSX из выбранного перечня",
             self.export_button.click,
         )
@@ -1210,6 +1210,20 @@ class WorkListsPage(QWidget):
             ready and house_ready and not self._integration_busy
         )
         self.load_export_template_file_button.setEnabled(not self._integration_busy)
+        self.download_template_action.setEnabled(
+            self.load_export_template_button.isEnabled()
+        )
+        self.manual_template_action.setEnabled(
+            self.load_export_template_file_button.isEnabled()
+        )
+        self.export_xlsx_action.setEnabled(
+            selected and not self._integration_busy
+        )
+        self.files_actions_button.setEnabled(
+            self.download_template_action.isEnabled()
+            or self.manual_template_action.isEnabled()
+            or self.export_xlsx_action.isEnabled()
+        )
 
         enabled = ready and selected and not self._integration_busy
         self.sync_gis_button.setEnabled(enabled)
