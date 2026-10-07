@@ -688,6 +688,125 @@ async function runGisCommand(command) {
       );
     }
 
+    function normalizeWorkListItemForImport(item) {
+      return {
+        sortIndex: item?.sortIndex ?? null,
+        workGuid: item?.work?.guid || null,
+        workCode: item?.work?.code || null,
+        workName: item?.work?.workName || "",
+        unitName:
+          item?.unit ||
+          item?.okei?.nationalSymbolName ||
+          item?.work?.dimensionsUnit?.dimensionsUnitString ||
+          null,
+        price: item?.price ?? null,
+        volume: item?.amount ?? null,
+        quantity: item?.count ?? null,
+        cost: item?.totalCost ?? null
+      };
+    }
+
+    function normalizeWorkListForImport(item) {
+      return {
+        guid: item?.guid || null,
+        houseGuid: item?.houseGuid || null,
+        status: item?.status || null,
+        wasApproved: Boolean(item?.wasApproved),
+        lastUpdateDate: item?.lastUpdateDate || null,
+        period: {
+          from: {
+            month: item?.period?.from?.month ?? null,
+            year: item?.period?.from?.year ?? null
+          },
+          to: {
+            month: item?.period?.to?.month ?? null,
+            year: item?.period?.to?.year ?? null
+          }
+        },
+        summary: {
+          totalSquare: item?.summary?.totalSquare ?? null,
+          monthsCount: item?.summary?.monthsCount ?? null,
+          worksCount: item?.summary?.worksCount ?? null,
+          totalCost: item?.summary?.totalCost ?? null
+        },
+        items: (Array.isArray(item?.workListItems) ? item.workListItems : []).map(
+          normalizeWorkListItemForImport
+        )
+      };
+    }
+
+    async function listOrganizationWorkLists(payload) {
+      const seedHouseObjectGuid = String(
+        payload?.seedHouseObjectGuid || ""
+      ).trim();
+      if (!seedHouseObjectGuid) {
+        throw new Error(
+          "Для загрузки перечней нужен хотя бы один дом с GUID объекта жилищного фонда."
+        );
+      }
+
+      const house = await getHouseInfo(seedHouseObjectGuid);
+      const organizationGuid = String(house?.organizationGuid || "").trim();
+      if (!organizationGuid) {
+        throw new Error(
+          "Не удалось определить организацию для загрузки перечней из ГИС ЖКХ."
+        );
+      }
+
+      const seedCriteria = addressCriteria(house?.item);
+      const addressSearchCriteria = {};
+      if (seedCriteria.regionRef) {
+        addressSearchCriteria.regionRef = seedCriteria.regionRef;
+      }
+
+      const pageSize = 10;
+      const seen = new Set();
+      const items = [];
+      let pages = 0;
+
+      // The work-list endpoint observed in the GIS ЖКХ UI reports "total" as the
+      // number of rows on the current page, not as a reliable grand total.
+      // Therefore pagination continues until a short/empty page. Repeated GUIDs
+      // are also used as a safety stop so a server-side paging regression cannot
+      // cause an endless loop.
+      for (let page = 1; page <= 500; page += 1) {
+        const data = await request(
+          "POST",
+          "/workplanning/api/rest/services/search/worklists;pageIndex=" +
+            page +
+            ";elementsPerPage=" +
+            pageSize,
+          {
+            period: { from: null, to: null },
+            organizationGuid,
+            addressSearchCriteria
+          },
+          STATE_WORKPLANNING
+        );
+
+        const pageItems = Array.isArray(data?.items) ? data.items : [];
+        pages = page;
+        if (!pageItems.length) break;
+
+        let added = 0;
+        for (const item of pageItems) {
+          const guid = String(item?.guid || "").trim();
+          if (!guid || seen.has(guid)) continue;
+          seen.add(guid);
+          items.push(normalizeWorkListForImport(item));
+          added += 1;
+        }
+
+        if (pageItems.length < pageSize || added === 0) break;
+      }
+
+      return {
+        organizationGuid,
+        pages,
+        items
+      };
+    }
+
     async function uploadFile(payload) {
       const bytes = Uint8Array.from(atob(payload.fileBase64), (char) =>
         char.charCodeAt(0)
@@ -1636,6 +1755,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await listManagedHouses(payload)
+      };
+    }
+
+    if (command.type === "list_work_lists") {
+      return {
+        ok: true,
+        result: await listOrganizationWorkLists(payload)
       };
     }
 
