@@ -841,6 +841,15 @@ class HousesPage(QWidget):
             self.import_button,
         ):
             button.setEnabled(False)
+        for action in (
+            self.sync_houses_action,
+            self.sync_management_action,
+            self.sync_work_lists_action,
+            self.import_houses_action,
+        ):
+            action.setEnabled(False)
+        self.gis_actions_button.setEnabled(False)
+        self.files_actions_button.setEnabled(False)
         if self._current_house_id:
             self.sync_management_button.setEnabled(False)
         self._set_bulk_status(status_text)
@@ -855,6 +864,15 @@ class HousesPage(QWidget):
             self.import_button,
         ):
             button.setEnabled(True)
+        for action in (
+            self.sync_houses_action,
+            self.sync_management_action,
+            self.sync_work_lists_action,
+            self.import_houses_action,
+        ):
+            action.setEnabled(True)
+        self.gis_actions_button.setEnabled(True)
+        self.files_actions_button.setEnabled(True)
         if self._current_house_id:
             self.sync_management_button.setEnabled(True)
         self._set_bulk_status(status_text)
