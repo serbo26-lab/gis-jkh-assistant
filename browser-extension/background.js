@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.20";
+const HELPER_CODE_VERSION = "0.1.22";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -85,22 +85,33 @@ async function executeInGisTab(command) {
     throw new Error("Не найдена открытая вкладка личного кабинета ГИС ЖКХ.");
   }
 
-  const execution = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    world: "MAIN",
-    func: runGisCommand,
-    args: [command]
-  });
+  // Long registry operations can take several minutes. Keep the desktop-side
+  // connection status fresh while the command is still executing in the GIS tab.
+  const heartbeat = setInterval(() => {
+    hello();
+  }, 10000);
 
-  if (!execution.length) {
-    throw new Error("Не удалось выполнить команду во вкладке ГИС ЖКХ.");
-  }
+  try {
+    const execution = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: runGisCommand,
+      args: [command]
+    });
 
-  const result = execution[0].result;
-  if (!result || result.ok !== true) {
-    throw new Error(result?.error || "ГИС ЖКХ вернул неизвестную ошибку.");
+    if (!execution.length) {
+      throw new Error("Не удалось выполнить команду во вкладке ГИС ЖКХ.");
+    }
+
+    const result = execution[0].result;
+    if (!result || result.ok !== true) {
+      throw new Error(result?.error || "ГИС ЖКХ вернул неизвестную ошибку.");
+    }
+    return result.result || {};
+  } finally {
+    clearInterval(heartbeat);
+    await hello();
   }
-  return result.result || {};
 }
 
 let reconnectDelayMs = 1000;
@@ -736,8 +747,11 @@ async function runGisCommand(command) {
     }
 
     async function listOrganizationWorkLists(payload) {
+      const requestedHouseObjectGuid = String(
+        payload?.houseObjectGuid || ""
+      ).trim();
       const seedHouseObjectGuid = String(
-        payload?.seedHouseObjectGuid || ""
+        requestedHouseObjectGuid || payload?.seedHouseObjectGuid || ""
       ).trim();
       if (!seedHouseObjectGuid) {
         throw new Error(
@@ -755,7 +769,9 @@ async function runGisCommand(command) {
 
       const seedCriteria = addressCriteria(house?.item);
       const addressSearchCriteria = {};
-      if (seedCriteria.regionRef) {
+      if (requestedHouseObjectGuid) {
+        Object.assign(addressSearchCriteria, seedCriteria);
+      } else if (seedCriteria.regionRef) {
         addressSearchCriteria.regionRef = seedCriteria.regionRef;
       }
 
@@ -803,6 +819,8 @@ async function runGisCommand(command) {
       return {
         organizationGuid,
         pages,
+        scope: requestedHouseObjectGuid ? "house" : "organization",
+        houseObjectGuid: requestedHouseObjectGuid || null,
         items
       };
     }

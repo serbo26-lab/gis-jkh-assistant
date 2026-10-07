@@ -44,6 +44,10 @@ from gis_jkh_assistant.gis_files.housing_objects import (
     HousingObjectsImportError,
     parse_housing_objects_export,
 )
+from gis_jkh_assistant.work_lists.gis_sync import (
+    apply_gis_work_list_sync,
+    prepare_gis_work_list_sync,
+)
 
 from .dialogs import HouseDialog, HouseTariffDialog, OrganizationDialog
 from .gis_integration_worker import GisIntegrationWorker
@@ -66,6 +70,7 @@ class HousesPage(QWidget):
         self.integration_gateway = integration_gateway
         self._management_worker: GisIntegrationWorker | None = None
         self._houses_sync_worker: GisIntegrationWorker | None = None
+        self._work_lists_sync_worker: GisIntegrationWorker | None = None
         self._current_house_id: str | None = None
         self._pending_house_id: str | None = None
         self._pending_fields: dict[str, object] = {}
@@ -135,6 +140,16 @@ class HousesPage(QWidget):
             "Получить период управления и реквизиты договора для всех домов "
             "выбранной управляющей организации."
         )
+        self.sync_all_work_lists_button = QPushButton(
+            "Загрузить перечни работ МКД из ГИС ЖКХ"
+        )
+        self.sync_all_work_lists_button.setToolTip(
+            "Получить перечни работ и услуг для всех домов выбранной "
+            "управляющей организации."
+        )
+        self.bulk_work_lists_status = QLabel("")
+        self.bulk_work_lists_status.setObjectName("Muted")
+        self.bulk_work_lists_status.hide()
         self.bulk_management_status = QLabel("")
         self.bulk_management_status.setObjectName("Muted")
         self.bulk_management_status.hide()
@@ -149,6 +164,9 @@ class HousesPage(QWidget):
         self.import_house_data_button.clicked.connect(self._import_house_data)
         self.sync_all_management_button.clicked.connect(
             self._sync_all_management_from_gis
+        )
+        self.sync_all_work_lists_button.clicked.connect(
+            self._sync_all_work_lists_from_gis
         )
 
         actions_row = QHBoxLayout()
@@ -188,9 +206,11 @@ class HousesPage(QWidget):
         gis_houses_row.setSpacing(8)
         gis_houses_row.addWidget(self.sync_houses_button)
         gis_houses_row.addWidget(self.sync_all_management_button)
+        gis_houses_row.addWidget(self.sync_all_work_lists_button)
         gis_houses_row.addWidget(self.import_button)
         gis_houses_row.addWidget(self.houses_sync_status)
         gis_houses_row.addWidget(self.bulk_management_status)
+        gis_houses_row.addWidget(self.bulk_work_lists_status)
         gis_houses_row.addStretch(1)
         toolbar_layout.addLayout(gis_houses_row)
 
@@ -983,6 +1003,159 @@ class HousesPage(QWidget):
         def finished() -> None:
             self._houses_sync_worker = None
             self.sync_houses_button.setEnabled(True)
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
+    def _sync_all_work_lists_from_gis(self) -> None:
+        self._flush_autosave()
+        if self.integration_gateway is None:
+            return
+
+        organization_id = self.organization_combo.currentData()
+        if not organization_id:
+            QMessageBox.information(
+                self,
+                "Не выбрана УО",
+                "Сначала выберите управляющую организацию.",
+            )
+            return
+
+        active_workers = (
+            self._houses_sync_worker,
+            self._management_worker,
+            self._work_lists_sync_worker,
+        )
+        if any(worker is not None and worker.isRunning() for worker in active_workers):
+            QMessageBox.information(
+                self,
+                "Операция уже выполняется",
+                "Дождитесь завершения текущего запроса к ГИС ЖКХ.",
+            )
+            return
+
+        status = self.integration_gateway.status()
+        if not (status.running and status.helper_connected and status.gis_page_ready):
+            QMessageBox.information(
+                self,
+                "Нет подключения к ГИС ЖКХ",
+                "Откройте личный кабинет ГИС ЖКХ и убедитесь, что "
+                "ГИС ЖКХ помощник подключен.",
+            )
+            return
+
+        houses = self.repository.list_houses(str(organization_id))
+        seed_house = next(
+            (house for house in houses if house.house_object_guid),
+            None,
+        )
+        if seed_house is None:
+            QMessageBox.information(
+                self,
+                "Нет GUID домов",
+                "Сначала загрузите сведения о МКД из ГИС ЖКХ.",
+            )
+            return
+
+        self.sync_all_work_lists_button.setEnabled(False)
+        self.bulk_work_lists_status.show()
+        self.bulk_work_lists_status.setText("получение…")
+
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "list_work_lists",
+            {"seedHouseObjectGuid": seed_house.house_object_guid},
+            timeout=420.0,
+            parent=self,
+        )
+        self._work_lists_sync_worker = worker
+
+        def succeeded(result: dict) -> None:
+            remote_items = [
+                item for item in list(result.get("items") or [])
+                if isinstance(item, dict)
+            ]
+            preview = prepare_gis_work_list_sync(
+                self.repository,
+                str(organization_id),
+                remote_items,
+            )
+            self.bulk_work_lists_status.setText(
+                f"{preview.received} получено"
+            )
+
+            summary = (
+                f"Получено из ГИС ЖКХ: {preview.received}.\n"
+                f"Новых перечней: {len(preview.new_rows)}.\n"
+                f"Уже связанных: {len(preview.linked_rows)}.\n"
+                f"Конфликтов: {len(preview.conflicts)}.\n"
+                f"Не сопоставлено с локальными домами: {len(preview.unmatched)}."
+            )
+
+            if not preview.new_rows and not preview.linked_rows:
+                details = ""
+                if preview.conflicts:
+                    details = "\n\n" + "\n".join(preview.conflicts[:5])
+                QMessageBox.information(
+                    self,
+                    "Перечни МКД из ГИС ЖКХ",
+                    summary + "\n\nИзменять локальную базу не требуется." + details,
+                )
+                self.bulk_work_lists_status.setText("без изменений")
+                return
+
+            answer = QMessageBox.question(
+                self,
+                "Загрузить перечни работ по всем МКД?",
+                summary
+                + "\n\nНовые перечни будут добавлены в локальную базу. "
+                "Существующие локальные перечни автоматически не перезаписываются.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.bulk_work_lists_status.setText("отменено")
+                return
+
+            applied = apply_gis_work_list_sync(self.repository, preview)
+            self.bulk_work_lists_status.setText(
+                f"+{applied.imported}, статусы {applied.updated}"
+            )
+
+            result_text = (
+                f"Добавлено перечней: {applied.imported}.\n"
+                f"Обновлено статусов: {applied.updated}.\n"
+                f"Конфликтов пропущено: {len(preview.conflicts)}.\n"
+                f"Не сопоставлено домов: {len(preview.unmatched)}."
+            )
+            if applied.errors:
+                result_text += (
+                    f"\nОшибок при сохранении: {len(applied.errors)}.\n\n"
+                    + "\n".join(applied.errors[:5])
+                )
+                QMessageBox.warning(
+                    self,
+                    "Массовая загрузка завершена с замечаниями",
+                    result_text,
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Массовая загрузка перечней завершена",
+                    result_text,
+                )
+
+        def failed(message: str) -> None:
+            self.bulk_work_lists_status.setText("ошибка")
+            QMessageBox.critical(
+                self,
+                "Не удалось загрузить перечни МКД",
+                message,
+            )
+
+        def finished() -> None:
+            self._work_lists_sync_worker = None
+            self.sync_all_work_lists_button.setEnabled(True)
 
         worker.succeeded.connect(succeeded)
         worker.failed.connect(failed)
