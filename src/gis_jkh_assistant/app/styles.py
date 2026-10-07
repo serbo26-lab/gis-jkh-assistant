@@ -25,6 +25,15 @@ QFrame#SidebarStatusCard {
     border: 1px solid #d9d9d9;
     border-radius: 8px;
 }
+QFrame#BulkStatusFrame {
+    background: #f7f7f7;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+}
+QLabel#BulkStatusText {
+    color: #444444;
+    font-weight: 500;
+}
 QLabel#SidebarStatusTitle {
     font-size: 9pt;
     font-weight: 600;
