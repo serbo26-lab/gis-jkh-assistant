@@ -98,9 +98,13 @@ class SelectActWorksDialog(QDialog):
     def _set_checks(self, item_ids: set[str]) -> None:
         for index in range(self.list.count()):
             row = self.list.item(index)
+            item_id = str(row.data(Qt.ItemDataRole.UserRole))
+            if item_id in self.locked_ids:
+                row.setCheckState(Qt.CheckState.Unchecked)
+                continue
             row.setCheckState(
                 Qt.CheckState.Checked
-                if row.data(Qt.ItemDataRole.UserRole) in item_ids
+                if item_id in item_ids
                 else Qt.CheckState.Unchecked
             )
 
@@ -133,12 +137,15 @@ class GenerateAcceptanceActDialog(QDialog):
         items: list[QualityAssessmentItem],
         year: int,
         month: int,
+        selected_ids: set[str] | None = None,
+        locked_ids: set[str] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.items = items
         self.year = int(year)
         self.month = int(month)
+        self.locked_ids = set(locked_ids or set())
         self.setWindowTitle("Сформировать акт выполненных работ")
         self.resize(760, 650)
 
@@ -197,16 +204,34 @@ class GenerateAcceptanceActDialog(QDialog):
         root.addLayout(quick)
 
         self.list = QListWidget()
-        included_ids = {item.id for item in items if item.included}
+        included_ids = (
+            set(selected_ids)
+            if selected_ids is not None
+            else {item.id for item in items if item.included}
+        )
         for item in items:
-            row = QListWidgetItem(item.work_name)
-            row.setData(Qt.ItemDataRole.UserRole, item.id)
-            row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            row.setCheckState(
-                Qt.CheckState.Checked
-                if item.id in included_ids
-                else Qt.CheckState.Unchecked
+            locked = item.id in self.locked_ids
+            label = (
+                f"{item.work_name} — есть пользовательский/импортированный акт"
+                if locked
+                else item.work_name
             )
+            row = QListWidgetItem(label)
+            row.setData(Qt.ItemDataRole.UserRole, item.id)
+            if locked:
+                row.setFlags(row.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                row.setToolTip(
+                    "Строка исключена из автоматического акта: "
+                    "к ней уже привязан пользовательский или импортированный акт."
+                )
+                row.setCheckState(Qt.CheckState.Unchecked)
+            else:
+                row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                row.setCheckState(
+                    Qt.CheckState.Checked
+                    if item.id in included_ids
+                    else Qt.CheckState.Unchecked
+                )
             self.list.addItem(row)
         root.addWidget(self.list, 1)
 
@@ -486,10 +511,30 @@ class QualityMonthActsDialog(QDialog):
         items = self._items()
         if not items:
             return
+        protected = {
+            item.id
+            for item in items
+            if any(not act.generated for act in self.store.list_acts(item.id))
+        }
+        selected_ids = {
+            item.id
+            for item in items
+            if item.included and item.id not in protected
+        }
+        if not selected_ids:
+            QMessageBox.information(
+                self,
+                "Нет строк для автоматического акта",
+                "У всех включённых работ уже есть пользовательские или "
+                "импортированные акты. Они не будут перезаписаны.",
+            )
+            return
         dialog = GenerateAcceptanceActDialog(
             items=items,
             year=self.year,
             month=self.month,
+            selected_ids=selected_ids,
+            locked_ids=protected,
             parent=self,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
