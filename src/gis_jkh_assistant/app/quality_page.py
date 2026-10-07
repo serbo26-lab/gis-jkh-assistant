@@ -1398,9 +1398,40 @@ class QualityAssessmentPage(QWidget):
             return
         if self._queue_command is None:
             return
-        payload = self._payload_for_period(period_id, show_error=False)
+
         period = self.store.get_period(period_id)
-        if payload is None or period is None:
+        if period is None:
+            return
+
+        if self._queue_command == "load_quality_assessment":
+            work_list = self.repository.get_work_list(period.work_list_id)
+            house = (
+                self.repository.get_house(work_list.house_id)
+                if work_list is not None
+                else None
+            )
+            fias = (
+                (house.fias_house_guid or house.gis_house_guid)
+                if house is not None
+                else None
+            )
+            if (
+                work_list is None
+                or not work_list.gis_work_list_guid
+                or not fias
+            ):
+                payload = None
+            else:
+                payload = {
+                    "fiasHouseCode": fias,
+                    "workListGuid": work_list.gis_work_list_guid,
+                    "year": period.year,
+                    "month": period.month,
+                }
+        else:
+            payload = self._payload_for_period(period_id, show_error=False)
+
+        if payload is None:
             self._queue_running = False
             self._queue_failed_period_id = period_id
             self.queue_label.setText(
@@ -1413,19 +1444,39 @@ class QualityAssessmentPage(QWidget):
         self._integration_busy = True
         self._refresh_gis_buttons()
         command_succeeded = {"value": False}
+        timeout = 150.0 if self._queue_command == "load_quality_assessment" else 180.0
         worker = GisIntegrationWorker(
             self.integration_gateway,
             self._queue_command,
             payload,
-            timeout=180.0,
+            timeout=timeout,
             parent=self,
         )
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
             command_succeeded["value"] = True
-            self._apply_gis_result(period_id, result)
-            self._queue_successes += 1
+            if self._queue_command == "load_quality_assessment":
+                if result.get("found"):
+                    try:
+                        apply_remote_quality_assessment(
+                            self.store,
+                            work_list_id=period.work_list_id,
+                            year=period.year,
+                            month=period.month,
+                            remote=result,
+                        )
+                    except ValueError as exc:
+                        command_succeeded["value"] = False
+                        failed(str(exc))
+                        return
+                    self._queue_successes += 1
+                else:
+                    self._queue_skipped += 1
+            else:
+                self._apply_gis_result(period_id, result)
+                self._queue_successes += 1
+
             self._queue_index += 1
             self.queue_progress.setValue(self._queue_index)
             self._refresh_year_status()
@@ -1453,7 +1504,6 @@ class QualityAssessmentPage(QWidget):
         def finished() -> None:
             self._integration_worker = None
             if command_succeeded["value"] and self._queue_failed_period_id is None:
-                # Keep all GIS buttons disabled between queue items.
                 self._integration_busy = True
                 self._refresh_integration_status()
                 QTimer.singleShot(250, self._start_next_queue_item)
