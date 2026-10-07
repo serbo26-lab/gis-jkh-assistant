@@ -204,6 +204,7 @@ class WorkListsPage(QWidget):
         self.export_template_status.setWordWrap(True)
         context_layout.addWidget(self.export_template_status, 7, 0, 1, 4)
 
+        self.load_gis_lists_button = QPushButton("Загрузить перечни из ГИС ЖКХ")
         self.load_export_template_button = QPushButton("Загрузить / обновить шаблон экспорта")
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
         self.upload_to_gis_button = QPushButton("Загрузить в ГИС ЖКХ")
@@ -215,11 +216,12 @@ class WorkListsPage(QWidget):
         self.gis_actions = gis_actions
         gis_actions.setHorizontalSpacing(8)
         gis_actions.setVerticalSpacing(6)
-        gis_actions.addWidget(self.load_export_template_button, 0, 0)
-        gis_actions.addWidget(self.export_button, 0, 2)
-        gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
-        gis_actions.addWidget(self.sync_gis_button, 1, 1)
-        gis_actions.addWidget(self.approve_gis_button, 1, 2)
+        gis_actions.addWidget(self.load_gis_lists_button, 0, 0, 1, 3)
+        gis_actions.addWidget(self.load_export_template_button, 1, 0)
+        gis_actions.addWidget(self.export_button, 1, 2)
+        gis_actions.addWidget(self.upload_to_gis_button, 2, 0)
+        gis_actions.addWidget(self.sync_gis_button, 2, 1)
+        gis_actions.addWidget(self.approve_gis_button, 2, 2)
         gis_actions.setColumnStretch(1, 1)
         context_layout.addLayout(gis_actions, 8, 0, 1, 4)
 
@@ -380,6 +382,7 @@ class WorkListsPage(QWidget):
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         self.house_combo.currentIndexChanged.connect(self._house_changed)
         self.templates_button.clicked.connect(self._manage_templates)
+        self.load_gis_lists_button.clicked.connect(self._load_work_lists_from_gis)
         self.load_export_template_button.clicked.connect(self._load_or_update_export_template)
         self.export_button.clicked.connect(self._export_current_work_list)
         self.upload_to_gis_button.clicked.connect(self._upload_current_work_list_to_gis)
@@ -483,7 +486,12 @@ class WorkListsPage(QWidget):
                 if work_list.template_id
                 else None
             )
-            template_name = template.name if template else "Пустой перечень"
+            if template:
+                template_name = template.name
+            elif work_list.gis_work_list_guid:
+                template_name = "Из ГИС ЖКХ"
+            else:
+                template_name = "Пустой перечень"
             status = self._work_list_status_text(work_list)
             item = QListWidgetItem(
                 f"{work_list.period_label}\n{template_name} • {status}"
@@ -920,7 +928,12 @@ class WorkListsPage(QWidget):
             if work_list.template_id
             else None
         )
-        template_name = template.name if template else "Без шаблона"
+        if template:
+            template_name = template.name
+        elif work_list.gis_work_list_guid:
+            template_name = "Из ГИС ЖКХ"
+        else:
+            template_name = "Без шаблона"
         status = "Локальный" if work_list.status.value == "local" else work_list.status.value
 
         for row in range(self.work_lists.count()):
@@ -1063,6 +1076,11 @@ class WorkListsPage(QWidget):
             else None
         )
         gis_status = work_list.gis_status if work_list else None
+
+        organization_selected = bool(self.organization_combo.currentData())
+        self.load_gis_lists_button.setEnabled(
+            ready and organization_selected and not self._integration_busy
+        )
 
         enabled = ready and selected and not self._integration_busy
         self.sync_gis_button.setEnabled(enabled)
@@ -1504,6 +1522,273 @@ class WorkListsPage(QWidget):
             timeout=150.0,
         )
 
+    def _load_work_lists_from_gis(self) -> None:
+        self._save_period()
+
+        organization_id = self.organization_combo.currentData()
+        if not organization_id:
+            QMessageBox.information(
+                self,
+                "Не выбрана организация",
+                "Сначала выберите управляющую организацию.",
+            )
+            return
+
+        if not self._directory_ready():
+            QMessageBox.information(
+                self,
+                "Нет подключения к ГИС ЖКХ",
+                "Откройте личный кабинет ГИС ЖКХ и убедитесь, что "
+                "ГИС ЖКХ помощник подключен.",
+            )
+            return
+
+        houses = self.repository.list_houses(organization_id)
+        seed_house = next(
+            (house for house in houses if house.house_object_guid),
+            None,
+        )
+        if seed_house is None:
+            QMessageBox.information(
+                self,
+                "Нет GUID дома",
+                "Для загрузки перечней сначала загрузите сведения о МКД из ГИС ЖКХ.",
+            )
+            return
+
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Операция уже выполняется",
+                "Дождитесь завершения текущей операции с ГИС ЖКХ.",
+            )
+            return
+
+        self._set_integration_busy(True, "Загрузка перечней из ГИС ЖКХ…")
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "list_work_lists",
+            {"seedHouseObjectGuid": seed_house.house_object_guid},
+            timeout=150.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            remote_items = result.get("items")
+            if not isinstance(remote_items, list):
+                remote_items = []
+
+            houses_by_guid = {}
+            for house in houses:
+                for value in (
+                    house.house_object_guid,
+                    house.gis_house_guid,
+                    house.fias_house_guid,
+                ):
+                    key = str(value or "").strip()
+                    if key:
+                        houses_by_guid[key] = house
+
+            linked: list[tuple[object, dict]] = []
+            unmatched: list[dict] = []
+            conflict_rows: list[tuple[object | None, dict, str]] = []
+            candidates: list[tuple[object, dict, tuple]] = []
+
+            for remote in remote_items:
+                if not isinstance(remote, dict):
+                    continue
+                gis_guid = str(remote.get("guid") or "").strip()
+                if not gis_guid:
+                    conflict_rows.append(
+                        (None, remote, "ГИС ЖКХ не вернул GUID перечня")
+                    )
+                    continue
+
+                existing = self.repository.find_work_list_by_gis_guid(gis_guid)
+                if existing is not None:
+                    linked.append((existing, remote))
+                    continue
+
+                house_guid = str(remote.get("houseGuid") or "").strip()
+                house = houses_by_guid.get(house_guid)
+                if house is None:
+                    unmatched.append(remote)
+                    continue
+
+                period = remote.get("period") if isinstance(remote.get("period"), dict) else {}
+                period_from = (
+                    period.get("from")
+                    if isinstance(period.get("from"), dict)
+                    else {}
+                )
+                period_to = (
+                    period.get("to")
+                    if isinstance(period.get("to"), dict)
+                    else {}
+                )
+                try:
+                    start_year = int(period_from.get("year"))
+                    start_month = int(period_from.get("month"))
+                    end_year = int(period_to.get("year"))
+                    end_month = int(period_to.get("month"))
+                except (TypeError, ValueError):
+                    conflict_rows.append(
+                        (house, remote, "Некорректный период перечня")
+                    )
+                    continue
+
+                if (
+                    not 1 <= start_month <= 12
+                    or not 1 <= end_month <= 12
+                    or (start_year, start_month) > (end_year, end_month)
+                ):
+                    conflict_rows.append(
+                        (house, remote, "Некорректный период перечня")
+                    )
+                    continue
+
+                local_period = self.repository.find_work_lists_for_exact_period(
+                    house.id,
+                    start_year=start_year,
+                    start_month=start_month,
+                    end_year=end_year,
+                    end_month=end_month,
+                )
+                if local_period:
+                    conflict_rows.append(
+                        (
+                            house,
+                            remote,
+                            "Локально уже есть перечень на этот период "
+                            "с другим GUID ГИС ЖКХ",
+                        )
+                    )
+                    continue
+
+                key = (
+                    house.id,
+                    start_year,
+                    start_month,
+                    end_year,
+                    end_month,
+                )
+                candidates.append((house, remote, key))
+
+            grouped: dict[tuple, list[tuple[object, dict]]] = {}
+            for house, remote, key in candidates:
+                grouped.setdefault(key, []).append((house, remote))
+
+            new_rows: list[tuple[object, dict]] = []
+            for rows in grouped.values():
+                if len(rows) == 1:
+                    new_rows.append(rows[0])
+                else:
+                    for house, remote in rows:
+                        conflict_rows.append(
+                            (
+                                house,
+                                remote,
+                                "В ГИС ЖКХ найдено несколько перечней "
+                                "на один дом и период",
+                            )
+                        )
+
+            preview = (
+                f"Получено из ГИС ЖКХ: {len(remote_items)}\n"
+                f"Новых перечней: {len(new_rows)}\n"
+                f"Уже связанных: {len(linked)}\n"
+                f"Конфликтов: {len(conflict_rows)}\n"
+                f"Не сопоставлено с локальными домами: {len(unmatched)}"
+            )
+
+            if not new_rows and not linked:
+                QMessageBox.information(
+                    self,
+                    "Загрузка перечней из ГИС ЖКХ",
+                    preview + "\n\nИзменять локальную базу не требуется.",
+                )
+                return
+
+            answer = QMessageBox.question(
+                self,
+                "Загрузить перечни из ГИС ЖКХ?",
+                preview
+                + "\n\nНовые перечни будут добавлены в локальную базу. "
+                "Состав существующих локальных перечней изменяться не будет. "
+                "Для уже связанных перечней обновится только статус ГИС ЖКХ.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+            imported = 0
+            updated = 0
+            errors: list[str] = []
+
+            for house, remote in new_rows:
+                try:
+                    self.repository.import_gis_work_list(
+                        house_id=house.id,
+                        remote=remote,
+                    )
+                    imported += 1
+                except ValueError as exc:
+                    errors.append(str(exc))
+
+            for local, remote in linked:
+                try:
+                    self.repository.update_work_list_gis_state(
+                        local.id,
+                        gis_work_list_guid=str(remote.get("guid") or "").strip(),
+                        gis_status=str(remote.get("status") or "").strip() or None,
+                        gis_last_error=None,
+                    )
+                    updated += 1
+                except (sqlite3.Error, ValueError) as exc:
+                    errors.append(str(exc))
+
+            self.refresh_work_lists()
+
+            result_text = (
+                f"Добавлено перечней: {imported}\n"
+                f"Обновлено статусов: {updated}\n"
+                f"Конфликтов пропущено: {len(conflict_rows)}\n"
+                f"Не сопоставлено домов: {len(unmatched)}"
+            )
+            if errors:
+                result_text += (
+                    f"\nОшибок при сохранении: {len(errors)}\n\n"
+                    + "\n".join(errors[:5])
+                )
+                QMessageBox.warning(
+                    self,
+                    "Загрузка перечней завершена с замечаниями",
+                    result_text,
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Перечни загружены",
+                    result_text,
+                )
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(
+                self,
+                "Ошибка загрузки перечней из ГИС ЖКХ",
+                message,
+            )
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._set_integration_busy(False)
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
     def _sync_current_work_list_from_gis(self) -> None:
         context = self._current_gis_context()
         if not context:
@@ -1837,11 +2122,12 @@ class WorkListsPage(QWidget):
             self.creation_actions.setColumnStretch(1, 1)
             self.creation_actions.setColumnStretch(2, 1)
 
-            self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
-            self.gis_actions.addWidget(self.export_button, 0, 2)
-            self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
-            self.gis_actions.addWidget(self.sync_gis_button, 1, 1)
-            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
+            self.gis_actions.addWidget(self.load_gis_lists_button, 0, 0, 1, 3)
+            self.gis_actions.addWidget(self.load_export_template_button, 1, 0)
+            self.gis_actions.addWidget(self.export_button, 1, 2)
+            self.gis_actions.addWidget(self.upload_to_gis_button, 2, 0)
+            self.gis_actions.addWidget(self.sync_gis_button, 2, 1)
+            self.gis_actions.addWidget(self.approve_gis_button, 2, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
             self.items_actions.addWidget(self.add_works_button, 0, 0)
@@ -1867,11 +2153,12 @@ class WorkListsPage(QWidget):
             self.creation_actions.setColumnStretch(1, 1)
             self.creation_actions.setColumnStretch(2, 1)
 
-            self.gis_actions.addWidget(self.load_export_template_button, 0, 0)
-            self.gis_actions.addWidget(self.export_button, 0, 2)
-            self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
-            self.gis_actions.addWidget(self.sync_gis_button, 1, 1)
-            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
+            self.gis_actions.addWidget(self.load_gis_lists_button, 0, 0, 1, 3)
+            self.gis_actions.addWidget(self.load_export_template_button, 1, 0)
+            self.gis_actions.addWidget(self.export_button, 1, 2)
+            self.gis_actions.addWidget(self.upload_to_gis_button, 2, 0)
+            self.gis_actions.addWidget(self.sync_gis_button, 2, 1)
+            self.gis_actions.addWidget(self.approve_gis_button, 2, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
             self.items_actions.addWidget(self.add_works_button, 0, 0)
@@ -1900,11 +2187,12 @@ class WorkListsPage(QWidget):
             self.creation_actions.setColumnStretch(0, 1)
             self.creation_actions.setColumnStretch(1, 1)
 
-            self.gis_actions.addWidget(self.load_export_template_button, 0, 0, 1, 2)
-            self.gis_actions.addWidget(self.export_button, 1, 0, 1, 2)
-            self.gis_actions.addWidget(self.upload_to_gis_button, 2, 0, 1, 2)
-            self.gis_actions.addWidget(self.sync_gis_button, 3, 0)
-            self.gis_actions.addWidget(self.approve_gis_button, 3, 1)
+            self.gis_actions.addWidget(self.load_gis_lists_button, 0, 0, 1, 2)
+            self.gis_actions.addWidget(self.load_export_template_button, 1, 0, 1, 2)
+            self.gis_actions.addWidget(self.export_button, 2, 0, 1, 2)
+            self.gis_actions.addWidget(self.upload_to_gis_button, 3, 0, 1, 2)
+            self.gis_actions.addWidget(self.sync_gis_button, 4, 0)
+            self.gis_actions.addWidget(self.approve_gis_button, 4, 1)
             self.gis_actions.setColumnStretch(0, 1)
             self.gis_actions.setColumnStretch(1, 1)
 

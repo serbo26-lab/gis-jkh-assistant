@@ -1282,6 +1282,188 @@ class Repository:
             ).fetchall()
         return [self._work_list_from_row(row) for row in rows]
 
+    def find_work_list_by_gis_guid(
+        self,
+        gis_work_list_guid: str | None,
+    ) -> WorkList | None:
+        guid = _clean(gis_work_list_guid)
+        if not guid:
+            return None
+        row = self.connection.execute(
+            """
+            SELECT * FROM work_lists
+            WHERE gis_work_list_guid = ?
+            LIMIT 1
+            """,
+            (guid,),
+        ).fetchone()
+        return self._work_list_from_row(row) if row else None
+
+    def find_work_lists_for_exact_period(
+        self,
+        house_id: str,
+        *,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+    ) -> list[WorkList]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM work_lists
+            WHERE house_id = ?
+              AND start_year = ?
+              AND start_month = ?
+              AND end_year = ?
+              AND end_month = ?
+            ORDER BY created_at
+            """,
+            (
+                house_id,
+                int(start_year),
+                int(start_month),
+                int(end_year),
+                int(end_month),
+            ),
+        ).fetchall()
+        return [self._work_list_from_row(row) for row in rows]
+
+    def import_gis_work_list(
+        self,
+        *,
+        house_id: str,
+        remote: dict,
+    ) -> WorkList:
+        """Create a local list from a GIS ЖКХ list without overwriting local data."""
+
+        house = self.get_house(house_id)
+        if house is None:
+            raise ValueError("Дом для импортируемого перечня не найден.")
+
+        gis_guid = _required_text(remote.get("guid"), "GUID перечня ГИС ЖКХ")
+        if self.find_work_list_by_gis_guid(gis_guid) is not None:
+            raise ValueError("Этот перечень ГИС ЖКХ уже связан с локальным перечнем.")
+
+        period = remote.get("period") if isinstance(remote.get("period"), dict) else {}
+        period_from = (
+            period.get("from") if isinstance(period.get("from"), dict) else {}
+        )
+        period_to = period.get("to") if isinstance(period.get("to"), dict) else {}
+
+        try:
+            start_year = int(period_from.get("year"))
+            start_month = int(period_from.get("month"))
+            end_year = int(period_to.get("year"))
+            end_month = int(period_to.get("month"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ГИС ЖКХ вернул некорректный период перечня.") from exc
+
+        if not 1 <= start_month <= 12 or not 1 <= end_month <= 12:
+            raise ValueError("ГИС ЖКХ вернул некорректный месяц периода перечня.")
+        if (start_year, start_month) > (end_year, end_month):
+            raise ValueError("ГИС ЖКХ вернул некорректный период перечня.")
+
+        conflicts = self.find_work_lists_for_exact_period(
+            house_id,
+            start_year=start_year,
+            start_month=start_month,
+            end_year=end_year,
+            end_month=end_month,
+        )
+        if conflicts:
+            raise ValueError(
+                "Для этого дома и периода уже существует локальный перечень "
+                "с другим GUID ГИС ЖКХ."
+            )
+
+        gis_status = str(remote.get("status") or "").strip().upper() or None
+        if gis_status == "APPROVED":
+            local_status = WorkListStatus.PLACED
+        elif gis_status == "DRAFT":
+            local_status = WorkListStatus.GIS_DRAFT
+        else:
+            local_status = WorkListStatus.LOCAL
+
+        summary = remote.get("summary") if isinstance(remote.get("summary"), dict) else {}
+        remote_items = remote.get("items")
+        if not isinstance(remote_items, list):
+            remote_items = []
+
+        work_list_id = str(uuid.uuid4())
+        timestamp = _now()
+
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO work_lists (
+                    id, house_id, template_id, base_year,
+                    start_year, start_month, end_year, end_month,
+                    planned_total, planned_tariff, planned_area, planned_months,
+                    status, gis_work_list_guid, gis_status, gis_last_sync_at,
+                    gis_last_error, created_at, updated_at
+                ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                """,
+                (
+                    work_list_id,
+                    house_id,
+                    start_year,
+                    start_year,
+                    start_month,
+                    end_year,
+                    end_month,
+                    _clean(summary.get("totalCost")),
+                    _clean(summary.get("totalSquare")),
+                    _clean(summary.get("monthsCount")),
+                    str(local_status),
+                    gis_guid,
+                    gis_status,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+            for index, item in enumerate(remote_items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                work_name = _required_text(
+                    item.get("workName"),
+                    "Наименование работы из ГИС ЖКХ",
+                )
+                raw_position = item.get("sortIndex")
+                try:
+                    position = int(raw_position)
+                except (TypeError, ValueError):
+                    position = index
+                if position < 1:
+                    position = index
+
+                self.connection.execute(
+                    """
+                    INSERT INTO work_list_items (
+                        id, work_list_id, position, work_code, work_name, work_guid,
+                        unit_name, price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        work_list_id,
+                        position,
+                        _clean(item.get("workCode")),
+                        work_name,
+                        _clean(item.get("workGuid")),
+                        _clean(item.get("unitName")),
+                        _clean(item.get("price")),
+                        _clean(item.get("volume")),
+                        _clean(item.get("quantity")),
+                        _clean(item.get("cost")),
+                    ),
+                )
+
+        result = self.get_work_list(work_list_id)
+        assert result is not None
+        return result
+
     def get_work_list(self, work_list_id: str) -> WorkList | None:
         row = self.connection.execute(
             "SELECT * FROM work_lists WHERE id = ?", (work_list_id,)

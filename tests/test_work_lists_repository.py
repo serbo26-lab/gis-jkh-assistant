@@ -531,3 +531,102 @@ def test_existing_database_adds_template_unit_name_column(tmp_path) -> None:
 
     assert "unit_name" in columns
     repository.close()
+
+
+def test_import_gis_work_list_creates_placed_list_with_remote_items(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК Импорт", ogrn="1022600000600")
+    house = repository.create_house(
+        organization_id=org.id,
+        address="г. М....., ул. Б......, д. 0",
+        house_object_guid="house-object-guid",
+    )
+
+    imported = repository.import_gis_work_list(
+        house_id=house.id,
+        remote={
+            "guid": "gis-work-list-guid",
+            "houseGuid": "house-object-guid",
+            "status": "APPROVED",
+            "period": {
+                "from": {"year": 2026, "month": 1},
+                "to": {"year": 2026, "month": 12},
+            },
+            "summary": {
+                "totalSquare": "396.6",
+                "monthsCount": 12,
+                "worksCount": 1,
+                "totalCost": "118869.89",
+            },
+            "items": [
+                {
+                    "sortIndex": 11,
+                    "workGuid": "work-guid-1",
+                    "workCode": "1.1",
+                    "workName": "Техническое обслуживание",
+                    "unitName": "шт.",
+                    "price": "0.14",
+                    "volume": "4183",
+                    "quantity": 4,
+                    "cost": "2342.48",
+                }
+            ],
+        },
+    )
+
+    assert imported.status.value == "placed"
+    assert imported.gis_status == "APPROVED"
+    assert imported.gis_work_list_guid == "gis-work-list-guid"
+    assert imported.period_label == "01.2026 — 12.2026"
+    assert imported.planned_total == "118869.89"
+    assert imported.planned_area == "396.6"
+    assert imported.planned_months == "12"
+
+    items = repository.list_work_list_items(imported.id)
+    assert len(items) == 1
+    assert items[0].position == 11
+    assert items[0].work_guid == "work-guid-1"
+    assert items[0].work_code == "1.1"
+    assert items[0].unit_name == "шт."
+    assert items[0].price == "0.14"
+    assert items[0].volume == "4183"
+    assert items[0].quantity == "4"
+    assert items[0].cost == "2342.48"
+    repository.close()
+
+
+def test_import_gis_work_list_does_not_overwrite_local_same_period(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК Конфликт", ogrn="1022600000601")
+    house = repository.create_house(
+        organization_id=org.id,
+        address="г. М....., ул. Б......, д. 0",
+        house_object_guid="house-object-guid",
+    )
+    local = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+    )
+
+    try:
+        repository.import_gis_work_list(
+            house_id=house.id,
+            remote={
+                "guid": "another-gis-guid",
+                "status": "APPROVED",
+                "period": {
+                    "from": {"year": 2026, "month": 1},
+                    "to": {"year": 2026, "month": 12},
+                },
+                "summary": {},
+                "items": [],
+            },
+        )
+    except ValueError as exc:
+        assert "уже существует локальный перечень" in str(exc)
+    else:
+        raise AssertionError("Expected period conflict")
+
+    lists = repository.list_work_lists(house.id)
+    assert [item.id for item in lists] == [local.id]
+    repository.close()
