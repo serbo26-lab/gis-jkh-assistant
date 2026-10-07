@@ -76,6 +76,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_command: str | None = None
         self._queue_title = ""
         self._queue_running = False
+        self._queue_skipped = 0
         self._build_ui()
         self.refresh_organizations()
 
@@ -190,6 +191,13 @@ class QualityAssessmentPage(QWidget):
         self.load_gis_button.setToolTip(
             "Получить существующую оценку качества выбранного месяца из ГИС ЖКХ."
         )
+        self.load_gis_year_button = QPushButton(
+            "Загрузить оценки за доступные месяцы года"
+        )
+        self.load_gis_year_button.setToolTip(
+            "Последовательно получить оценки качества из ГИС ЖКХ за весь "
+            "доступный период выбранного перечня в этом году."
+        )
         self.save_button = QPushButton("Сохранить проект месяца")
         self.publish_button = QPushButton("Разместить месяц")
         self.save_year_button = QPushButton("Сохранить проекты года")
@@ -204,9 +212,10 @@ class QualityAssessmentPage(QWidget):
         actions.addWidget(self.load_gis_button, 0, 0)
         actions.addWidget(self.save_button, 0, 1)
         actions.addWidget(self.publish_button, 0, 2)
-        actions.addWidget(self.save_year_button, 1, 0)
-        actions.addWidget(self.publish_year_button, 1, 1)
-        actions.addWidget(self.cancel_button, 1, 2)
+        actions.addWidget(self.load_gis_year_button, 1, 0)
+        actions.addWidget(self.save_year_button, 1, 1)
+        actions.addWidget(self.publish_year_button, 1, 2)
+        actions.addWidget(self.cancel_button, 2, 2)
         for column in range(3):
             actions.setColumnStretch(column, 1)
         month_layout.addLayout(actions)
@@ -241,11 +250,17 @@ class QualityAssessmentPage(QWidget):
         bulk_actions = QHBoxLayout()
         self.include_all_button = QPushButton("Включить все работы")
         self.exclude_all_button = QPushButton("Снять все")
+        self.clear_values_button = QPushButton("Очистить данные месяца")
+        self.clear_year_values_button = QPushButton(
+            "Очистить данные доступных месяцев года"
+        )
         self.month_acts_button = QPushButton("Акты месяца…")
         self.month_acts_summary = QLabel("Акты месяца: —")
         self.month_acts_summary.setObjectName("Muted")
         bulk_actions.addWidget(self.include_all_button)
         bulk_actions.addWidget(self.exclude_all_button)
+        bulk_actions.addWidget(self.clear_values_button)
+        bulk_actions.addWidget(self.clear_year_values_button)
         bulk_actions.addSpacing(12)
         bulk_actions.addWidget(self.month_acts_button)
         bulk_actions.addWidget(self.month_acts_summary)
@@ -285,6 +300,7 @@ class QualityAssessmentPage(QWidget):
         self.auto_act_month_button.clicked.connect(self._auto_generate_month_act)
         self.auto_act_year_button.clicked.connect(self._auto_generate_year_acts)
         self.load_gis_button.clicked.connect(self._load_from_gis)
+        self.load_gis_year_button.clicked.connect(self._load_year_from_gis)
         self.save_button.clicked.connect(self._save_project)
         self.publish_button.clicked.connect(self._publish)
         self.save_year_button.clicked.connect(self._save_year_projects)
@@ -297,6 +313,8 @@ class QualityAssessmentPage(QWidget):
         self.exclude_all_button.clicked.connect(
             lambda: self._set_all_included(False)
         )
+        self.clear_values_button.clicked.connect(self._clear_month_values)
+        self.clear_year_values_button.clicked.connect(self._clear_year_values)
         self.month_acts_button.clicked.connect(self._open_month_acts)
         self._set_enabled(False)
 
