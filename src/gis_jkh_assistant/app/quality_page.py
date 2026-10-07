@@ -1375,6 +1375,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_command = command
         self._queue_title = title
         self._queue_running = True
+        self.queue_status_strip.setVisible(True)
         self.queue_progress.setVisible(True)
         self.queue_progress.setRange(0, len(self._queue_period_ids))
         self.queue_progress.setValue(0)
