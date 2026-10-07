@@ -71,9 +71,9 @@ def fill_quality_period_from_fixation(
     """Build a quality assessment from the fixation facts of the same month.
 
     Rows that already have a user/imported act are intentionally left untouched.
-    Other rows are included only when fixation contains actual values. The quality
-    cost is taken from the actual fixation cost, and normal-quality rows start with
-    zero days/reduction.
+    Other rows are included only when fixation contains actual values. For normal
+    completed work the quality-specific fields stay empty: cost, days of improper
+    quality and reduction are filled only for quality-violation/recalculation cases.
     """
 
     period = store.get_period(period_id)
@@ -121,15 +121,7 @@ def fill_quality_period_from_fixation(
             or (by_code.get(str(item.work_code)) if item.work_code else None)
         )
         if fixation_item is not None and _has_fixation_fact(fixation_item):
-            updates.append(
-                (
-                    1,
-                    getattr(fixation_item, "fact_total_cost", None),
-                    0,
-                    "0",
-                    item.id,
-                )
-            )
+            updates.append((1, None, None, None, item.id))
             included += 1
         else:
             updates.append((0, None, None, None, item.id))
