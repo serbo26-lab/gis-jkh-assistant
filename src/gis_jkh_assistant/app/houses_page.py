@@ -1428,7 +1428,7 @@ class HousesPage(QWidget):
                     resolved_root_guid or match.get("organizationRootGuid")
                 )
                 updated += 1
-                self.bulk_management_status.setText(f"{index}/{len(houses)}")
+                self._set_bulk_status(f"Сопоставление сведений об управлении {index}/{len(houses)}")
                 QCoreApplication.processEvents()
 
             organization_updates = {}
@@ -1480,6 +1480,13 @@ class HousesPage(QWidget):
 
     def _sync_management_from_gis(self) -> None:
         self._flush_autosave()
+        if self._bulk_operation_name is not None:
+            QMessageBox.information(
+                self,
+                "Выполняется массовая операция",
+                "Дождитесь завершения массовой загрузки перед точечным запросом.",
+            )
+            return
         if not self._current_house_id or self.integration_gateway is None:
             return
         house = self.repository.get_house(self._current_house_id)
@@ -1949,6 +1956,13 @@ class HousesPage(QWidget):
         )
 
     def _import_file(self) -> None:
+        if self._bulk_operation_name is not None:
+            QMessageBox.information(
+                self,
+                "Выполняется массовая операция",
+                "Дождитесь завершения массовой загрузки перед импортом домов из XLSX.",
+            )
+            return
         message = QMessageBox(self)
         message.setWindowTitle("Импорт домов из XLSX")
         message.setIcon(QMessageBox.Icon.Information)
