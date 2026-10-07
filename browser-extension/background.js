@@ -2244,6 +2244,14 @@ async function runGisCommand(command) {
     }
 
     if (command.type === "sync_work_list") {
+      if (payload?.workListGuid) {
+        try {
+          const item = await getWorkListDetailAny(payload.workListGuid);
+          return { ok: true, result: statusResult(item) };
+        } catch (_) {
+          // Fall back to period search for legacy local rows without a valid GUID.
+        }
+      }
       const item = await searchExactWorkList(payload, null);
       return { ok: true, result: statusResult(item) };
     }
