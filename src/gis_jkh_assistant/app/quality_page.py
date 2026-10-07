@@ -1658,6 +1658,9 @@ class QualityAssessmentPage(QWidget):
         has_remote = bool(period and period.estimation_guid)
 
         self.load_gis_button.setEnabled(bool(period) and ready)
+        self.load_gis_year_button.setEnabled(
+            bool(self._current_work_list_id) and ready
+        )
         self.save_button.setEnabled(
             bool(period)
             and ready
@@ -1699,6 +1702,10 @@ class QualityAssessmentPage(QWidget):
         self.table.setEnabled(enabled)
         self.include_all_button.setEnabled(enabled)
         self.exclude_all_button.setEnabled(enabled)
+        self.clear_values_button.setEnabled(enabled)
+        self.clear_year_values_button.setEnabled(
+            bool(self._current_work_list_id) and not self._queue_running
+        )
         self.month_acts_button.setEnabled(enabled)
         local_enabled = enabled and not self._queue_running
         self.form_month_button.setEnabled(local_enabled)
