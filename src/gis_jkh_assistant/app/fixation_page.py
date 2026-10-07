@@ -1228,6 +1228,57 @@ class FixationPage(QWidget):
         worker.finished.connect(finished)
         worker.start()
 
+    def _load_year_from_gis(self) -> None:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None:
+            return
+        months = active_months_for_work_list(
+            work_list,
+            int(self.year_combo.currentData()),
+        )
+        if not months:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Загрузить фиксацию за доступные месяцы года?",
+            f"Будут последовательно проверены {len(months)} мес. выбранного "
+            "периода. Найденная в ГИС ЖКХ фиксация заменит локальные "
+            "фактические показатели и внеплановые работы соответствующего "
+            "месяца. Месяцы без фиксации будут пропущены. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        year = int(self.year_combo.currentData())
+        periods = []
+        for month in months:
+            period = self.repository.get_or_create_work_fixation_period(
+                work_list_id=self._current_work_list_id,
+                year=year,
+                month=month,
+            )
+            self.repository.refresh_work_fixation_plan_snapshot(period.id)
+            periods.append(period)
+
+        self._queue_period_ids = [period.id for period in periods]
+        self._queue_index = 0
+        self._queue_successes = 0
+        self._queue_skipped = 0
+        self._queue_failed_period_id = None
+        self._queue_mode = "load"
+        self.continue_queue_button.setVisible(False)
+        self.queue_progress.setVisible(True)
+        self.queue_progress.setRange(0, len(self._queue_period_ids))
+        self.queue_progress.setValue(0)
+        self.queue_label.setText("Очередь загрузки запущена…")
+        self._start_next_queue_item()
+
     def _publish_selected_month(self) -> None:
         if not self._current_period_id:
             return
