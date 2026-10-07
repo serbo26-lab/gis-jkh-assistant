@@ -10,6 +10,7 @@ from gis_jkh_assistant.gis_integration import IntegrationError, LocalIntegration
 class GisIntegrationWorker(QThread):
     succeeded = Signal(dict)
     failed = Signal(str)
+    progressed = Signal(dict)
 
     def __init__(
         self,
@@ -32,6 +33,7 @@ class GisIntegrationWorker(QThread):
                 self.command_type,
                 self.payload,
                 timeout=self.timeout,
+                progress_callback=self.progressed.emit,
             )
         except IntegrationError as exc:
             self.failed.emit(str(exc))
