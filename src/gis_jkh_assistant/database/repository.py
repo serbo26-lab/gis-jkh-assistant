@@ -1381,6 +1381,8 @@ class Repository:
             local_status = WorkListStatus.PLACED
         elif gis_status == "DRAFT":
             local_status = WorkListStatus.GIS_DRAFT
+        elif gis_status == "CANCELLED":
+            local_status = WorkListStatus.CANCELLED
         else:
             local_status = WorkListStatus.LOCAL
 
