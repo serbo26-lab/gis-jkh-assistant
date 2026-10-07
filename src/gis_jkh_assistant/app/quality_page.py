@@ -906,18 +906,25 @@ class QualityAssessmentPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
-    def _validation_error(self, period_id: str) -> str | None:
+    def _validation_error(
+        self,
+        period_id: str,
+        *,
+        require_acts: bool,
+    ) -> str | None:
         selected = [
             item for item in self.store.list_items(period_id) if item.included
         ]
         if not selected:
             return "Нет работ, включённых в оценку качества."
+        if not require_acts:
+            return None
         for item in selected:
             acts = self.store.list_acts(item.id)
             if not acts:
                 return (
                     f"Для работы «{item.work_name}» нужно добавить "
-                    "хотя бы один акт."
+                    "хотя бы один акт перед размещением."
                 )
             if any(act.act_type == "QUALITY_VIOLATION_ACT" for act in acts):
                 if item.days_count is None:
@@ -928,12 +935,16 @@ class QualityAssessmentPage(QWidget):
                     )
         return None
 
-    def _validate_local(self) -> bool:
+    def _validate_local(self, *, require_acts: bool) -> bool:
         if not self._current_period_id:
             return False
-        error = self._validation_error(self._current_period_id)
+        error = self._validation_error(
+            self._current_period_id,
+            require_acts=require_acts,
+        )
         if error:
-            QMessageBox.warning(self, "Оценка не готова", error)
+            title = "Оценка не готова к размещению" if require_acts else "Проект не готов"
+            QMessageBox.warning(self, title, error)
             return False
         return True
 
@@ -1193,12 +1204,12 @@ class QualityAssessmentPage(QWidget):
         self._start_next_queue_item()
 
     def _save_project(self) -> None:
-        if not self._validate_local():
+        if not self._validate_local(require_acts=False):
             return
         self._run_gis("save_quality_assessment", "Проект оценки качества сохранён в ГИС ЖКХ.")
 
     def _publish(self) -> None:
-        if not self._validate_local():
+        if not self._validate_local(require_acts=True):
             return
         period = (
             self.store.get_period(self._current_period_id)
@@ -1292,9 +1303,13 @@ class QualityAssessmentPage(QWidget):
             )
             return
 
+        require_acts = command == "approve_quality_assessment"
         errors = []
         for period in periods:
-            error = self._validation_error(period.id)
+            error = self._validation_error(
+                period.id,
+                require_acts=require_acts,
+            )
             if error:
                 errors.append(
                     f"{_MONTHS[period.month - 1]} {period.year}: {error}"
