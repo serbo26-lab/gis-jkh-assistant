@@ -308,6 +308,7 @@ class QualityAssessmentPage(QWidget):
         )
         self.clear_values_button.clicked.connect(self._clear_scope_values)
         self.month_acts_button.clicked.connect(self._open_month_acts)
+        self.scope_switcher.scopeChanged.connect(self._scope_changed)
         self._set_enabled(False)
 
     def refresh_organizations(self) -> None:
@@ -550,6 +551,10 @@ class QualityAssessmentPage(QWidget):
 
     def _scope_is_period(self) -> bool:
         return self.scope_switcher.scope() == "period"
+
+    def _scope_changed(self, _scope: str) -> None:
+        self.cancel_button.setVisible(not self._scope_is_period())
+        self._set_enabled(bool(self._current_period_id))
 
     def _form_scope_from_fixation(self) -> None:
         if self._scope_is_period():
@@ -1702,34 +1707,48 @@ class QualityAssessmentPage(QWidget):
         )
         gis_status = str(period.gis_status or "").upper() if period else ""
         has_remote = bool(period and period.estimation_guid)
+        period_scope = self._scope_is_period()
 
-        self.load_gis_button.setEnabled(bool(period) and ready)
+        if period_scope:
+            has_context = bool(self._current_work_list_id)
+            self.load_gis_button.setEnabled(has_context and ready)
+            self.save_button.setEnabled(has_context and ready)
+            self.publish_button.setEnabled(has_context and ready)
+            self.save_button.setText("Сохранить проекты")
+            self.publish_button.setText("Разместить в ГИС ЖКХ")
+            self.cancel_button.setVisible(False)
+        else:
+            self.load_gis_button.setEnabled(bool(period) and ready)
+            self.save_button.setEnabled(
+                bool(period)
+                and ready
+                and (
+                    not has_remote
+                    or gis_status in {"DRAFT", "MODIFIED", "LOCAL"}
+                )
+            )
+            self.publish_button.setEnabled(
+                bool(period)
+                and ready
+                and (
+                    not has_remote
+                    or gis_status in {"DRAFT", "MODIFIED", "CANCELLED", "LOCAL"}
+                )
+            )
+            self.save_button.setText("Сохранить проект")
+            self.publish_button.setText(
+                "Разместить изменения"
+                if has_remote and gis_status == "MODIFIED"
+                else "Разместить в ГИС ЖКХ"
+            )
+            self.cancel_button.setVisible(True)
+
         self.load_gis_year_button.setEnabled(
             bool(self._current_work_list_id) and ready
         )
-        self.save_button.setEnabled(
-            bool(period)
-            and ready
-            and (
-                not has_remote
-                or gis_status in {"DRAFT", "MODIFIED", "LOCAL"}
-            )
-        )
-        self.publish_button.setEnabled(
-            bool(period)
-            and ready
-            and (
-                not has_remote
-                or gis_status in {"DRAFT", "MODIFIED", "CANCELLED", "LOCAL"}
-            )
-        )
-        self.publish_button.setText(
-            "Разместить изменения месяца"
-            if has_remote and gis_status == "MODIFIED"
-            else "Разместить месяц"
-        )
         self.cancel_button.setEnabled(
-            bool(period)
+            not period_scope
+            and bool(period)
             and ready
             and has_remote
             and gis_status in {"DRAFT", "APPROVED", "MODIFIED"}
@@ -1748,20 +1767,21 @@ class QualityAssessmentPage(QWidget):
         self.table.setEnabled(enabled)
         self.include_all_button.setEnabled(enabled)
         self.exclude_all_button.setEnabled(enabled)
-        self.clear_values_button.setEnabled(enabled)
-        self.clear_year_values_button.setEnabled(
-            bool(self._current_work_list_id) and not self._queue_running
-        )
         self.month_acts_button.setEnabled(enabled)
-        local_enabled = enabled and not self._queue_running
+
+        period_scope = self._scope_is_period()
+        local_month_enabled = enabled and not self._queue_running
+        local_period_enabled = (
+            bool(self._current_work_list_id) and not self._queue_running
+        )
+        local_enabled = local_period_enabled if period_scope else local_month_enabled
+        self.clear_values_button.setEnabled(local_enabled)
         self.form_month_button.setEnabled(local_enabled)
-        self.form_year_button.setEnabled(
-            bool(self._current_work_list_id) and not self._queue_running
-        )
         self.auto_act_month_button.setEnabled(local_enabled)
-        self.auto_act_year_button.setEnabled(
-            bool(self._current_work_list_id) and not self._queue_running
-        )
+
+        self.clear_year_values_button.setEnabled(local_period_enabled)
+        self.form_year_button.setEnabled(local_period_enabled)
+        self.auto_act_year_button.setEnabled(local_period_enabled)
         self._refresh_gis_buttons()
 
     def _relayout_month_buttons(self, columns: int | None = None) -> None:
