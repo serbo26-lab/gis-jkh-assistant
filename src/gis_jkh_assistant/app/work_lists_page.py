@@ -2473,18 +2473,23 @@ class WorkListsPage(QWidget):
             in {"", "NOT_FOUND", "CANCELLED", "DRAFT"}
         )
         for widget in (
+            self.delete_button,
+            self.create_from_current_button,
+            self.export_button,
+            self.save_as_template_button,
+        ):
+            widget.setEnabled(enabled)
+
+        for widget in (
             self.start_month,
             self.start_year,
             self.end_month,
             self.end_year,
             self.items_table,
-            self.delete_button,
-            self.create_from_current_button,
-            self.export_button,
             self.lazy_fill_button,
-            self.save_as_template_button,
         ):
-            widget.setEnabled(enabled)
+            widget.setEnabled(enabled and composition_editable)
+
         self.add_works_button.setEnabled(enabled and composition_editable)
         self.remove_works_button.setEnabled(enabled and composition_editable)
         self.clear_works_button.setEnabled(enabled and composition_editable)
