@@ -43,7 +43,7 @@ from gis_jkh_assistant.work_planning import (
 )
 
 from .gis_integration_worker import GisIntegrationWorker
-from .widgets import SafeComboBox
+from .widgets import ActionToolbar, SafeComboBox, StatusStrip
 
 
 _MONTH_HEADERS = (
@@ -236,7 +236,7 @@ class PlanningPage(QWidget):
         root.addWidget(intro)
 
         context = QFrame()
-        context.setObjectName("Card")
+        context.setObjectName("ContextBar")
         context_layout = QGridLayout(context)
         context_layout.setContentsMargins(14, 12, 14, 12)
         context_layout.setHorizontalSpacing(10)
@@ -262,12 +262,7 @@ class PlanningPage(QWidget):
         self.year_combo.setFixedWidth(150)
         context_layout.addWidget(self.year_combo, 3, 1)
 
-        self.plan_status = QLabel("План: —")
-        self.plan_status.setObjectName("Muted")
-        self.plan_status.setWordWrap(True)
-        context_layout.addWidget(self.plan_status, 3, 2, 1, 2)
-
-        self.distribute_button = QPushButton("Распределить количество по месяцам")
+        self.distribute_button = QPushButton("Автораспределить по месяцам")
         self.distribute_button.setToolTip(
             "Распределить количество из размещенного перечня по всему его периоду. "
             "Для полного года и количества 12 получится по 1 в каждый месяц."
@@ -284,17 +279,26 @@ class PlanningPage(QWidget):
             "план этого перечня и года локальными значениями."
         )
 
-        actions = QHBoxLayout()
-        actions.addWidget(self.distribute_button)
-        actions.addWidget(self.clear_button)
-        actions.addStretch(1)
-        actions.addWidget(self.load_gis_button)
-        actions.addWidget(self.publish_button)
-        context_layout.addLayout(actions, 4, 0, 1, 4)
-
         context_layout.setColumnStretch(1, 2)
         context_layout.setColumnStretch(3, 1)
         root.addWidget(context)
+
+        actions = ActionToolbar()
+        actions.add_label("Локально")
+        actions.add_widget(self.distribute_button)
+        actions.add_widget(self.clear_button)
+        actions.add_separator()
+        actions.add_label("Из ГИС")
+        actions.add_widget(self.load_gis_button)
+        actions.add_separator()
+        actions.add_label("В ГИС")
+        actions.add_widget(self.publish_button)
+        actions.add_stretch()
+        root.addWidget(actions)
+
+        self.plan_status_strip = StatusStrip("План: —")
+        self.plan_status = self.plan_status_strip.label
+        root.addWidget(self.plan_status_strip)
 
         self.empty_hint = QLabel(
             "Для выбранного дома нет размещенных перечней. "

@@ -30,6 +30,72 @@ QFrame#BulkStatusFrame {
     border: 1px solid #d9d9d9;
     border-radius: 6px;
 }
+QFrame#ContextBar {
+    background: #ffffff;
+    border: 1px solid #e1e1e1;
+    border-radius: 8px;
+}
+QFrame#ActionToolbar {
+    background: #ffffff;
+    border: 1px solid #e1e1e1;
+    border-radius: 8px;
+}
+QLabel#ToolbarGroupLabel {
+    color: #6b6b6b;
+    font-size: 9pt;
+    font-weight: 600;
+}
+QFrame#ToolbarSeparator {
+    color: #dedede;
+    background: #dedede;
+    min-width: 1px;
+    max-width: 1px;
+    margin: 3px 2px;
+}
+QFrame#ScopeSwitcher {
+    background: #f4f4f4;
+    border: 1px solid #d8d8d8;
+    border-radius: 7px;
+}
+QPushButton#ScopeSwitcherButton {
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    padding: 5px 10px;
+    min-height: 20px;
+    color: #5f5f5f;
+}
+QPushButton#ScopeSwitcherButton:hover {
+    background: #ececec;
+}
+QPushButton#ScopeSwitcherButton:checked {
+    background: #ffffff;
+    color: #0f5f9e;
+    border: 1px solid #c9dff1;
+    font-weight: 600;
+}
+QFrame#StatusStrip {
+    background: #f8fafc;
+    border: 1px solid #d9e2ea;
+    border-radius: 7px;
+}
+QLabel#StatusStripText {
+    color: #4f5b66;
+    font-size: 9pt;
+}
+QProgressBar#StatusStripProgress {
+    background: #edf1f5;
+    border: 1px solid #d6dde4;
+    border-radius: 5px;
+    min-height: 12px;
+    max-height: 12px;
+    text-align: center;
+    font-size: 8pt;
+}
+QProgressBar#StatusStripProgress::chunk {
+    background: #0067c0;
+    border-radius: 4px;
+}
 QLabel#BulkStatusText {
     color: #444444;
     font-weight: 500;
