@@ -1003,9 +1003,11 @@ class PlanningPage(QWidget):
 
             remote_items = list(result.get("items") or [])
             remote_months = sum(
-                len(row.get("monthlyWorks") or [])
+                1
                 for row in remote_items
                 if isinstance(row, dict)
+                for month in row.get("monthlyWorks") or []
+                if int(month.get("count") or 0) > 0 or bool(month.get("dates"))
             )
             has_local = local_plan_has_data(self.repository, plan_id)
             question = (
@@ -1045,11 +1047,19 @@ class PlanningPage(QWidget):
 
             self._load_table()
             self._update_plan_status()
+            details = (
+                f"Загружено работ: {applied['items']}.\n"
+                f"Загружено месячных значений: {applied['months']}."
+            )
+            if applied.get("historical"):
+                details += (
+                    f"\nИсторических работ, отсутствующих в локальном перечне: "
+                    f"{applied['historical']}."
+                )
             QMessageBox.information(
                 self,
                 "Планирование загружено",
-                f"Сопоставлено работ: {applied['items']}.\n"
-                f"Загружено месячных значений: {applied['months']}.",
+                details,
             )
 
         def progressed(progress: dict) -> None:
@@ -1103,6 +1113,19 @@ class PlanningPage(QWidget):
             return
 
         items = self.repository.list_work_plan_items(plan.id)
+        historical_items = [
+            item for item in items if item.work_list_item_id is None
+        ]
+        if historical_items:
+            QMessageBox.warning(
+                self,
+                "Исторический план",
+                "В плане есть работы, которые ГИС ЖКХ больше не возвращает "
+                "в составе самого перечня. Такой исторический план можно "
+                "загрузить и просматривать, но безопасно перезаписать его через "
+                "текущий справочник ГИС ЖКХ нельзя.",
+            )
+            return
         months = self.repository.list_work_plan_months(plan.id)
         try:
             payload = build_gis_work_plan_command_payload(
