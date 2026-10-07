@@ -464,10 +464,43 @@ class WorkListsPage(QWidget):
     def refresh_organizations(self) -> None:
         self._save_period()
         current = self.organization_combo.currentData()
+        organizations = self.repository.list_organizations()
+
+        # Returning to this page used to rebuild a potentially very large
+        # QTableWidget even when the organization/house context had not changed.
+        # Keep the existing widgets intact when the source context is identical.
+        current_org_rows = [
+            (
+                str(self.organization_combo.itemData(index)),
+                self.organization_combo.itemText(index),
+            )
+            for index in range(self.organization_combo.count())
+        ]
+        repository_org_rows = [
+            (str(organization.id), organization.name)
+            for organization in organizations
+        ]
+        current_house_id = self.house_combo.currentData()
+        if current and current_org_rows == repository_org_rows:
+            houses = self.repository.list_houses(str(current))
+            current_house_rows = [
+                (
+                    str(self.house_combo.itemData(index)),
+                    self.house_combo.itemText(index),
+                )
+                for index in range(self.house_combo.count())
+            ]
+            repository_house_rows = [
+                (str(house.id), house.address)
+                for house in houses
+            ]
+            if current_house_rows == repository_house_rows and current_house_id:
+                self._refresh_gis_action_buttons()
+                return
 
         self.organization_combo.blockSignals(True)
         self.organization_combo.clear()
-        for organization in self.repository.list_organizations():
+        for organization in organizations:
             self.organization_combo.addItem(organization.name, organization.id)
         if current:
             index = self.organization_combo.findData(current)
@@ -540,10 +573,19 @@ class WorkListsPage(QWidget):
         self.work_lists.clear()
         selected_row = -1
         lists = self.repository.list_work_lists(house_id) if house_id else []
+        organization_id = self.organization_combo.currentData()
+        templates = {
+            template.id: template
+            for template in (
+                self.repository.list_work_templates(str(organization_id))
+                if organization_id
+                else []
+            )
+        }
 
         for row, work_list in enumerate(lists):
             template = (
-                self.repository.get_work_template(work_list.template_id)
+                templates.get(work_list.template_id)
                 if work_list.template_id
                 else None
             )
@@ -883,25 +925,28 @@ class WorkListsPage(QWidget):
     def _load_items(self, work_list_id: str) -> None:
         items = self.repository.list_work_list_items(work_list_id)
         self.items_table.blockSignals(True)
-        self.items_table.setRowCount(len(items))
+        self.items_table.setUpdatesEnabled(False)
+        try:
+            self.items_table.setRowCount(len(items))
 
-        for row, item in enumerate(items):
-            name_item = QTableWidgetItem(item.work_name)
-            name_item.setData(Qt.ItemDataRole.UserRole, item.id)
-            name_item.setData(_ORIGINAL_VALUE_ROLE, item.work_name)
-            if item.work_code:
-                name_item.setToolTip(f"Код работы: {item.work_code}")
-            self.items_table.setItem(row, 0, name_item)
+            for row, item in enumerate(items):
+                name_item = QTableWidgetItem(item.work_name)
+                name_item.setData(Qt.ItemDataRole.UserRole, item.id)
+                name_item.setData(_ORIGINAL_VALUE_ROLE, item.work_name)
+                if item.work_code:
+                    name_item.setToolTip(f"Код работы: {item.work_code}")
+                self.items_table.setItem(row, 0, name_item)
 
-            values = (item.price, item.volume, item.quantity, item.cost)
-            for column, value in enumerate(values, start=1):
-                cell = QTableWidgetItem(value or "")
-                cell.setData(_ORIGINAL_VALUE_ROLE, value or "")
-                self.items_table.setItem(row, column, cell)
+                values = (item.price, item.volume, item.quantity, item.cost)
+                for column, value in enumerate(values, start=1):
+                    cell = QTableWidgetItem(value or "")
+                    cell.setData(_ORIGINAL_VALUE_ROLE, value or "")
+                    self.items_table.setItem(row, column, cell)
 
-            self._apply_row_input_mode(row)
-
-        self.items_table.blockSignals(False)
+                self._apply_row_input_mode(row)
+        finally:
+            self.items_table.setUpdatesEnabled(True)
+            self.items_table.blockSignals(False)
 
     def _current_period(self) -> tuple[int, int, int, int]:
         self.start_year.interpretText()

@@ -1,6 +1,10 @@
 from gis_jkh_assistant.acceptance_act_pdf import build_acceptance_act_pdf
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
+from gis_jkh_assistant.quality_automation import (
+    fill_quality_period_from_fixation,
+    generate_acceptance_act_for_period,
+)
 from gis_jkh_assistant.quality_assessment import (
     build_quality_command_payload,
     helper_supports_quality_assessment,
@@ -443,3 +447,95 @@ def test_generated_acceptance_act_pdf_is_valid_pdf() -> None:
 
     assert content.startswith(b"%PDF-")
     assert len(content) > 2000
+
+
+def test_quality_automation_preserves_user_act_and_skips_its_row(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    organization, house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+
+    fixation = repository.get_or_create_work_fixation_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    fixation_items = repository.list_work_fixation_items(fixation.id)
+    repository.update_work_fixation_item(
+        fixation_items[0].id,
+        fact_price=None,
+        fact_amount=None,
+        fact_count=1,
+        fact_total_cost="100.00",
+    )
+    repository.update_work_fixation_item(
+        fixation_items[1].id,
+        fact_price=None,
+        fact_amount=None,
+        fact_count=1,
+        fact_total_cost="200.00",
+    )
+
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    items = store.list_items(period.id)
+    store.update_item(
+        items[0].id,
+        included=True,
+        cost="999.00",
+        days_count=None,
+        cost_reduction=None,
+    )
+    manual = store.add_act(
+        item_id=items[0].id,
+        act_type="ACCEPTANCE_ACT",
+        number="Пользовательский",
+        reg_date="31.01.2026",
+        period_from="01.01.2026",
+        period_to="31.01.2026",
+        file_name="manual.pdf",
+        description="manual.pdf",
+        content_type="application/pdf",
+        content=b"manual-pdf",
+        generated=False,
+    )
+
+    filled = fill_quality_period_from_fixation(store, period.id)
+    refreshed = store.list_items(period.id)
+    assert filled.protected == 1
+    assert refreshed[0].included is True
+    assert refreshed[0].cost == "999.00"
+    assert refreshed[1].included is True
+    assert refreshed[1].cost == "200.00"
+    assert refreshed[1].days_count == 0
+
+    generated = generate_acceptance_act_for_period(
+        store,
+        period_id=period.id,
+        organization_name=organization.name,
+        house_address=house.address,
+    )
+    assert generated.created == 1
+    assert generated.linked_items == 1
+    assert generated.protected_items == 1
+
+    first_acts = store.list_acts(refreshed[0].id)
+    second_acts = store.list_acts(refreshed[1].id)
+    assert [act.id for act in first_acts] == [manual.id]
+    assert len(second_acts) == 1
+    assert second_acts[0].generated is True
+
+    # Re-running automation replaces only the generated act and never the
+    # user's document.
+    generate_acceptance_act_for_period(
+        store,
+        period_id=period.id,
+        organization_name=organization.name,
+        house_address=house.address,
+    )
+    assert [act.id for act in store.list_acts(refreshed[0].id)] == [manual.id]
+    assert len(store.list_acts(refreshed[1].id)) == 1
+    assert store.list_acts(refreshed[1].id)[0].generated is True
+    repository.close()
