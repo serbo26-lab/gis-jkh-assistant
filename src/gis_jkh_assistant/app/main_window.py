@@ -678,6 +678,7 @@ class MainWindow(QMainWindow):
         self.integration_status.setStyleSheet(f"color: {color(tone)};")
         self.settings_page.set_connection_status(text)
 
+        self.houses_page._refresh_workflow()
         self.work_lists_page._refresh_integration_status()
         self.planning_page._refresh_integration_status()
         self.fixation_page._refresh_integration_status()
