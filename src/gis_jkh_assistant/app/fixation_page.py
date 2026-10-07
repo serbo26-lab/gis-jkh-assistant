@@ -336,6 +336,7 @@ class FixationPage(QWidget):
         self.load_month_button.clicked.connect(self._load_scope_from_gis)
         self.publish_month_button.clicked.connect(self._publish_scope)
         self.continue_queue_button.clicked.connect(self._continue_queue)
+        self.scope_switcher.scopeChanged.connect(self._scope_changed)
         self.table.itemChanged.connect(self._table_item_changed)
         self.unplanned_table.itemChanged.connect(self._unplanned_item_changed)
         self.add_unplanned_button.clicked.connect(self._request_add_unplanned)
@@ -914,6 +915,9 @@ class FixationPage(QWidget):
 
     def _scope_is_period(self) -> bool:
         return self.scope_switcher.scope() == "period"
+
+    def _scope_changed(self, _scope: str) -> None:
+        self._set_enabled(bool(self._current_period_id))
 
     def _fill_scope_from_plan(self) -> None:
         if self._scope_is_period():
@@ -1752,9 +1756,15 @@ class FixationPage(QWidget):
             and helper_supports_fixations(status.helper_version)
             and not self._integration_busy
         )
-        self.load_month_button.setEnabled(bool(self._current_period_id) and ready)
+        period_scope = self._scope_is_period()
+        has_target = (
+            bool(self._current_work_list_id)
+            if period_scope
+            else bool(self._current_period_id)
+        )
+        self.load_month_button.setEnabled(has_target and ready)
+        self.publish_month_button.setEnabled(has_target and ready)
         self.load_year_button.setEnabled(bool(self._current_work_list_id) and ready)
-        self.publish_month_button.setEnabled(bool(self._current_period_id) and ready)
         self.publish_year_button.setEnabled(
             bool(self._current_work_list_id) and ready
         )
@@ -1764,9 +1774,15 @@ class FixationPage(QWidget):
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
         self.unplanned_table.setEnabled(enabled)
-        self.fill_month_button.setEnabled(enabled)
-        self.fill_year_button.setEnabled(enabled)
-        self.clear_month_button.setEnabled(enabled)
+        period_scope = self._scope_is_period()
+        local_enabled = (
+            bool(self._current_work_list_id)
+            if period_scope
+            else enabled
+        )
+        self.fill_month_button.setEnabled(local_enabled)
+        self.clear_month_button.setEnabled(local_enabled)
+        self.fill_year_button.setEnabled(bool(self._current_work_list_id))
         self.load_year_button.setEnabled(
             bool(self._current_work_list_id) and enabled
         )
