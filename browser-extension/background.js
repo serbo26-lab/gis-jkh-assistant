@@ -1460,6 +1460,14 @@ async function runGisCommand(command) {
           item?.workType?.name ||
           null,
         unitName: fixedWorkUnitName(item),
+        plannedPrice: item?.plannedPrice ?? null,
+        plannedAmount: item?.plannedAmount ?? null,
+        plannedCount:
+          item?.monthlyPlannedWork?.count === null ||
+          item?.monthlyPlannedWork?.count === undefined
+            ? null
+            : Number(item.monthlyPlannedWork.count),
+        plannedTotalCost: item?.plannedTotalCost ?? null,
         factPrice: item?.factPrice ?? null,
         factAmount: item?.factAmount ?? null,
         factCount:
