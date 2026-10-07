@@ -1580,6 +1580,7 @@ class WorkListsPage(QWidget):
     def _gis_command_payload(work_list, house) -> dict:
         return {
             "houseGuid": house.house_object_guid,
+            "workListGuid": work_list.gis_work_list_guid,
             "startYear": work_list.start_year,
             "startMonth": work_list.start_month,
             "endYear": work_list.end_year,
