@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import sqlite3
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from gis_jkh_assistant.database.repository import Repository
 
@@ -54,6 +54,7 @@ def prepare_gis_work_list_sync(
     remote_items: list[dict[str, Any]],
     *,
     target_house_id: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> GisWorkListSyncPreview:
     """Match GIS work lists to local houses and protect local period conflicts."""
 
@@ -75,7 +76,11 @@ def prepare_gis_work_list_sync(
     preview = GisWorkListSyncPreview(received=len(remote_items))
     candidates: list[tuple[str, dict[str, Any], tuple[str, int, int, int, int]]] = []
 
-    for remote in remote_items:
+    total = len(remote_items)
+    for index, remote in enumerate(remote_items, start=1):
+        if progress_callback is not None:
+            progress_callback(index, total)
+
         if not isinstance(remote, dict):
             preview.conflicts.append("ГИС ЖКХ вернул некорректную запись перечня.")
             continue
@@ -154,12 +159,18 @@ def prepare_gis_work_list_sync(
 def apply_gis_work_list_sync(
     repository: Repository,
     preview: GisWorkListSyncPreview,
+    *,
+    save_progress_callback: Callable[[int, int], None] | None = None,
+    status_progress_callback: Callable[[int, int], None] | None = None,
 ) -> GisWorkListSyncResult:
     """Apply only conflict-free rows from a synchronization preview."""
 
     result = GisWorkListSyncResult()
 
-    for house_id, remote in preview.new_rows:
+    save_total = len(preview.new_rows)
+    for index, (house_id, remote) in enumerate(preview.new_rows, start=1):
+        if save_progress_callback is not None:
+            save_progress_callback(index, save_total)
         try:
             imported = repository.import_gis_work_list(
                 house_id=house_id,
@@ -171,7 +182,10 @@ def apply_gis_work_list_sync(
         result.imported += 1
         result.imported_ids.append(imported.id)
 
-    for local_id, remote in preview.linked_rows:
+    status_total = len(preview.linked_rows)
+    for index, (local_id, remote) in enumerate(preview.linked_rows, start=1):
+        if status_progress_callback is not None:
+            status_progress_callback(index, status_total)
         try:
             repository.update_work_list_gis_state(
                 local_id,

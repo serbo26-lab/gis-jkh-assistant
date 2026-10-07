@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.22";
+const HELPER_CODE_VERSION = "0.1.23";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -58,6 +58,19 @@ async function sendResult(id, ok, result = null, error = null) {
   }
 }
 
+async function sendProgress(id, progress) {
+  if (!id || !progress || typeof progress !== "object") return;
+  try {
+    await localFetch("/progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, progress })
+    });
+  } catch (_) {
+    // Progress is advisory; the final command result remains authoritative.
+  }
+}
+
 async function maybeKeepSessionAlive() {
   const now = Date.now();
   if (now - lastKeepAliveAttemptMs < KEEP_ALIVE_INTERVAL_MS) {
@@ -91,6 +104,32 @@ async function executeInGisTab(command) {
     hello();
   }, 10000);
 
+  let progressProbeRunning = false;
+  let lastProgressJson = "";
+  const progressProbe = command?.id
+    ? setInterval(async () => {
+        if (progressProbeRunning) return;
+        progressProbeRunning = true;
+        try {
+          const probe = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            world: "MAIN",
+            func: () => window.__GIS_JKH_ASSISTANT_PROGRESS || null
+          });
+          const progress = probe?.[0]?.result || null;
+          const serialized = progress ? JSON.stringify(progress) : "";
+          if (serialized && serialized !== lastProgressJson) {
+            lastProgressJson = serialized;
+            await sendProgress(command.id, progress);
+          }
+        } catch (_) {
+          // The main command result will report a real error if the tab failed.
+        } finally {
+          progressProbeRunning = false;
+        }
+      }, 1000)
+    : null;
+
   try {
     const execution = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -110,6 +149,7 @@ async function executeInGisTab(command) {
     return result.result || {};
   } finally {
     clearInterval(heartbeat);
+    if (progressProbe) clearInterval(progressProbe);
     await hello();
   }
 }
@@ -240,6 +280,13 @@ async function runGisCommand(command) {
 
     const STATE_FORMATION = "/workplanning/worklist/card/formation";
     const STATE_WORKPLANNING = "/workplanning";
+    const STATE_FILE_REGISTRY = "/file/registry";
+
+    window.__GIS_JKH_ASSISTANT_PROGRESS = null;
+
+    function setProgress(progress) {
+      window.__GIS_JKH_ASSISTANT_PROGRESS = progress || null;
+    }
 
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
@@ -249,16 +296,42 @@ async function runGisCommand(command) {
       const config = {
         method,
         url,
-        headers: {
-          "State-GUID": stateGuid
-        }
+        headers: {}
       };
+      if (stateGuid) {
+        config.headers["State-GUID"] = stateGuid;
+      }
       if (data !== undefined) {
         config.data = data;
         config.headers["Content-Type"] = "application/json;charset=UTF-8";
       }
       const response = await $http(config);
       return response.data;
+    }
+
+    async function requestBinary(method, url, stateGuid = null) {
+      const config = {
+        method,
+        url,
+        responseType: "arraybuffer",
+        headers: {}
+      };
+      if (stateGuid) {
+        config.headers["State-GUID"] = stateGuid;
+      }
+      const response = await $http(config);
+      return response.data;
+    }
+
+    function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      const chunkSize = 0x8000;
+      let binary = "";
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const chunk = bytes.subarray(offset, offset + chunkSize);
+        binary += String.fromCharCode(...chunk);
+      }
+      return btoa(binary);
     }
 
     function addressCriteria(houseInfo) {
@@ -779,6 +852,7 @@ async function runGisCommand(command) {
       const seen = new Set();
       const items = [];
       let pages = 0;
+      setProgress({ phase: "receiving_work_lists", received: 0 });
 
       // The work-list endpoint observed in the GIS ЖКХ UI reports "total" as the
       // number of rows on the current page, not as a reliable grand total.
@@ -813,6 +887,11 @@ async function runGisCommand(command) {
           added += 1;
         }
 
+        setProgress({
+          phase: "receiving_work_lists",
+          received: items.length
+        });
+
         if (pageItems.length < pageSize || added === 0) break;
       }
 
@@ -823,6 +902,109 @@ async function runGisCommand(command) {
         houseObjectGuid: requestedHouseObjectGuid || null,
         items
       };
+    }
+
+    async function downloadWorkListExportTemplate(payload) {
+      const houseGuid = String(payload?.houseObjectGuid || "").trim();
+      if (!houseGuid) {
+        throw new Error("Для выгрузки шаблона нужен GUID объекта жилищного фонда.");
+      }
+
+      const year = String(payload?.year || new Date().getFullYear());
+      const month = String(payload?.month || 1).padStart(2, "0");
+
+      setProgress({ phase: "template_export", status: "requesting" });
+      const exportResult = await request(
+        "POST",
+        "/ext-bus-organization-ie-service/export",
+        {
+          criteria: {
+            houseGuid,
+            yearFrom: year,
+            monthFrom: month,
+            yearTo: year,
+            monthTo: month
+          },
+          operationType: "EXPORT_WORK_LIST_V2"
+        },
+        STATE_FORMATION
+      );
+
+      const jobGuid = String(exportResult?.guid || "").trim();
+      if (!jobGuid) {
+        throw new Error(
+          exportResult?.message ||
+            "ГИС ЖКХ не вернул идентификатор задания выгрузки шаблона."
+        );
+      }
+
+      const searchBody = {
+        createDateFrom: null,
+        createDateTo: null,
+        startProcessingDateFrom: null,
+        startProcessingDateTo: null,
+        processDateFrom: null,
+        processDateTo: null
+      };
+
+      for (let attempt = 1; attempt <= 80; attempt += 1) {
+        setProgress({
+          phase: "template_export",
+          status: "processing",
+          attempt
+        });
+
+        const registry = await request(
+          "POST",
+          "/monitoring/api/rest/services/files/search;page=1;itemsPerPage=10",
+          searchBody,
+          STATE_FILE_REGISTRY
+        );
+        const item = (Array.isArray(registry?.items) ? registry.items : []).find(
+          (row) => String(row?.guid || "") === jobGuid
+        );
+
+        if (item?.status === "PROCESSED" && item?.downloadAvailable) {
+          const contentGuid = String(item?.resultContentGuid || "").trim();
+          if (!contentGuid) {
+            throw new Error(
+              "ГИС ЖКХ завершил выгрузку, но не вернул GUID готового файла."
+            );
+          }
+
+          setProgress({ phase: "template_export", status: "downloading" });
+          const buffer = await requestBinary(
+            "GET",
+            "/filestore/downloadServlet?uid=" + encodeURIComponent(contentGuid)
+          );
+          return {
+            jobGuid,
+            fileName: item?.fileName || "Экспорт перечня работ.xlsx",
+            fileBase64: arrayBufferToBase64(buffer)
+          };
+        }
+
+        if (
+          item &&
+          item.status &&
+          !["NEW", "CREATED", "PROCESSING", "IN_PROCESS"].includes(
+            String(item.status).toUpperCase()
+          ) &&
+          item.status !== "PROCESSED"
+        ) {
+          throw new Error(
+            item?.errorDescription ||
+              "ГИС ЖКХ завершил выгрузку шаблона с ошибкой: " +
+                String(item.status)
+          );
+        }
+
+        await sleep(750);
+      }
+
+      throw new Error(
+        "ГИС ЖКХ не успел подготовить шаблон перечня. Повторите операцию позже."
+      );
     }
 
     async function uploadFile(payload) {
@@ -1780,6 +1962,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await listOrganizationWorkLists(payload)
+      };
+    }
+
+    if (command.type === "download_work_list_export_template") {
+      return {
+        ok: true,
+        result: await downloadWorkListExportTemplate(payload)
       };
     }
 

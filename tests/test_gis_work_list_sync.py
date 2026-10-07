@@ -102,3 +102,39 @@ def test_apply_sync_imports_new_list_and_updates_linked_status(tmp_path) -> None
     assert refreshed.gis_status == "APPROVED"
     assert refreshed.status.value == "placed"
     repository.close()
+
+
+def test_sync_progress_callbacks_report_matching_and_saving(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    org = repository.create_organization(name="УК", ogrn="1022600000702")
+    repository.create_house(
+        organization_id=org.id,
+        address="Дом",
+        house_object_guid="house-1",
+    )
+
+    matching: list[tuple[int, int]] = []
+    preview = prepare_gis_work_list_sync(
+        repository,
+        org.id,
+        [
+            _remote("list-1", "house-1"),
+            _remote("list-2", "unknown-house"),
+        ],
+        progress_callback=lambda current, total: matching.append((current, total)),
+    )
+
+    assert matching == [(1, 2), (2, 2)]
+
+    saving: list[tuple[int, int]] = []
+    applied = apply_gis_work_list_sync(
+        repository,
+        preview,
+        save_progress_callback=lambda current, total: saving.append(
+            (current, total)
+        ),
+    )
+
+    assert applied.imported == 1
+    assert saving == [(1, 1)]
+    repository.close()

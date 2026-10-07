@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -71,6 +72,7 @@ class HousesPage(QWidget):
         self._management_worker: GisIntegrationWorker | None = None
         self._houses_sync_worker: GisIntegrationWorker | None = None
         self._work_lists_sync_worker: GisIntegrationWorker | None = None
+        self._bulk_operation_name: str | None = None
         self._current_house_id: str | None = None
         self._pending_house_id: str | None = None
         self._pending_fields: dict[str, object] = {}
@@ -127,9 +129,6 @@ class HousesPage(QWidget):
         self.sync_houses_button.setToolTip(
             "Получить все дома текущей управляющей организации напрямую из ГИС ЖКХ."
         )
-        self.houses_sync_status = QLabel("")
-        self.houses_sync_status.setObjectName("Muted")
-        self.houses_sync_status.hide()
         self.add_house_button = QPushButton("Добавить дом")
         self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
         self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
@@ -147,12 +146,8 @@ class HousesPage(QWidget):
             "Получить перечни работ и услуг для всех домов выбранной "
             "управляющей организации."
         )
-        self.bulk_work_lists_status = QLabel("")
-        self.bulk_work_lists_status.setObjectName("Muted")
-        self.bulk_work_lists_status.hide()
-        self.bulk_management_status = QLabel("")
-        self.bulk_management_status.setObjectName("Muted")
-        self.bulk_management_status.hide()
+        self.bulk_operation_status = QLabel("Готово к запуску массовой операции.")
+        self.bulk_operation_status.setObjectName("BulkStatusText")
 
         self.add_org_button.clicked.connect(self._add_organization)
         self.edit_org_button.clicked.connect(self._edit_organization)
@@ -185,6 +180,7 @@ class HousesPage(QWidget):
         house_data_row.setSpacing(8)
         house_data_row.addWidget(self.export_house_data_button)
         house_data_row.addWidget(self.import_house_data_button)
+        house_data_row.addWidget(self.import_button)
         house_data_row.addStretch(1)
         toolbar_layout.addLayout(house_data_row)
 
@@ -198,21 +194,27 @@ class HousesPage(QWidget):
         house_data_hint.setObjectName("Muted")
         toolbar_layout.addWidget(house_data_hint)
 
-        gis_houses_title = QLabel("Сведения о МКД")
+        gis_houses_title = QLabel("Сведения о МКД (массовые действия)")
         gis_houses_title.setObjectName("SectionTitle")
         toolbar_layout.addWidget(gis_houses_title)
 
-        gis_houses_row = QHBoxLayout()
-        gis_houses_row.setSpacing(8)
-        gis_houses_row.addWidget(self.sync_houses_button)
-        gis_houses_row.addWidget(self.sync_all_management_button)
-        gis_houses_row.addWidget(self.sync_all_work_lists_button)
-        gis_houses_row.addWidget(self.import_button)
-        gis_houses_row.addWidget(self.houses_sync_status)
-        gis_houses_row.addWidget(self.bulk_management_status)
-        gis_houses_row.addWidget(self.bulk_work_lists_status)
-        gis_houses_row.addStretch(1)
-        toolbar_layout.addLayout(gis_houses_row)
+        bulk_status_frame = QFrame()
+        bulk_status_frame.setObjectName("BulkStatusFrame")
+        bulk_status_layout = QHBoxLayout(bulk_status_frame)
+        bulk_status_layout.setContentsMargins(10, 6, 10, 6)
+        bulk_status_layout.addWidget(self.bulk_operation_status)
+        bulk_status_layout.addStretch(1)
+        toolbar_layout.addWidget(bulk_status_frame)
+
+        gis_houses_grid = QGridLayout()
+        gis_houses_grid.setHorizontalSpacing(8)
+        gis_houses_grid.setVerticalSpacing(6)
+        gis_houses_grid.addWidget(self.sync_houses_button, 0, 0)
+        gis_houses_grid.addWidget(self.sync_all_management_button, 0, 1)
+        gis_houses_grid.addWidget(self.sync_all_work_lists_button, 0, 2)
+        for column in range(3):
+            gis_houses_grid.setColumnStretch(column, 1)
+        toolbar_layout.addLayout(gis_houses_grid)
 
         root.addWidget(toolbar)
 
@@ -800,6 +802,54 @@ class HousesPage(QWidget):
                 return house
         return None
 
+    def _bulk_worker_running(self) -> bool:
+        workers = (
+            self._houses_sync_worker,
+            self._management_worker,
+            self._work_lists_sync_worker,
+        )
+        return any(worker is not None and worker.isRunning() for worker in workers)
+
+    def _set_bulk_status(self, text: str) -> None:
+        self.bulk_operation_status.setText(text)
+        QCoreApplication.processEvents()
+
+    def _begin_bulk_operation(self, name: str, status_text: str) -> bool:
+        if self._bulk_operation_name is not None or self._bulk_worker_running():
+            QMessageBox.information(
+                self,
+                "Массовая операция уже выполняется",
+                "Дождитесь завершения текущей массовой операции. "
+                "Следующий запрос к ГИС ЖКХ будет выполнен после неё.",
+            )
+            return False
+
+        self._bulk_operation_name = name
+        for button in (
+            self.sync_houses_button,
+            self.sync_all_management_button,
+            self.sync_all_work_lists_button,
+            self.import_button,
+        ):
+            button.setEnabled(False)
+        if self._current_house_id:
+            self.sync_management_button.setEnabled(False)
+        self._set_bulk_status(status_text)
+        return True
+
+    def _finish_bulk_operation(self, status_text: str) -> None:
+        self._bulk_operation_name = None
+        for button in (
+            self.sync_houses_button,
+            self.sync_all_management_button,
+            self.sync_all_work_lists_button,
+            self.import_button,
+        ):
+            button.setEnabled(True)
+        if self._current_house_id:
+            self.sync_management_button.setEnabled(True)
+        self._set_bulk_status(status_text)
+
     @staticmethod
     def _gis_house_changed(house, item: dict) -> bool:
         comparable = {
@@ -825,11 +875,11 @@ class HousesPage(QWidget):
                 "Сначала выберите управляющую организацию.",
             )
             return
-        if self._houses_sync_worker is not None and self._houses_sync_worker.isRunning():
+        if self._bulk_operation_name is not None or self._bulk_worker_running():
             QMessageBox.information(
                 self,
-                "Загрузка уже выполняется",
-                "Дождитесь завершения текущей загрузки сведений о МКД.",
+                "Массовая операция уже выполняется",
+                "Дождитесь завершения текущей массовой операции.",
             )
             return
 
@@ -852,9 +902,11 @@ class HousesPage(QWidget):
             None,
         )
 
-        self.sync_houses_button.setEnabled(False)
-        self.houses_sync_status.show()
-        self.houses_sync_status.setText("получение…")
+        if not self._begin_bulk_operation(
+            "houses",
+            "Получение сведений о МКД из ГИС ЖКХ…",
+        ):
+            return
 
         worker = GisIntegrationWorker(
             self.integration_gateway,
@@ -880,7 +932,7 @@ class HousesPage(QWidget):
                     "Дома не найдены",
                     "ГИС ЖКХ не вернул дома для текущей организации.",
                 )
-                self.houses_sync_status.setText("0")
+                self._set_bulk_status("Получено домов: 0")
                 return
 
             returned_ogrns = {
@@ -895,7 +947,7 @@ class HousesPage(QWidget):
                     "Открытая сессия ГИС ЖКХ вернула дома другой организации. "
                     "Переключитесь в личном кабинете на нужную УО и повторите загрузку.",
                 )
-                self.houses_sync_status.setText("ошибка")
+                self._set_bulk_status("Ошибка: открытая сессия вернула другую УО.")
                 return
 
             created_preview = 0
@@ -924,7 +976,7 @@ class HousesPage(QWidget):
                 preview,
             )
             if answer != QMessageBox.StandardButton.Yes:
-                self.houses_sync_status.setText("отменено")
+                self._set_bulk_status("Загрузка сведений о МКД отменена.")
                 return
 
             created = 0
@@ -978,8 +1030,9 @@ class HousesPage(QWidget):
             self.refresh_houses()
             if current_house_id:
                 self._load_house(current_house_id)
-            self.houses_sync_status.setText(
-                f"готово: +{created}, обновлено {updated}"
+            self._set_bulk_status(
+                f"Сведения о МКД: добавлено {created}, обновлено {updated}, "
+                f"без изменений {unchanged}."
             )
             QMessageBox.information(
                 self,
@@ -993,7 +1046,7 @@ class HousesPage(QWidget):
             )
 
         def failed(message: str) -> None:
-            self.houses_sync_status.setText("ошибка")
+            self._set_bulk_status("Ошибка загрузки сведений о МКД.")
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить сведения о МКД",
@@ -1002,7 +1055,7 @@ class HousesPage(QWidget):
 
         def finished() -> None:
             self._houses_sync_worker = None
-            self.sync_houses_button.setEnabled(True)
+            self._finish_bulk_operation(self.bulk_operation_status.text())
 
         worker.succeeded.connect(succeeded)
         worker.failed.connect(failed)
@@ -1023,16 +1076,11 @@ class HousesPage(QWidget):
             )
             return
 
-        active_workers = (
-            self._houses_sync_worker,
-            self._management_worker,
-            self._work_lists_sync_worker,
-        )
-        if any(worker is not None and worker.isRunning() for worker in active_workers):
+        if self._bulk_operation_name is not None or self._bulk_worker_running():
             QMessageBox.information(
                 self,
-                "Операция уже выполняется",
-                "Дождитесь завершения текущего запроса к ГИС ЖКХ.",
+                "Массовая операция уже выполняется",
+                "Дождитесь завершения текущей массовой операции.",
             )
             return
 
@@ -1059,9 +1107,11 @@ class HousesPage(QWidget):
             )
             return
 
-        self.sync_all_work_lists_button.setEnabled(False)
-        self.bulk_work_lists_status.show()
-        self.bulk_work_lists_status.setText("получение…")
+        if not self._begin_bulk_operation(
+            "work_lists",
+            "Получено перечней: 0",
+        ):
+            return
 
         worker = GisIntegrationWorker(
             self.integration_gateway,
@@ -1077,13 +1127,17 @@ class HousesPage(QWidget):
                 item for item in list(result.get("items") or [])
                 if isinstance(item, dict)
             ]
+            def matching_progress(current: int, total: int) -> None:
+                self._set_bulk_status(f"Сопоставление {current}/{total}")
+
             preview = prepare_gis_work_list_sync(
                 self.repository,
                 str(organization_id),
                 remote_items,
+                progress_callback=matching_progress,
             )
-            self.bulk_work_lists_status.setText(
-                f"{preview.received} получено"
+            self._set_bulk_status(
+                f"Сопоставление {preview.received}/{preview.received}"
             )
 
             summary = (
@@ -1103,7 +1157,7 @@ class HousesPage(QWidget):
                     "Перечни МКД из ГИС ЖКХ",
                     summary + "\n\nИзменять локальную базу не требуется." + details,
                 )
-                self.bulk_work_lists_status.setText("без изменений")
+                self._set_bulk_status("Перечни: изменений нет.")
                 return
 
             answer = QMessageBox.question(
@@ -1114,12 +1168,24 @@ class HousesPage(QWidget):
                 "Существующие локальные перечни автоматически не перезаписываются.",
             )
             if answer != QMessageBox.StandardButton.Yes:
-                self.bulk_work_lists_status.setText("отменено")
+                self._set_bulk_status("Массовая загрузка перечней отменена.")
                 return
 
-            applied = apply_gis_work_list_sync(self.repository, preview)
-            self.bulk_work_lists_status.setText(
-                f"+{applied.imported}, статусы {applied.updated}"
+            def save_progress(current: int, total: int) -> None:
+                self._set_bulk_status(f"Сохранение {current}/{total}")
+
+            def status_progress(current: int, total: int) -> None:
+                self._set_bulk_status(f"Обновление статусов {current}/{total}")
+
+            applied = apply_gis_work_list_sync(
+                self.repository,
+                preview,
+                save_progress_callback=save_progress,
+                status_progress_callback=status_progress,
+            )
+            self._set_bulk_status(
+                f"Перечни: добавлено {applied.imported}, "
+                f"обновлено статусов {applied.updated}."
             )
 
             result_text = (
@@ -1146,19 +1212,29 @@ class HousesPage(QWidget):
                 )
 
         def failed(message: str) -> None:
-            self.bulk_work_lists_status.setText("ошибка")
+            self._set_bulk_status("Ошибка массовой загрузки перечней.")
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить перечни МКД",
                 message,
             )
 
+        def progressed(progress: dict) -> None:
+            phase = str(progress.get("phase") or "")
+            if phase == "queued":
+                self._set_bulk_status("Ожидание завершения предыдущей операции…")
+                return
+            if phase == "receiving_work_lists":
+                received = int(progress.get("received") or 0)
+                self._set_bulk_status(f"Получено перечней: {received}")
+
         def finished() -> None:
             self._work_lists_sync_worker = None
-            self.sync_all_work_lists_button.setEnabled(True)
+            self._finish_bulk_operation(self.bulk_operation_status.text())
 
         worker.succeeded.connect(succeeded)
         worker.failed.connect(failed)
+        worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1199,11 +1275,11 @@ class HousesPage(QWidget):
                 "Сначала выберите управляющую организацию.",
             )
             return
-        if self._management_worker is not None and self._management_worker.isRunning():
+        if self._bulk_operation_name is not None or self._bulk_worker_running():
             QMessageBox.information(
                 self,
-                "Обновление уже выполняется",
-                "Дождитесь завершения текущего запроса к ГИС ЖКХ.",
+                "Массовая операция уже выполняется",
+                "Дождитесь завершения текущей массовой операции.",
             )
             return
 
@@ -1278,10 +1354,11 @@ class HousesPage(QWidget):
             )
             return
 
-        self.sync_all_management_button.setEnabled(False)
-        self.sync_management_button.setEnabled(False)
-        self.bulk_management_status.show()
-        self.bulk_management_status.setText(f"0/{len(houses)}")
+        if not self._begin_bulk_operation(
+            "management",
+            f"Сопоставление сведений об управлении 0/{len(houses)}",
+        ):
+            return
 
         worker = GisIntegrationWorker(
             self.integration_gateway,
@@ -1318,7 +1395,7 @@ class HousesPage(QWidget):
             for index, house in enumerate(houses, start=1):
                 if self._has_manual_management_data(house) and not overwrite_manual:
                     skipped_manual += 1
-                    self.bulk_management_status.setText(f"{index}/{len(houses)}")
+                    self._set_bulk_status(f"Сопоставление сведений об управлении {index}/{len(houses)}")
                     QCoreApplication.processEvents()
                     continue
 
@@ -1332,7 +1409,7 @@ class HousesPage(QWidget):
 
                 if match is None:
                     not_found += 1
-                    self.bulk_management_status.setText(f"{index}/{len(houses)}")
+                    self._set_bulk_status(f"Сопоставление сведений об управлении {index}/{len(houses)}")
                     QCoreApplication.processEvents()
                     continue
 
@@ -1351,7 +1428,7 @@ class HousesPage(QWidget):
                     resolved_root_guid or match.get("organizationRootGuid")
                 )
                 updated += 1
-                self.bulk_management_status.setText(f"{index}/{len(houses)}")
+                self._set_bulk_status(f"Сопоставление сведений об управлении {index}/{len(houses)}")
                 QCoreApplication.processEvents()
 
             organization_updates = {}
@@ -1369,7 +1446,10 @@ class HousesPage(QWidget):
             if current_house_id:
                 self._load_house(current_house_id)
 
-            self.bulk_management_status.setText(f"{len(houses)}/{len(houses)} • готово")
+            self._set_bulk_status(
+                f"Сведения об управлении: обработано {len(houses)}/{len(houses)}, "
+                f"обновлено {updated}."
+            )
             details = [f"Обновлено: {updated}."]
             if not_found:
                 details.append(f"Не найдено в открытых сведениях: {not_found}.")
@@ -1382,7 +1462,7 @@ class HousesPage(QWidget):
             )
 
         def failed(message: str) -> None:
-            self.bulk_management_status.setText("ошибка")
+            self._set_bulk_status("Ошибка загрузки сведений об управлении.")
             QMessageBox.critical(
                 self,
                 "Не удалось обновить дома",
@@ -1391,9 +1471,7 @@ class HousesPage(QWidget):
 
         def finished() -> None:
             self._management_worker = None
-            self.sync_all_management_button.setEnabled(True)
-            if self._current_house_id:
-                self.sync_management_button.setEnabled(True)
+            self._finish_bulk_operation(self.bulk_operation_status.text())
 
         worker.succeeded.connect(succeeded)
         worker.failed.connect(failed)
@@ -1402,6 +1480,13 @@ class HousesPage(QWidget):
 
     def _sync_management_from_gis(self) -> None:
         self._flush_autosave()
+        if self._bulk_operation_name is not None:
+            QMessageBox.information(
+                self,
+                "Выполняется массовая операция",
+                "Дождитесь завершения массовой загрузки перед точечным запросом.",
+            )
+            return
         if not self._current_house_id or self.integration_gateway is None:
             return
         house = self.repository.get_house(self._current_house_id)
@@ -1871,6 +1956,13 @@ class HousesPage(QWidget):
         )
 
     def _import_file(self) -> None:
+        if self._bulk_operation_name is not None:
+            QMessageBox.information(
+                self,
+                "Выполняется массовая операция",
+                "Дождитесь завершения массовой загрузки перед импортом домов из XLSX.",
+            )
+            return
         message = QMessageBox(self)
         message.setWindowTitle("Импорт домов из XLSX")
         message.setIcon(QMessageBox.Icon.Information)
