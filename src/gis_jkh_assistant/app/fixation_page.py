@@ -83,7 +83,9 @@ class FixationPage(QWidget):
         self._queue_period_ids: list[str] = []
         self._queue_index = 0
         self._queue_successes = 0
+        self._queue_skipped = 0
         self._queue_failed_period_id: str | None = None
+        self._queue_mode = "publish"
 
         self._build_ui()
         self.refresh_organizations()
@@ -199,12 +201,20 @@ class FixationPage(QWidget):
         self.load_month_button.setToolTip(
             "Получить фактические показатели выбранного месяца из ГИС ЖКХ."
         )
+        self.load_year_button = QPushButton(
+            "Загрузить фиксацию за доступные месяцы года"
+        )
+        self.load_year_button.setToolTip(
+            "Последовательно получить фиксацию из ГИС ЖКХ за весь доступный "
+            "период выбранного перечня в этом году."
+        )
         self.publish_month_button = QPushButton("Разместить выбранный месяц")
         self.publish_year_button = QPushButton("Разместить заполненные месяцы года")
         self.publish_year_button.setObjectName("PrimaryButton")
         self.continue_queue_button = QPushButton("Продолжить очередь")
         self.continue_queue_button.setVisible(False)
         publish_actions.addWidget(self.load_month_button)
+        publish_actions.addWidget(self.load_year_button)
         publish_actions.addWidget(self.publish_month_button)
         publish_actions.addWidget(self.publish_year_button)
         publish_actions.addWidget(self.continue_queue_button)
@@ -324,6 +334,7 @@ class FixationPage(QWidget):
         self.fill_year_button.clicked.connect(self._fill_year_from_plan)
         self.clear_month_button.clicked.connect(self._clear_month)
         self.load_month_button.clicked.connect(self._load_selected_month_from_gis)
+        self.load_year_button.clicked.connect(self._load_year_from_gis)
         self.publish_month_button.clicked.connect(self._publish_selected_month)
         self.publish_year_button.clicked.connect(self._publish_year)
         self.continue_queue_button.clicked.connect(self._continue_queue)
