@@ -26,6 +26,8 @@ class GisIntegrationWorker(QThread):
         self.command_type = command_type
         self.payload = payload
         self.timeout = float(timeout)
+        from .operation_presenter import observe_worker
+        observe_worker(self, parent)
 
     def run(self) -> None:
         try:

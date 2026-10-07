@@ -11,29 +11,15 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QDialog,
     QFileDialog,
-    QFormLayout,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QHeaderView,
     QInputDialog,
-    QLabel,
-    QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QMenu,
-    QPushButton,
-    QScrollArea,
-    QSplitter,
-    QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -54,7 +40,14 @@ from gis_jkh_assistant.work_lists.gis_sync import (
 
 from .gis_integration_worker import GisIntegrationWorker
 from .lazy_distribution_dialog import LazyDistributionDialog
-from .widgets import SafeComboBox, SafeSpinBox, StatusStrip
+from .registry_layouts import build_work_lists, mirror_registry
+from .registry_workflow import (
+    can_initialize_draft_baseline,
+    mark_work_list_saved,
+    refresh_work_lists,
+    work_list_fingerprint,
+)
+from .styles import color
 from .work_directory_dialog import WorkDirectorySelectionDialog
 from .work_row_rules import editable_columns_for_mode, infer_work_row_mode
 from .work_templates_dialog import WorkTemplatesDialog
@@ -86,6 +79,7 @@ _EXPORT_TEMPLATE_UPDATED_KEY = "gis_work_list_export_template_updated_at"
 
 class WorkListsPage(QWidget):
     """Local work-list registry grouped by organization and house."""
+    contextSelectionChanged = Signal()
 
     def __init__(
         self,
@@ -114,365 +108,10 @@ class WorkListsPage(QWidget):
         self.refresh_organizations()
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        build_work_lists(self)
 
-        self.page_scroll = QScrollArea()
-        self.page_scroll.setObjectName("PageScroll")
-        self.page_scroll.setWidgetResizable(True)
-        self.page_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        self.page_content = QWidget()
-        self.page_content.setObjectName("PageContent")
-        self.page_scroll.setWidget(self.page_content)
-        outer.addWidget(self.page_scroll)
-
-        root = QVBoxLayout(self.page_content)
-        root.setContentsMargins(20, 18, 20, 20)
-        root.setSpacing(14)
-
-        self.page_layout = root
-
-        title_row = QHBoxLayout()
-        title = QLabel("Перечни работ и услуг")
-        title.setObjectName("Title")
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        self.save_status = QLabel("Сохранено")
-        self.save_status.setObjectName("SaveStatus")
-        title_row.addWidget(self.save_status)
-        root.addLayout(title_row)
-
-        context = QFrame()
-        context.setObjectName("ContextBar")
-        self.context_card = context
-        context_layout = QGridLayout(context)
-        self.context_layout = context_layout
-        context_layout.setContentsMargins(14, 10, 14, 10)
-        context_layout.setHorizontalSpacing(10)
-        context_layout.setVerticalSpacing(8)
-
-        context_layout.addWidget(QLabel("Управляющая организация"), 0, 0)
-        self.organization_combo = SafeComboBox()
-        self.organization_combo.setMinimumWidth(280)
-        context_layout.addWidget(self.organization_combo, 0, 1, 1, 3)
-
-        context_layout.addWidget(QLabel("Дом"), 1, 0)
-        self.house_combo = SafeComboBox()
-        self.house_combo.setMinimumWidth(320)
-        context_layout.addWidget(self.house_combo, 1, 1, 1, 3)
-        context_layout.setColumnStretch(1, 1)
-        context_layout.setColumnStretch(3, 3)
-        root.addWidget(context)
-
-        creation = QFrame()
-        creation.setObjectName("ContextBar")
-        creation_layout = QGridLayout(creation)
-        creation_layout.setContentsMargins(14, 10, 14, 10)
-        creation_layout.setHorizontalSpacing(10)
-        creation_layout.setVerticalSpacing(8)
-
-        creation_layout.addWidget(QLabel("Год"), 0, 0)
-        self.year_spin = SafeSpinBox()
-        self.year_spin.setRange(2015, 2100)
-        self.year_spin.setValue(datetime.now().year)
-        self.year_spin.setFixedWidth(138)
-        creation_layout.addWidget(self.year_spin, 0, 1)
-
-        creation_layout.addWidget(QLabel("Шаблон перечня"), 0, 2)
-        self.template_combo = SafeComboBox()
-        self.template_combo.setMinimumWidth(260)
-        creation_layout.addWidget(self.template_combo, 0, 3)
-
-        self.templates_button = QPushButton("Шаблоны пользователя")
-        self.create_from_current_button = QPushButton("Создать на основе выбранного перечня")
-        self.create_button = QPushButton("+ Создать перечень")
-        self.create_button.setObjectName("PrimaryButton")
-
-        creation_actions = QGridLayout()
-        self.creation_actions = creation_actions
-        creation_actions.setHorizontalSpacing(8)
-        creation_actions.setVerticalSpacing(6)
-        creation_actions.addWidget(self.templates_button, 0, 0)
-        creation_actions.addWidget(self.create_button, 0, 3)
-        creation_actions.setColumnStretch(1, 1)
-        creation_actions.setColumnStretch(2, 1)
-        creation_layout.addLayout(creation_actions, 1, 0, 1, 4)
-        creation_layout.setColumnStretch(3, 1)
-        root.addWidget(creation)
-
-        self.load_gis_lists_button = QPushButton("Загрузить перечни по МКД")
-        self.load_gis_lists_button.setToolTip(
-            "Получить из ГИС ЖКХ перечни только для выбранного дома."
-        )
-        self.load_export_template_button = QPushButton(
-            "Получить / обновить шаблон из ГИС ЖКХ"
-        )
-        self.load_export_template_button.setToolTip(
-            "Автоматически запросить официальный XLSX-шаблон перечня в ГИС ЖКХ "
-            "и сохранить его как техническую основу."
-        )
-        self.load_export_template_file_button = QPushButton("Выбрать XLSX вручную…")
-        self.load_export_template_file_button.setToolTip(
-            "Резервный способ: выбрать ранее выгруженный официальный XLSX-файл."
-        )
-        self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
-        self.upload_to_gis_button = QPushButton("Загрузить XLSX в ГИС")
-        self.sync_gis_button = QPushButton("Проверить статус")
-        self.cancel_gis_button = QPushButton("Отменить перечень")
-        self.cancel_gis_button.setObjectName("DangerButton")
-        self.cancel_gis_button.setToolTip(
-            "Отменить размещенный перечень. ГИС ЖКХ удалит связанные планирование, "
-            "фиксацию и оценку качества; после этого состав перечня можно изменить."
-        )
-        self.save_editable_gis_button = QPushButton("Сохранить проект")
-        self.save_editable_gis_button.setToolTip(
-            "Сохранить новый состав отмененного перечня или проекта напрямую в ГИС ЖКХ."
-        )
-        self.approve_gis_button = QPushButton("Разместить в ГИС ЖКХ")
-        self.approve_gis_button.setObjectName("PrimaryButton")
-
-        self.files_actions_button = QPushButton("Файлы и шаблоны ▾")
-        files_menu = QMenu(self.files_actions_button)
-        self.download_template_action = files_menu.addAction(
-            "Получить / обновить официальный шаблон",
-            self.load_export_template_button.click,
-        )
-        self.manual_template_action = files_menu.addAction(
-            "Выбрать официальный XLSX вручную…",
-            self.load_export_template_file_button.click,
-        )
-        files_menu.addSeparator()
-        self.export_xlsx_action = files_menu.addAction(
-            "Сформировать XLSX из выбранного перечня",
-            self.export_button.click,
-        )
-        self.files_actions_button.setMenu(files_menu)
-
-        gis_frame = QFrame()
-        gis_frame.setObjectName("ActionToolbar")
-        gis_actions = QGridLayout(gis_frame)
-        self.gis_actions = gis_actions
-        gis_actions.setContentsMargins(10, 8, 10, 8)
-        gis_actions.setHorizontalSpacing(8)
-        gis_actions.setVerticalSpacing(6)
-        gis_actions.addWidget(self.files_actions_button, 0, 0)
-        gis_actions.addWidget(self.load_gis_lists_button, 0, 1)
-        gis_actions.addWidget(self.sync_gis_button, 0, 2)
-        gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
-        gis_actions.addWidget(self.save_editable_gis_button, 1, 1)
-        gis_actions.addWidget(self.approve_gis_button, 1, 2)
-        gis_actions.addWidget(self.cancel_gis_button, 2, 2)
-        for column in range(3):
-            gis_actions.setColumnStretch(column, 1)
-        root.addWidget(gis_frame)
-
-        self.export_status_strip = StatusStrip("Шаблон экспорта: не загружен")
-        self.export_template_status = self.export_status_strip.label
-        root.addWidget(self.export_status_strip)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        self.splitter = splitter
-        splitter.setMinimumHeight(300)
-        root.addWidget(splitter, 0)
-
-        left = QFrame()
-        left.setObjectName("Card")
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(12, 12, 12, 12)
-        header = QHBoxLayout()
-        header.addWidget(QLabel("Все перечни дома"))
-        header.addStretch(1)
-        self.list_count = QLabel("0")
-        self.list_count.setObjectName("Muted")
-        header.addWidget(self.list_count)
-        left_layout.addLayout(header)
-
-        self.work_lists = QListWidget()
-        self.work_lists.setWordWrap(True)
-        self.work_lists.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_layout.addWidget(self.work_lists, 1)
-
-        self.create_from_current_button.setToolTip(
-            "Создать новый перечень на основе выбранного в списке выше."
-        )
-        left_layout.addWidget(self.create_from_current_button)
-
-        self.delete_button = QPushButton("Удалить перечень")
-        self.delete_button.setObjectName("DangerButton")
-        left_layout.addWidget(self.delete_button)
-        splitter.addWidget(left)
-
-        right = QFrame()
-        right.setObjectName("Card")
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(16, 14, 16, 16)
-        right_layout.setSpacing(12)
-
-        section = QLabel("Параметры перечня")
-        section.setObjectName("SectionTitle")
-        right_layout.addWidget(section)
-
-        self.selected_label = QLabel("Выбранный перечень: —")
-        self.selected_label.setObjectName("Muted")
-        right_layout.addWidget(self.selected_label)
-
-        period_form = QFormLayout()
-
-        start_widget = QWidget()
-        start_layout = QHBoxLayout(start_widget)
-        start_layout.setContentsMargins(0, 0, 0, 0)
-        self.start_month = SafeComboBox()
-        self.start_month.setMinimumWidth(160)
-        self.start_month.addItems(_MONTHS)
-        self.start_year = SafeSpinBox()
-        self.start_year.setRange(2015, 2100)
-        self.start_year.setFixedWidth(132)
-        start_layout.addWidget(self.start_month, 1)
-        start_layout.addWidget(self.start_year)
-        period_form.addRow("Период с", start_widget)
-
-        end_widget = QWidget()
-        end_layout = QHBoxLayout(end_widget)
-        end_layout.setContentsMargins(0, 0, 0, 0)
-        self.end_month = SafeComboBox()
-        self.end_month.setMinimumWidth(160)
-        self.end_month.addItems(_MONTHS)
-        self.end_year = SafeSpinBox()
-        self.end_year.setRange(2015, 2100)
-        self.end_year.setFixedWidth(132)
-        end_layout.addWidget(self.end_month, 1)
-        end_layout.addWidget(self.end_year)
-        period_form.addRow("Период по", end_widget)
-
-        self.template_label = QLabel("—")
-        self.status_label = QLabel("—")
-        self.planned_total_label = QLabel("—")
-        self.gis_state_label = QLabel("—")
-        self.gis_state_label.setWordWrap(True)
-        period_form.addRow("Шаблон", self.template_label)
-        period_form.addRow("Статус", self.status_label)
-        period_form.addRow("Планируемая сумма", self.planned_total_label)
-        period_form.addRow("ГИС ЖКХ", self.gis_state_label)
-        right_layout.addLayout(period_form)
-
-        splitter.addWidget(right)
-        splitter.setSizes([340, 900])
-
-        self.items_card = QFrame()
-        self.items_card.setObjectName("Card")
-        items_layout = QVBoxLayout(self.items_card)
-        items_layout.setContentsMargins(16, 14, 16, 16)
-        items_layout.setSpacing(10)
-
-        items_header = QHBoxLayout()
-        items_title = QLabel("Работы и услуги")
-        items_title.setObjectName("SectionTitle")
-        items_header.addWidget(items_title)
-        items_header.addStretch(1)
-        items_layout.addLayout(items_header)
-
-        self.add_works_button = QPushButton("Добавить…")
-        self.add_works_button.setToolTip(
-            "Добавить работы и услуги из актуального справочника организации в ГИС ЖКХ."
-        )
-        self.remove_works_button = QPushButton("Удалить")
-        self.remove_works_button.setToolTip(
-            "Удалить выбранные строки из локального перечня."
-        )
-        self.clear_works_button = QPushButton("Очистить состав")
-        self.clear_works_button.setToolTip(
-            "Удалить все работы и услуги из локального состава перечня."
-        )
-        self.replace_from_template_button = QPushButton("Заменить по шаблону")
-        self.replace_from_template_button.setToolTip(
-            "Полностью заменить состав перечня работами выбранного сверху шаблона, "
-            "сопоставленными с актуальным справочником ГИС ЖКХ."
-        )
-        self.save_as_template_button = QPushButton("В шаблон…")
-        self.save_as_template_button.setToolTip(
-            "Сохранить текущий состав перечня как пользовательский шаблон."
-        )
-        self.lazy_fill_button = QPushButton("Распределить сумму…")
-        self.lazy_fill_button.setToolTip(
-            "Распределить планируемую итоговую сумму между работами и услугами."
-        )
-
-        self.items_actions = QGridLayout()
-        self.items_actions.setHorizontalSpacing(8)
-        self.items_actions.setVerticalSpacing(6)
-        items_layout.addLayout(self.items_actions)
-
-        input_hint = QLabel(
-            "Для каждой строки используется один из двух вариантов: "
-            "«Цена + Объем + Кол-во» или «Кол-во + Стоимость». "
-            "Недоступные поля блокируются автоматически."
-        )
-        input_hint.setWordWrap(True)
-        input_hint.setObjectName("Muted")
-        items_layout.addWidget(input_hint)
-
-        self.items_table = QTableWidget(0, 5)
-        self.items_table.setHorizontalHeaderLabels(
-            ["Работа / услуга", "Цена", "Объем", "Кол-во", "Стоимость"]
-        )
-        self.items_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
-        self.items_table.setAlternatingRowColors(True)
-        self.items_table.setMinimumHeight(440)
-        self.items_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.items_table.verticalHeader().setVisible(False)
-        header_view = self.items_table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 5):
-            header_view.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        items_layout.addWidget(self.items_table, 1)
-
-        root.addWidget(self.items_card, 1)
-
-        self.organization_combo.currentIndexChanged.connect(self._organization_changed)
-        self.house_combo.currentIndexChanged.connect(self._house_changed)
-        self.templates_button.clicked.connect(self._manage_templates)
-        self.load_gis_lists_button.clicked.connect(self._load_house_work_lists_from_gis)
-        self.load_export_template_button.clicked.connect(
-            self._download_export_template_from_gis
-        )
-        self.load_export_template_file_button.clicked.connect(
-            self._load_export_template_file
-        )
-        self.export_button.clicked.connect(self._export_current_work_list)
-        self.upload_to_gis_button.clicked.connect(self._upload_current_work_list_to_gis)
-        self.sync_gis_button.clicked.connect(self._sync_current_work_list_from_gis)
-        self.cancel_gis_button.clicked.connect(self._cancel_current_work_list_in_gis)
-        self.save_editable_gis_button.clicked.connect(
-            self._save_editable_work_list_to_gis
-        )
-        self.approve_gis_button.clicked.connect(self._approve_current_work_list_in_gis)
-        self.create_button.clicked.connect(self._create_work_list)
-        self.create_from_current_button.clicked.connect(self._clone_current_work_list)
-        self.delete_button.clicked.connect(self._delete_work_list)
-        self.add_works_button.clicked.connect(self._add_works_from_directory)
-        self.remove_works_button.clicked.connect(self._remove_selected_works)
-        self.clear_works_button.clicked.connect(self._clear_all_works)
-        self.replace_from_template_button.clicked.connect(
-            self._replace_current_from_template
-        )
-        self.save_as_template_button.clicked.connect(self._save_current_as_template)
-        self.lazy_fill_button.clicked.connect(self._open_lazy_distribution)
-        self.work_lists.currentItemChanged.connect(self._work_list_changed)
-
-        for widget in (self.start_month, self.end_month):
-            widget.currentIndexChanged.connect(self._queue_period_save)
-        for widget in (self.start_year, self.end_year):
-            widget.valueChanged.connect(self._queue_period_save)
-        self.items_table.itemChanged.connect(self._item_changed)
-
-        self._view_mode = "normal"
-        self._apply_view_mode("normal")
-        self._set_editor_enabled(False)
+    def _refresh_workflow(self) -> None:
+        self._refresh_gis_action_buttons()
 
     def refresh_organizations(self) -> None:
         self._save_period()
@@ -581,6 +220,8 @@ class WorkListsPage(QWidget):
 
         house_id = self.house_combo.currentData()
         selected_id = select_id or self._current_work_list_id
+        if select_id:
+            self.creation_toggle.setChecked(False)
 
         self.work_lists.blockSignals(True)
         self.work_lists.clear()
@@ -607,7 +248,7 @@ class WorkListsPage(QWidget):
             elif work_list.gis_work_list_guid:
                 template_name = "Из ГИС ЖКХ"
             else:
-                template_name = "Пустой перечень"
+                template_name = "Без шаблона"
             status = self._work_list_status_text(work_list)
             item = QListWidgetItem(
                 f"{work_list.period_label}\n{template_name} • {status}"
@@ -620,13 +261,14 @@ class WorkListsPage(QWidget):
         self.list_count.setText(str(len(lists)))
         if selected_row >= 0:
             self.work_lists.setCurrentRow(selected_row)
-        elif self.work_lists.count():
-            self.work_lists.setCurrentRow(self.work_lists.count() - 1)
         self.work_lists.blockSignals(False)
 
         current = self.work_lists.currentItem()
         current_id = current.data(Qt.ItemDataRole.UserRole) if current else None
+        mirror_registry(self)
         self._load_work_list(current_id)
+        if select_id and current_id == select_id:
+            self.contextSelectionChanged.emit()
 
     def _creation_year(self) -> int:
         self.year_spin.interpretText()
@@ -877,12 +519,15 @@ class WorkListsPage(QWidget):
     def _work_list_changed(self, current: QListWidgetItem | None, _previous=None) -> None:
         self._save_period()
         work_list_id = current.data(Qt.ItemDataRole.UserRole) if current else None
+        mirror_registry(self)
         self._load_work_list(work_list_id)
 
     def _load_work_list(self, work_list_id: str | None) -> None:
         self._period_timer.stop()
         self._period_dirty = False
         self._current_work_list_id = work_list_id
+        self._composition_review_error = ""
+        mirror_registry(self)
 
         if not work_list_id:
             self._loaded_period = None
@@ -903,6 +548,13 @@ class WorkListsPage(QWidget):
             self._set_editor_enabled(False)
             return
 
+        if str(work_list.gis_status or "").upper() == "DRAFT":
+            if (
+                self.repository.get_setting(f"ui_work_list_saved:{work_list.id}") is None
+                and can_initialize_draft_baseline(self, work_list)
+            ):
+                mark_work_list_saved(self, work_list.id)
+
         self._loading = True
         try:
             self._set_editor_enabled(True)
@@ -921,7 +573,7 @@ class WorkListsPage(QWidget):
                 if work_list.template_id
                 else None
             )
-            self.template_label.setText(template.name if template else "Пустой перечень")
+            self.template_label.setText(template.name if template else "Без шаблона")
             self.status_label.setText(self._work_list_status_text(work_list))
             self.planned_total_label.setText(
                 f"{work_list.planned_total} руб." if work_list.planned_total else "—"
@@ -960,6 +612,7 @@ class WorkListsPage(QWidget):
         finally:
             self.items_table.setUpdatesEnabled(True)
             self.items_table.blockSignals(False)
+        self._refresh_gis_action_buttons()
 
     def _current_period(self) -> tuple[int, int, int, int]:
         self.start_year.interpretText()
@@ -985,6 +638,7 @@ class WorkListsPage(QWidget):
         self._period_dirty = True
         self.save_status.setText("Сохраняется…")
         self._period_timer.start()
+        self._refresh_gis_action_buttons()
 
     def _save_period(self) -> None:
         self._period_timer.stop()
@@ -1037,6 +691,7 @@ class WorkListsPage(QWidget):
         if work_list:
             self.selected_label.setText(f"Выбранный перечень: {work_list.period_label}")
             self._update_list_item_text(work_list.id)
+            self._refresh_gis_action_buttons()
 
     def _update_list_item_text(self, work_list_id: str) -> None:
         work_list = self.repository.get_work_list(work_list_id)
@@ -1060,6 +715,7 @@ class WorkListsPage(QWidget):
             if item.data(Qt.ItemDataRole.UserRole) == work_list_id:
                 item.setText(f"{work_list.period_label}\n{template_name} • {status}")
                 break
+        mirror_registry(self)
 
     def _item_changed(self, table_item: QTableWidgetItem) -> None:
         if self._loading or not self._current_work_list_id:
@@ -1103,6 +759,7 @@ class WorkListsPage(QWidget):
             self.items_table.blockSignals(False)
 
         self.save_status.setText("Сохранено")
+        self._refresh_gis_action_buttons()
 
     def _apply_row_input_mode(self, row: int) -> None:
         """Mirror the mutually exclusive input schemes used by ГИС ЖКХ."""
@@ -1133,7 +790,7 @@ class WorkListsPage(QWidget):
                     item.setToolTip("")
             else:
                 item.setFlags(flags & ~Qt.ItemFlag.ItemIsEditable)
-                item.setBackground(QBrush(QColor("#f0f1f3")))
+                item.setBackground(QBrush(QColor(color("readonly"))))
                 if column in (1, 2):
                     item.setToolTip(
                         "Выбран вариант «Кол-во + Стоимость». "
@@ -1235,6 +892,7 @@ class WorkListsPage(QWidget):
             enabled and gis_status in {"CANCELLED", "DRAFT"}
         )
         self.approve_gis_button.setEnabled(enabled and gis_status == "DRAFT")
+        refresh_work_lists(self)
 
     def _refresh_export_template_status(self) -> None:
         path_text = self.repository.get_setting(_EXPORT_TEMPLATE_PATH_KEY)
@@ -1359,7 +1017,7 @@ class WorkListsPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Нет GUID дома",
-                "Сначала загрузите сведения о МКД из ГИС ЖКХ.",
+                "В разделе «Дома» загрузите сведения о доме из ГИС ЖКХ.",
             )
             return
         if not self._directory_ready():
@@ -1460,7 +1118,8 @@ class WorkListsPage(QWidget):
             )
             if details:
                 text += "\n\n" + "\n".join(details)
-            QMessageBox.information(self, "Шаблон экспорта обновлен", text)
+            if not getattr(self, "_preparing_project", False):
+                QMessageBox.information(self, "Шаблон экспорта обновлен", text)
 
         def progressed(progress: dict) -> None:
             phase = str(progress.get("phase") or "")
@@ -1482,8 +1141,7 @@ class WorkListsPage(QWidget):
                 self,
                 "Не удалось получить шаблон из ГИС ЖКХ",
                 message
-                + "\n\nМожно воспользоваться резервной кнопкой "
-                "«Выбрать XLSX вручную…».",
+                + "\n\nРезервный путь: «Файлы и шаблоны» → «Выбрать XLSX вручную…».",
             )
 
         def finished() -> None:
@@ -1521,9 +1179,8 @@ class WorkListsPage(QWidget):
             QMessageBox.information(
                 self,
                 "Не загружен шаблон экспорта",
-                "Сначала нажмите «Получить / обновить шаблон из ГИС ЖКХ». "
-                "Если автоматическая загрузка недоступна, используйте "
-                "«Выбрать XLSX вручную…».",
+                "В меню «Файлы и шаблоны» выберите «Получить официальный шаблон». "
+                "Резервный путь в этом же меню: «Выбрать XLSX вручную…».",
             )
             self._refresh_export_template_status()
             return
@@ -1735,6 +1392,7 @@ class WorkListsPage(QWidget):
             return
 
         self._set_integration_busy(True, busy_text)
+        sent_fingerprint = work_list_fingerprint(self, work_list_id)
         worker = GisIntegrationWorker(
             self.integration_gateway,
             command_type,
@@ -1745,6 +1403,8 @@ class WorkListsPage(QWidget):
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
+            if command_type in {"upload_import_work_list", "save_editable_work_list"}:
+                mark_work_list_saved(self, work_list_id, sent_fingerprint)
             success_callback(work_list_id, result)
 
         def failed(message: str) -> None:
@@ -1790,11 +1450,11 @@ class WorkListsPage(QWidget):
 
         answer = QMessageBox.question(
             self,
-            "Загрузить перечень в ГИС ЖКХ?",
-            f"Будет загружен перечень {work_list.period_label}\n"
+            "Сохранить проект в ГИС ЖКХ?",
+            f"Будет создан проект перечня {work_list.period_label}\n"
             f"для дома:\n{house.address}\n\n"
-            "После импорта в ГИС ЖКХ он должен появиться со статусом «Проект». "
-            "Размещение выполняется отдельной кнопкой.",
+            "После обработки в ГИС он появится со статусом «Проект». "
+            "Размещение будет отдельным следующим шагом.",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -1807,15 +1467,15 @@ class WorkListsPage(QWidget):
             if result.get("gisStatus") == "DRAFT":
                 QMessageBox.information(
                     self,
-                    "Перечень загружен",
-                    "ГИС ЖКХ принял файл. Перечень найден со статусом «Проект».",
+                    "Проект сохранён",
+                    "Перечень готов в ГИС ЖКХ как проект. Следующий шаг — размещение.",
                 )
             else:
                 QMessageBox.information(
                     self,
-                    "Файл отправлен",
-                    "ГИС ЖКХ принял файл в обработку. Проект пока не найден. "
-                    "Через некоторое время нажмите «Проверить статус в ГИС».",
+                    "Проект обрабатывается",
+                    "ГИС ЖКХ обрабатывает перечень. Через некоторое время "
+                    "нажмите «Проверить готовность проекта».",
                 )
 
         self._run_integration_command(
@@ -1921,12 +1581,8 @@ class WorkListsPage(QWidget):
                 return
 
             applied = apply_gis_work_list_sync(self.repository, preview)
-            select_id = (
-                applied.imported_ids[-1]
-                if applied.imported_ids
-                else self._current_work_list_id
-            )
-            self.refresh_work_lists(select_id=select_id)
+            # Synchronization updates the registry, keeping the user's chosen object.
+            self.refresh_work_lists()
 
             result_text = (
                 f"Добавлено перечней: {applied.imported}\n"
@@ -2536,6 +2192,7 @@ class WorkListsPage(QWidget):
         self.repository.delete_work_list(work_list.id)
         self._current_work_list_id = None
         self.refresh_work_lists()
+        self.contextSelectionChanged.emit()
 
     def _set_editor_enabled(self, enabled: bool) -> None:
         work_list = (
@@ -2585,114 +2242,10 @@ class WorkListsPage(QWidget):
 
     def _apply_view_mode(self, mode: str) -> None:
         self._view_mode = mode
-
-        if mode == "normal":
-            self.page_content.setMinimumSize(1040, 700)
-            self.page_layout.setContentsMargins(20, 18, 20, 20)
-            self.page_layout.setSpacing(14)
-            self.context_layout.setContentsMargins(14, 12, 14, 12)
-            self.context_layout.setHorizontalSpacing(10)
-            self.context_layout.setVerticalSpacing(8)
-            self.splitter.setOrientation(Qt.Orientation.Horizontal)
-            self.splitter.setSizes([340, 900])
-
-            self.creation_actions.addWidget(self.templates_button, 0, 0)
-            self.creation_actions.addWidget(self.create_button, 0, 3)
-            self.creation_actions.setColumnStretch(1, 1)
-            self.creation_actions.setColumnStretch(2, 1)
-
-            self.gis_actions.addWidget(self.files_actions_button, 0, 0)
-            self.gis_actions.addWidget(self.load_gis_lists_button, 0, 1)
-            self.gis_actions.addWidget(self.sync_gis_button, 0, 2)
-            self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
-            self.gis_actions.addWidget(self.save_editable_gis_button, 1, 1)
-            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
-            self.gis_actions.addWidget(self.cancel_gis_button, 2, 2)
-            for column in range(3):
-                self.gis_actions.setColumnStretch(column, 1)
-
-            self.items_actions.addWidget(self.add_works_button, 0, 0)
-            self.items_actions.addWidget(self.remove_works_button, 0, 1)
-            self.items_actions.addWidget(self.clear_works_button, 0, 2)
-            self.items_actions.addWidget(self.replace_from_template_button, 0, 3)
-            self.items_actions.addWidget(self.save_as_template_button, 1, 0, 1, 2)
-            self.items_actions.addWidget(self.lazy_fill_button, 1, 2, 1, 2)
-            for column in range(4):
-                self.items_actions.setColumnStretch(column, 1)
-            self.items_table.setMinimumHeight(440)
-
-        elif mode == "compact":
-            self.page_content.setMinimumSize(760, 660)
-            self.page_layout.setContentsMargins(14, 12, 14, 14)
-            self.page_layout.setSpacing(10)
-            self.context_layout.setContentsMargins(10, 9, 10, 9)
-            self.context_layout.setHorizontalSpacing(8)
-            self.context_layout.setVerticalSpacing(6)
-            self.splitter.setOrientation(Qt.Orientation.Horizontal)
-            self.splitter.setSizes([280, 620])
-
-            self.creation_actions.addWidget(self.templates_button, 0, 0)
-            self.creation_actions.addWidget(self.create_button, 0, 3)
-            self.creation_actions.setColumnStretch(1, 1)
-            self.creation_actions.setColumnStretch(2, 1)
-
-            self.gis_actions.addWidget(self.files_actions_button, 0, 0)
-            self.gis_actions.addWidget(self.load_gis_lists_button, 0, 1)
-            self.gis_actions.addWidget(self.sync_gis_button, 0, 2)
-            self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
-            self.gis_actions.addWidget(self.save_editable_gis_button, 1, 1)
-            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
-            self.gis_actions.addWidget(self.cancel_gis_button, 2, 2)
-            for column in range(3):
-                self.gis_actions.setColumnStretch(column, 1)
-
-            self.items_actions.addWidget(self.add_works_button, 0, 0)
-            self.items_actions.addWidget(self.remove_works_button, 0, 1)
-            self.items_actions.addWidget(self.clear_works_button, 1, 0)
-            self.items_actions.addWidget(self.replace_from_template_button, 1, 1)
-            self.items_actions.addWidget(self.save_as_template_button, 2, 0)
-            self.items_actions.addWidget(self.lazy_fill_button, 2, 1)
-            self.items_actions.setColumnStretch(0, 1)
-            self.items_actions.setColumnStretch(1, 1)
-            self.items_table.setMinimumHeight(400)
-
-        else:
-            # On a narrow window the two work areas are stacked vertically instead
-            # of being squeezed into unusable columns. The whole page remains
-            # scrollable, so no controls disappear below the viewport.
-            self.page_content.setMinimumSize(620, 980)
-            self.page_layout.setContentsMargins(10, 8, 10, 10)
-            self.page_layout.setSpacing(8)
-            self.context_layout.setContentsMargins(9, 8, 9, 8)
-            self.context_layout.setHorizontalSpacing(6)
-            self.context_layout.setVerticalSpacing(5)
-            self.splitter.setOrientation(Qt.Orientation.Vertical)
-            self.splitter.setSizes([260, 360])
-
-            self.creation_actions.addWidget(self.templates_button, 0, 0)
-            self.creation_actions.addWidget(self.create_button, 0, 1)
-            self.creation_actions.setColumnStretch(0, 1)
-            self.creation_actions.setColumnStretch(1, 1)
-
-            self.gis_actions.addWidget(self.files_actions_button, 0, 0, 1, 2)
-            self.gis_actions.addWidget(self.load_gis_lists_button, 1, 0, 1, 2)
-            self.gis_actions.addWidget(self.sync_gis_button, 2, 0, 1, 2)
-            self.gis_actions.addWidget(self.upload_to_gis_button, 3, 0, 1, 2)
-            self.gis_actions.addWidget(self.save_editable_gis_button, 4, 0)
-            self.gis_actions.addWidget(self.approve_gis_button, 4, 1)
-            self.gis_actions.addWidget(self.cancel_gis_button, 5, 0, 1, 2)
-            self.gis_actions.setColumnStretch(0, 1)
-            self.gis_actions.setColumnStretch(1, 1)
-
-            self.items_actions.addWidget(self.add_works_button, 0, 0)
-            self.items_actions.addWidget(self.remove_works_button, 0, 1)
-            self.items_actions.addWidget(self.clear_works_button, 1, 0)
-            self.items_actions.addWidget(self.replace_from_template_button, 1, 1)
-            self.items_actions.addWidget(self.save_as_template_button, 2, 0)
-            self.items_actions.addWidget(self.lazy_fill_button, 2, 1)
-            self.items_actions.setColumnStretch(0, 1)
-            self.items_actions.setColumnStretch(1, 1)
-            self.items_table.setMinimumHeight(360)
+        margins = (18, 14, 18, 18) if mode == "normal" else (12, 10, 12, 12)
+        self.page_layout.setContentsMargins(*margins)
+        self.page_layout.setSpacing(10 if mode == "normal" else 8)
+        self.items_table.setMinimumHeight(300 if mode == "normal" else 260)
 
     def set_compact_mode(self, compact: bool) -> None:
         """Compatibility shim for older callers."""

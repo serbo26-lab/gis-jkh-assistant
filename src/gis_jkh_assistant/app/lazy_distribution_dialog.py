@@ -35,6 +35,8 @@ from gis_jkh_assistant.work_lists import (
     validate_quantity,
 )
 
+from .styles import color
+
 
 class _PercentEntryDelegate(QStyledItemDelegate):
     """Keep corrections in place, but advance after filling a previously empty cell."""
@@ -568,7 +570,7 @@ class LazyDistributionDialog(QDialog):
                                 )
                             except LazyDistributionError:
                                 quantities_valid = False
-                                quantity_item.setBackground(QBrush(QColor("#fff0f0")))
+                                quantity_item.setBackground(QBrush(QColor(color("danger_surface"))))
                                 quantity_item.setToolTip(
                                     "Для позиции с процентом больше 0 укажите "
                                     "количество больше нуля."
@@ -592,7 +594,7 @@ class LazyDistributionDialog(QDialog):
             self.quantity_status.setText("")
         else:
             self.quantity_status.setText("• Проверьте количество")
-            self.quantity_status.setStyleSheet("color: #b42318;")
+            self.quantity_status.setStyleSheet(f"color: {color('danger')};")
 
         try:
             total_valid = _decimal_or_zero(total_text) > 0
@@ -603,9 +605,9 @@ class LazyDistributionDialog(QDialog):
         self.apply_button.setEnabled(exact and total_valid and quantities_valid)
 
         if exact:
-            self.percent_status.setStyleSheet("color: #107c10;")
+            self.percent_status.setStyleSheet(f"color: {color('success')};")
         else:
-            self.percent_status.setStyleSheet("color: #b42318;")
+            self.percent_status.setStyleSheet(f"color: {color('danger')};")
 
     def _allocation_inputs(self) -> list[AllocationInput]:
         result: list[AllocationInput] = []

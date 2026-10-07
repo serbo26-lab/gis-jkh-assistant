@@ -7,19 +7,10 @@ import mimetypes
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -40,7 +31,9 @@ from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .fixation_dialogs import AddUnplannedWorkDialog, FixationPhotoDialog
 from .gis_integration_worker import GisIntegrationWorker
-from .widgets import ActionToolbar, SafeComboBox, ScopeSwitcher, StatusStrip
+from .page_layouts import build_monthly
+from .workflow_presenter import refresh_monthly
+from .styles import color
 
 
 _MONTHS = (
@@ -85,263 +78,14 @@ class FixationPage(QWidget):
         self._queue_skipped = 0
         self._queue_failed_period_id: str | None = None
         self._queue_mode = "publish"
+        self._queue_running = False
 
         self._build_ui()
         self.refresh_organizations()
         self._refresh_integration_status()
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        scroll = QScrollArea()
-        scroll.setObjectName("PageScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        outer.addWidget(scroll)
-
-        content = QWidget()
-        content.setObjectName("PageContent")
-        scroll.setWidget(content)
-
-        root = QVBoxLayout(content)
-        root.setContentsMargins(20, 18, 20, 20)
-        root.setSpacing(14)
-
-        title = QLabel("Фиксация работ и услуг")
-        title.setObjectName("Title")
-        root.addWidget(title)
-
-        intro = QLabel(
-            "Фиксация ведется помесячно. Можно заполнить один месяц вручную, "
-            "скопировать плановые показатели в факт для месяца или сразу для всего года. "
-            "Заполненные месяцы можно разместить в ГИС ЖКХ по одному либо одной очередью."
-        )
-        intro.setObjectName("Muted")
-        intro.setWordWrap(True)
-        root.addWidget(intro)
-
-        context = QFrame()
-        context.setObjectName("ContextBar")
-        grid = QGridLayout(context)
-        grid.setContentsMargins(14, 12, 14, 12)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-
-        grid.addWidget(QLabel("Управляющая организация"), 0, 0)
-        self.organization_combo = SafeComboBox()
-        grid.addWidget(self.organization_combo, 0, 1, 1, 3)
-
-        grid.addWidget(QLabel("Дом"), 1, 0)
-        self.house_combo = SafeComboBox()
-        grid.addWidget(self.house_combo, 1, 1, 1, 3)
-
-        grid.addWidget(QLabel("Размещенный перечень"), 2, 0)
-        self.work_list_combo = SafeComboBox()
-        grid.addWidget(self.work_list_combo, 2, 1, 1, 3)
-
-        grid.addWidget(QLabel("Год"), 3, 0)
-        self.year_combo = SafeComboBox()
-        self.year_combo.setFixedWidth(120)
-        grid.addWidget(self.year_combo, 3, 1)
-
-        grid.setColumnStretch(1, 2)
-        grid.setColumnStretch(3, 1)
-        root.addWidget(context)
-
-        self.empty_hint = QLabel(
-            "Для выбранного дома нет размещенных перечней. Сначала разместите перечень "
-            "в разделе «Перечни работ и услуг» и проверьте его статус в ГИС ЖКХ."
-        )
-        self.empty_hint.setWordWrap(True)
-        self.empty_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self.empty_hint.setStyleSheet("color: #1f1f1f; font-weight: 600;")
-        root.addWidget(self.empty_hint)
-
-        month_card = QFrame()
-        month_card.setObjectName("Card")
-        month_layout = QVBoxLayout(month_card)
-        month_layout.setContentsMargins(12, 12, 12, 12)
-        month_layout.setSpacing(8)
-
-        self.month_buttons_layout = QGridLayout()
-        self.month_buttons_layout.setHorizontalSpacing(6)
-        self.month_buttons_layout.setVerticalSpacing(6)
-        self.month_buttons: dict[int, QPushButton] = {}
-        for month, name in enumerate(_MONTHS, start=1):
-            button = QPushButton(f"{name}\n—")
-            button.setObjectName("MonthButton")
-            button.setCheckable(True)
-            button.setMinimumWidth(72)
-            button.clicked.connect(
-                lambda _checked=False, value=month: self._select_month(value)
-            )
-            self.month_buttons[month] = button
-        month_layout.addLayout(self.month_buttons_layout)
-        self._relayout_month_buttons()
-
-        self.month_status = QLabel("Период: —")
-        self.month_status.setObjectName("Muted")
-        self.month_status.setWordWrap(True)
-        month_layout.addWidget(self.month_status)
-
-        self.fill_month_button = QPushButton("Заполнить по плану")
-        self.fill_year_button = QPushButton("Заполнить по плану весь год")
-        self.fill_year_button.setVisible(False)
-        self.clear_month_button = QPushButton("Очистить факт")
-        self.load_month_button = QPushButton("Загрузить фиксацию")
-        self.load_month_button.setToolTip(
-            "Получить фактические показатели из ГИС ЖКХ для выбранной области."
-        )
-        self.load_year_button = QPushButton(
-            "Загрузить фиксацию за доступные месяцы года"
-        )
-        self.load_year_button.setVisible(False)
-        self.publish_month_button = QPushButton("Разместить в ГИС ЖКХ")
-        self.publish_month_button.setObjectName("PrimaryButton")
-        self.publish_year_button = QPushButton("Разместить заполненные месяцы года")
-        self.publish_year_button.setVisible(False)
-        self.continue_queue_button = QPushButton("Продолжить очередь")
-        self.continue_queue_button.setVisible(False)
-
-        actions = ActionToolbar()
-        self.scope_switcher = ScopeSwitcher(
-            "month",
-            "Выбранный месяц",
-            "period",
-            "Доступный период",
-        )
-        actions.add_widget(self.scope_switcher)
-        actions.add_separator()
-        actions.add_label("Локально")
-        actions.add_widget(self.fill_month_button)
-        actions.add_widget(self.clear_month_button)
-        actions.add_separator()
-        actions.add_label("Из ГИС")
-        actions.add_widget(self.load_month_button)
-        actions.add_separator()
-        actions.add_label("В ГИС")
-        actions.add_widget(self.publish_month_button)
-        actions.add_stretch()
-        month_layout.addWidget(actions)
-
-        self.queue_status_strip = StatusStrip("")
-        self.queue_progress = self.queue_status_strip.progress
-        self.queue_label = self.queue_status_strip.label
-        self.queue_status_strip.add_action(self.continue_queue_button)
-        self.queue_status_strip.setVisible(False)
-        month_layout.addWidget(self.queue_status_strip)
-
-        root.addWidget(month_card)
-
-        table_card = QFrame()
-        table_card.setObjectName("Card")
-        table_layout = QVBoxLayout(table_card)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-
-        hint = QLabel(
-            "Плановые показатели берутся из локального размещенного перечня и плана. "
-            "Редактируются фактические цена, объем, количество и стоимость. "
-            "К плановой работе можно прикрепить фото. Акты относятся к следующему "
-            "разделу «Оценка качества» и здесь не редактируются."
-        )
-        hint.setObjectName("Muted")
-        hint.setWordWrap(True)
-        table_layout.addWidget(hint)
-
-        self.table = QTableWidget(0, 11)
-        self.table.setHorizontalHeaderLabels(
-            [
-                "Работа / услуга",
-                "Цена план",
-                "Цена факт",
-                "Объем план",
-                "Объем факт",
-                "Кол-во план",
-                "Кол-во факт",
-                "Стоимость план",
-                "Стоимость факт",
-                "Фото",
-                "Статус",
-            ]
-        )
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 11):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        table_layout.addWidget(self.table)
-        root.addWidget(table_card)
-
-        unplanned_card = QFrame()
-        unplanned_card.setObjectName("Card")
-        unplanned_layout = QVBoxLayout(unplanned_card)
-        unplanned_layout.setContentsMargins(12, 12, 12, 12)
-
-        unplanned_header = QHBoxLayout()
-        unplanned_title = QLabel("Внеплановые работы")
-        unplanned_title.setObjectName("SectionTitle")
-        self.add_unplanned_button = QPushButton("Добавить внеплановую работу")
-        unplanned_header.addWidget(unplanned_title)
-        unplanned_header.addStretch(1)
-        unplanned_header.addWidget(self.add_unplanned_button)
-        unplanned_layout.addLayout(unplanned_header)
-
-        unplanned_hint = QLabel(
-            "Внеплановой может быть только работа, которой нет в плане выбранного периода. "
-            "Справочник работ загружается из ГИС ЖКХ. Для строки можно указать фото и комментарий."
-        )
-        unplanned_hint.setObjectName("Muted")
-        unplanned_hint.setWordWrap(True)
-        unplanned_layout.addWidget(unplanned_hint)
-
-        self.unplanned_table = QTableWidget(0, 10)
-        self.unplanned_table.setHorizontalHeaderLabels(
-            [
-                "Работа / услуга",
-                "Вид работы / услуги",
-                "Ед. изм.",
-                "Цена",
-                "Объем",
-                "Количество",
-                "Стоимость",
-                "Комментарий",
-                "Фото",
-                "",
-            ]
-        )
-        self.unplanned_table.setAlternatingRowColors(True)
-        self.unplanned_table.verticalHeader().setVisible(False)
-        unplanned_header_view = self.unplanned_table.horizontalHeader()
-        unplanned_header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        unplanned_header_view.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        for column in (1, 2, 3, 4, 5, 6, 8, 9):
-            unplanned_header_view.setSectionResizeMode(
-                column,
-                QHeaderView.ResizeMode.ResizeToContents,
-            )
-        unplanned_layout.addWidget(self.unplanned_table)
-        root.addWidget(unplanned_card)
-        root.addStretch(1)
-
-        self.organization_combo.currentIndexChanged.connect(self._organization_changed)
-        self.house_combo.currentIndexChanged.connect(self._house_changed)
-        self.work_list_combo.currentIndexChanged.connect(self._work_list_changed)
-        self.year_combo.currentIndexChanged.connect(self._year_changed)
-        self.fill_month_button.clicked.connect(self._fill_scope_from_plan)
-        self.clear_month_button.clicked.connect(self._clear_scope)
-        self.load_month_button.clicked.connect(self._load_scope_from_gis)
-        self.publish_month_button.clicked.connect(self._publish_scope)
-        self.continue_queue_button.clicked.connect(self._continue_queue)
-        self.scope_switcher.scopeChanged.connect(self._scope_changed)
-        self.table.itemChanged.connect(self._table_item_changed)
-        self.unplanned_table.itemChanged.connect(self._unplanned_item_changed)
-        self.add_unplanned_button.clicked.connect(self._request_add_unplanned)
-
-        self._set_enabled(False)
+        build_monthly(self, "fixation")
 
     def refresh_organizations(self) -> None:
         current = self.organization_combo.currentData()
@@ -571,7 +315,7 @@ class FixationPage(QWidget):
                     if column not in (2, 4, 6, 8):
                         cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     if column in (1, 3, 5, 7):
-                        cell.setBackground(QBrush(QColor("#f5f6f7")))
+                        cell.setBackground(QBrush(QColor(color("readonly"))))
                     self.table.setItem(row, column, cell)
 
                 photos = self.repository.list_work_fixation_photos(
@@ -588,7 +332,7 @@ class FixationPage(QWidget):
                 status = QTableWidgetItem(values[9] or "")
                 status.setFlags(status.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if item_has_fact(item):
-                    status.setBackground(QBrush(QColor("#e8f4e8")))
+                    status.setBackground(QBrush(QColor(color("success_surface"))))
                 self.table.setItem(row, 10, status)
         finally:
             self.table.blockSignals(False)
@@ -662,7 +406,7 @@ class FixationPage(QWidget):
         total_mode = bool(cost) and not detailed_mode
 
         editable = Qt.ItemFlag.ItemIsEditable
-        readonly_background = QBrush(QColor("#f5f6f7"))
+        readonly_background = QBrush(QColor(color("readonly")))
         normal_background = QBrush()
 
         was_blocked = self.unplanned_table.blockSignals(True)
@@ -909,7 +653,7 @@ class FixationPage(QWidget):
         status = self.table.item(cell.row(), 10)
         if status:
             status.setText("заполнено")
-            status.setBackground(QBrush(QColor("#e8f4e8")))
+            status.setBackground(QBrush(QColor(color("success_surface"))))
         self._refresh_period_status()
         self._refresh_year_status()
 
@@ -1087,54 +831,7 @@ class FixationPage(QWidget):
         self.month_status.setText(text)
 
     def _refresh_year_status(self) -> None:
-        year_value = self.year_combo.currentData()
-        work_list = (
-            self.repository.get_work_list(self._current_work_list_id)
-            if self._current_work_list_id
-            else None
-        )
-        if not work_list or year_value is None:
-            for month, button in self.month_buttons.items():
-                button.setText(f"{_MONTHS[month - 1]}\n—")
-                button.setEnabled(False)
-                button.setChecked(False)
-            return
-
-        year = int(year_value)
-        active_months = set(active_months_for_work_list(work_list, year))
-        periods = {
-            period.month: period
-            for period in self.repository.list_work_fixation_periods(
-                self._current_work_list_id,
-                year=year,
-            )
-        }
-
-        for month, button in self.month_buttons.items():
-            if month not in active_months:
-                status_text = "вне периода"
-                button.setEnabled(False)
-            else:
-                button.setEnabled(True)
-                period = periods.get(month)
-                if period is None:
-                    status_text = "—"
-                else:
-                    has_data = self._period_has_data(period.id)
-                    status = str(period.gis_status or "").upper()
-                    if status == "SAVED":
-                        status_text = "размещено"
-                    elif status == "ERROR":
-                        status_text = "ошибка"
-                    elif status == "MODIFIED":
-                        status_text = "изменено"
-                    elif has_data:
-                        status_text = "готов"
-                    else:
-                        status_text = "—"
-
-            button.setText(f"{_MONTHS[month - 1]}\n{status_text}")
-            button.setChecked(month == self._current_month and month in active_months)
+        refresh_monthly(self, "fixation")
 
 
     def _periods_with_data_for_year(self) -> list[WorkFixationPeriod]:
@@ -1423,7 +1120,9 @@ class FixationPage(QWidget):
         self._start_next_queue_item()
 
     def _start_next_queue_item(self) -> None:
+        self._queue_running = True
         if self._queue_index >= len(self._queue_period_ids):
+            self._queue_running = False
             self.queue_progress.setValue(len(self._queue_period_ids))
             if self._queue_mode == "load":
                 self.queue_label.setText(
@@ -1476,6 +1175,7 @@ class FixationPage(QWidget):
             or not fias
         ):
             self._queue_failed_period_id = period_id
+            self._queue_running = False
             self.queue_label.setText(
                 "Очередь остановлена: не хватает идентификаторов ГИС ЖКХ."
             )
@@ -1533,6 +1233,7 @@ class FixationPage(QWidget):
                 gis_last_error=message,
             )
             self._queue_failed_period_id = period_id
+            self._queue_running = False
             self.queue_label.setText(
                 f"Очередь остановлена на {_MONTHS[period.month - 1]} "
                 f"{period.year}: {message}"
@@ -1607,6 +1308,7 @@ class FixationPage(QWidget):
             )
             if queue_mode:
                 self._queue_failed_period_id = period_id
+                self._queue_running = False
                 self.queue_label.setText(
                     f"Очередь остановлена на периоде {_MONTHS[period.month - 1]} "
                     f"{period.year}: {message}"
@@ -1709,6 +1411,7 @@ class FixationPage(QWidget):
             self._refresh_year_status()
             if queue_mode:
                 self._queue_failed_period_id = period_id
+                self._queue_running = False
                 period_now = self.repository.get_work_fixation_period(period_id)
                 label = (
                     f"{_MONTHS[period_now.month - 1]} {period_now.year}"
@@ -1748,28 +1451,7 @@ class FixationPage(QWidget):
         self._refresh_gis_buttons()
 
     def _refresh_gis_buttons(self) -> None:
-        status = self.integration_gateway.status()
-        ready = (
-            status.running
-            and status.helper_connected
-            and status.gis_page_ready
-            and helper_supports_fixations(status.helper_version)
-            and not self._integration_busy
-        )
-        period_scope = self._scope_is_period()
-        has_target = (
-            bool(self._current_work_list_id)
-            if period_scope
-            else bool(self._current_period_id)
-        )
-        self.load_month_button.setEnabled(has_target and ready)
-        self.publish_month_button.setEnabled(has_target and ready)
-        self.load_year_button.setEnabled(bool(self._current_work_list_id) and ready)
-        self.publish_year_button.setEnabled(
-            bool(self._current_work_list_id) and ready
-        )
-        self.add_unplanned_button.setEnabled(bool(self._current_period_id) and ready)
-        self.continue_queue_button.setEnabled(ready)
+        refresh_monthly(self, "fixation")
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
@@ -1782,10 +1464,6 @@ class FixationPage(QWidget):
         )
         self.fill_month_button.setEnabled(local_enabled)
         self.clear_month_button.setEnabled(local_enabled)
-        self.fill_year_button.setEnabled(bool(self._current_work_list_id))
-        self.load_year_button.setEnabled(
-            bool(self._current_work_list_id) and enabled
-        )
         self._refresh_gis_buttons()
 
     def set_view_mode(self, mode: str) -> None:

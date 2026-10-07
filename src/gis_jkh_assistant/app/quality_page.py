@@ -4,18 +4,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -38,9 +29,10 @@ from gis_jkh_assistant.quality_assessment import (
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .gis_integration_worker import GisIntegrationWorker
+from .page_layouts import build_monthly
+from .workflow_presenter import refresh_monthly
 from .quality_bulk_dialogs import QualityMonthActsDialog
 from .quality_dialogs import QualityActsDialog
-from .widgets import ActionToolbar, SafeComboBox, ScopeSwitcher, StatusStrip
 
 
 _MONTHS = (
@@ -80,236 +72,7 @@ class QualityAssessmentPage(QWidget):
         self.refresh_organizations()
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setObjectName("PageScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        outer.addWidget(scroll)
-
-        content = QWidget()
-        content.setObjectName("PageContent")
-        scroll.setWidget(content)
-        root = QVBoxLayout(content)
-        root.setContentsMargins(20, 18, 20, 20)
-        root.setSpacing(14)
-
-        title = QLabel("Оценка качества")
-        title.setObjectName("Title")
-        root.addWidget(title)
-        intro = QLabel(
-            "Оценка качества формируется по месяцам размещённого перечня. "
-            "Включите нужные работы, при необходимости укажите сведения о "
-            "ненадлежащем качестве и добавьте один или несколько актов. "
-            "Сначала оценку можно сохранить как проект, затем разместить."
-        )
-        intro.setObjectName("Muted")
-        intro.setWordWrap(True)
-        root.addWidget(intro)
-
-        context = QFrame()
-        context.setObjectName("ContextBar")
-        grid = QGridLayout(context)
-        grid.setContentsMargins(14, 12, 14, 12)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-
-        grid.addWidget(QLabel("Управляющая организация"), 0, 0)
-        self.organization_combo = SafeComboBox()
-        grid.addWidget(self.organization_combo, 0, 1, 1, 3)
-        grid.addWidget(QLabel("Дом"), 1, 0)
-        self.house_combo = SafeComboBox()
-        grid.addWidget(self.house_combo, 1, 1, 1, 3)
-        grid.addWidget(QLabel("Размещенный перечень"), 2, 0)
-        self.work_list_combo = SafeComboBox()
-        grid.addWidget(self.work_list_combo, 2, 1, 1, 3)
-        grid.addWidget(QLabel("Год"), 3, 0)
-        self.year_combo = SafeComboBox()
-        self.year_combo.setFixedWidth(120)
-        grid.addWidget(self.year_combo, 3, 1)
-        grid.setColumnStretch(1, 2)
-        root.addWidget(context)
-
-        self.empty_hint = QLabel(
-            "Для выбранного дома нет размещённых перечней. Сначала разместите "
-            "перечень работ и услуг."
-        )
-        self.empty_hint.setWordWrap(True)
-        self.empty_hint.setStyleSheet("font-weight: 600;")
-        root.addWidget(self.empty_hint)
-
-        month_card = QFrame()
-        month_card.setObjectName("Card")
-        month_layout = QVBoxLayout(month_card)
-        month_layout.setContentsMargins(12, 12, 12, 12)
-        month_layout.setSpacing(8)
-        self.month_buttons_layout = QGridLayout()
-        self.month_buttons_layout.setHorizontalSpacing(6)
-        self.month_buttons_layout.setVerticalSpacing(6)
-        self.month_buttons: dict[int, QPushButton] = {}
-        for month, name in enumerate(_MONTHS, start=1):
-            button = QPushButton(f"{name}\n—")
-            button.setObjectName("MonthButton")
-            button.setCheckable(True)
-            button.setMinimumWidth(72)
-            button.clicked.connect(
-                lambda _checked=False, value=month: self._select_month(value)
-            )
-            self.month_buttons[month] = button
-        month_layout.addLayout(self.month_buttons_layout)
-        self._relayout_month_buttons()
-
-        self.month_status = QLabel("Период: —")
-        self.month_status.setObjectName("Muted")
-        month_layout.addWidget(self.month_status)
-
-        self.form_month_button = QPushButton("Сформировать оценку")
-        self.form_year_button = QPushButton(
-            "Сформировать оценку за доступные месяцы года"
-        )
-        self.form_year_button.setVisible(False)
-        self.auto_act_month_button = QPushButton("Сформировать акт")
-        self.auto_act_year_button = QPushButton(
-            "Сформировать акты доступных месяцев года"
-        )
-        self.auto_act_year_button.setVisible(False)
-        self.clear_values_button = QPushButton("Очистить данные")
-        self.clear_year_values_button = QPushButton(
-            "Очистить данные доступных месяцев года"
-        )
-        self.clear_year_values_button.setVisible(False)
-
-        self.load_gis_button = QPushButton("Загрузить оценку качества")
-        self.load_gis_button.setToolTip(
-            "Получить оценку качества из ГИС ЖКХ для выбранной области."
-        )
-        self.load_gis_year_button = QPushButton(
-            "Загрузить оценки за доступные месяцы года"
-        )
-        self.load_gis_year_button.setVisible(False)
-
-        self.save_button = QPushButton("Сохранить проект")
-        self.save_year_button = QPushButton("Сохранить проекты года")
-        self.save_year_button.setVisible(False)
-        self.publish_button = QPushButton("Разместить в ГИС ЖКХ")
-        self.publish_button.setObjectName("PrimaryButton")
-        self.publish_year_button = QPushButton(
-            "Разместить доступные месяцы года"
-        )
-        self.publish_year_button.setVisible(False)
-        self.cancel_button = QPushButton("Аннулировать")
-        self.cancel_button.setObjectName("DangerButton")
-        self.continue_queue_button = QPushButton("Продолжить очередь")
-        self.continue_queue_button.setVisible(False)
-
-        actions = ActionToolbar()
-        self.scope_switcher = ScopeSwitcher(
-            "month",
-            "Выбранный месяц",
-            "period",
-            "Доступный период",
-        )
-        actions.add_widget(self.scope_switcher)
-        actions.add_separator()
-        actions.add_label("Подготовка")
-        actions.add_widget(self.form_month_button)
-        actions.add_widget(self.auto_act_month_button)
-        actions.add_widget(self.clear_values_button)
-        actions.add_separator()
-        actions.add_label("Из ГИС")
-        actions.add_widget(self.load_gis_button)
-        actions.add_separator()
-        actions.add_label("В ГИС")
-        actions.add_widget(self.save_button)
-        actions.add_widget(self.publish_button)
-        actions.add_stretch()
-        actions.add_widget(self.cancel_button)
-        month_layout.addWidget(actions)
-
-        self.queue_status_strip = StatusStrip("")
-        self.queue_progress = self.queue_status_strip.progress
-        self.queue_label = self.queue_status_strip.label
-        self.queue_status_strip.add_action(self.continue_queue_button)
-        self.queue_status_strip.setVisible(False)
-        month_layout.addWidget(self.queue_status_strip)
-
-        root.addWidget(month_card)
-
-        table_card = QFrame()
-        table_card.setObjectName("Card")
-        table_layout = QVBoxLayout(table_card)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-        note = QLabel(
-            "Поля «Стоимость в ежемесячной плате», «Дней ненадлежащего качества» "
-            "и «Уменьшение платы» заполняются только при ненадлежащем качестве "
-            "и перерасчёте. Для обычного акта выполненных работ они должны "
-            "оставаться пустыми; фактическая стоимость для PDF берётся из "
-            "раздела «Фиксация работ и услуг»."
-        )
-        note.setObjectName("Muted")
-        note.setWordWrap(True)
-        table_layout.addWidget(note)
-
-        bulk_actions = QHBoxLayout()
-        self.include_all_button = QPushButton("Включить все работы")
-        self.exclude_all_button = QPushButton("Снять все")
-        self.month_acts_button = QPushButton("Акты месяца…")
-        self.month_acts_summary = QLabel("Акты месяца: —")
-        self.month_acts_summary.setObjectName("Muted")
-        bulk_actions.addWidget(self.include_all_button)
-        bulk_actions.addWidget(self.exclude_all_button)
-        bulk_actions.addSpacing(12)
-        bulk_actions.addWidget(self.month_acts_button)
-        bulk_actions.addWidget(self.month_acts_summary)
-        bulk_actions.addStretch(1)
-        table_layout.addLayout(bulk_actions)
-
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(
-            [
-                "В оценку",
-                "Работа / услуга",
-                "Стоимость в ежемесячной плате",
-                "Дней ненадлежащего качества",
-                "Дней в месяце",
-                "Уменьшение платы",
-                "Акты",
-            ]
-        )
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for column in (0, 2, 3, 4, 5, 6):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        table_layout.addWidget(self.table)
-        root.addWidget(table_card)
-        root.addStretch(1)
-
-        self.organization_combo.currentIndexChanged.connect(self._organization_changed)
-        self.house_combo.currentIndexChanged.connect(self._house_changed)
-        self.work_list_combo.currentIndexChanged.connect(self._work_list_changed)
-        self.year_combo.currentIndexChanged.connect(self._year_changed)
-        self.table.itemChanged.connect(self._table_item_changed)
-        self.form_month_button.clicked.connect(self._form_scope_from_fixation)
-        self.auto_act_month_button.clicked.connect(self._auto_generate_scope_act)
-        self.load_gis_button.clicked.connect(self._load_scope_from_gis)
-        self.save_button.clicked.connect(self._save_scope)
-        self.publish_button.clicked.connect(self._publish_scope)
-        self.continue_queue_button.clicked.connect(self._continue_queue)
-        self.cancel_button.clicked.connect(self._cancel)
-        self.include_all_button.clicked.connect(
-            lambda: self._set_all_included(True)
-        )
-        self.exclude_all_button.clicked.connect(
-            lambda: self._set_all_included(False)
-        )
-        self.clear_values_button.clicked.connect(self._clear_scope_values)
-        self.month_acts_button.clicked.connect(self._open_month_acts)
-        self.scope_switcher.scopeChanged.connect(self._scope_changed)
-        self._set_enabled(False)
+        build_monthly(self, "quality")
 
     def refresh_organizations(self) -> None:
         current = self.organization_combo.currentData()
@@ -553,7 +316,6 @@ class QualityAssessmentPage(QWidget):
         return self.scope_switcher.scope() == "period"
 
     def _scope_changed(self, _scope: str) -> None:
-        self.cancel_button.setVisible(not self._scope_is_period())
         self._set_enabled(bool(self._current_period_id))
 
     def _form_scope_from_fixation(self) -> None:
@@ -705,6 +467,7 @@ class QualityAssessmentPage(QWidget):
             "Сформировать оценку за доступные месяцы года?",
             f"Будут последовательно сформированы месяцы: {len(months)}. "
             "Для каждого месяца используются фактические показатели из фиксации. "
+            "Операция повторно формирует также ранее заполненные и размещённые месяцы. "
             "Строки с пользовательскими или импортированными актами "
             "не изменяются. Продолжить?",
         )
@@ -1650,118 +1413,13 @@ class QualityAssessmentPage(QWidget):
         self.month_status.setText(text)
 
     def _refresh_year_status(self) -> None:
-        if not self._current_work_list_id or self.year_combo.currentData() is None:
-            return
-        year = int(self.year_combo.currentData())
-        periods = {
-            period.month: period
-            for period in self.store.list_periods(self._current_work_list_id, year=year)
-        }
-        work_list = self.repository.get_work_list(self._current_work_list_id)
-        active = set(active_months_for_work_list(work_list, year)) if work_list else set()
-        for month, button in self.month_buttons.items():
-            if month not in active:
-                suffix = "вне периода"
-            else:
-                period = periods.get(month)
-                if period is None:
-                    suffix = "—"
-                else:
-                    status = str(period.gis_status or "LOCAL").upper()
-                    if status == "DRAFT":
-                        suffix = "проект"
-                    elif status == "APPROVED":
-                        suffix = "размещено"
-                    elif status == "MODIFIED":
-                        suffix = "изменено"
-                    elif status == "CANCELLED":
-                        suffix = "аннулировано"
-                    elif period.gis_last_error:
-                        suffix = "ошибка"
-                    else:
-                        touched = any(
-                            item.included or self.store.list_acts(item.id)
-                            for item in self.store.list_items(period.id)
-                        )
-                        suffix = "локально" if touched else "—"
-            button.setText(f"{_MONTHS[month - 1]}\n{suffix}")
-            button.setChecked(month == self._current_month)
+        refresh_monthly(self, "quality")
 
     def _refresh_integration_status(self) -> None:
         self._refresh_gis_buttons()
 
     def _refresh_gis_buttons(self) -> None:
-        status = self.integration_gateway.status()
-        base_ready = (
-            status.running
-            and status.helper_connected
-            and status.gis_page_ready
-            and helper_supports_quality_assessment(status.helper_version)
-            and not self._integration_busy
-        )
-        ready = base_ready and not self._queue_running
-        period = (
-            self.store.get_period(self._current_period_id)
-            if self._current_period_id
-            else None
-        )
-        gis_status = str(period.gis_status or "").upper() if period else ""
-        has_remote = bool(period and period.estimation_guid)
-        period_scope = self._scope_is_period()
-
-        if period_scope:
-            has_context = bool(self._current_work_list_id)
-            self.load_gis_button.setEnabled(has_context and ready)
-            self.save_button.setEnabled(has_context and ready)
-            self.publish_button.setEnabled(has_context and ready)
-            self.save_button.setText("Сохранить проекты")
-            self.publish_button.setText("Разместить в ГИС ЖКХ")
-            self.cancel_button.setVisible(False)
-        else:
-            self.load_gis_button.setEnabled(bool(period) and ready)
-            self.save_button.setEnabled(
-                bool(period)
-                and ready
-                and (
-                    not has_remote
-                    or gis_status in {"DRAFT", "MODIFIED", "LOCAL"}
-                )
-            )
-            self.publish_button.setEnabled(
-                bool(period)
-                and ready
-                and (
-                    not has_remote
-                    or gis_status in {"DRAFT", "MODIFIED", "CANCELLED", "LOCAL"}
-                )
-            )
-            self.save_button.setText("Сохранить проект")
-            self.publish_button.setText(
-                "Разместить изменения"
-                if has_remote and gis_status == "MODIFIED"
-                else "Разместить в ГИС ЖКХ"
-            )
-            self.cancel_button.setVisible(True)
-
-        self.load_gis_year_button.setEnabled(
-            bool(self._current_work_list_id) and ready
-        )
-        self.cancel_button.setEnabled(
-            not period_scope
-            and bool(period)
-            and ready
-            and has_remote
-            and gis_status in {"DRAFT", "APPROVED", "MODIFIED"}
-        )
-        self.save_year_button.setEnabled(
-            bool(self._current_work_list_id) and ready
-        )
-        self.publish_year_button.setEnabled(
-            bool(self._current_work_list_id) and ready
-        )
-        self.continue_queue_button.setEnabled(
-            base_ready and bool(self._queue_failed_period_id)
-        )
+        refresh_monthly(self, "quality")
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
@@ -1779,9 +1437,6 @@ class QualityAssessmentPage(QWidget):
         self.form_month_button.setEnabled(local_enabled)
         self.auto_act_month_button.setEnabled(local_enabled)
 
-        self.clear_year_values_button.setEnabled(local_period_enabled)
-        self.form_year_button.setEnabled(local_period_enabled)
-        self.auto_act_year_button.setEnabled(local_period_enabled)
         self._refresh_gis_buttons()
 
     def _relayout_month_buttons(self, columns: int | None = None) -> None:
