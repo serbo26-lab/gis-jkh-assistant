@@ -1965,12 +1965,17 @@ class WorkListsPage(QWidget):
         work_list = self.repository.get_work_list(self._current_work_list_id)
         if not work_list:
             return
-        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
             QMessageBox.information(
                 self,
-                "Состав уже передан в ГИС ЖКХ",
-                "Добавление и удаление работ доступно только у локального перечня, "
-                "который ещё не загружен в ГИС ЖКХ.",
+                "Состав сейчас недоступен для изменения",
+                "Добавление и удаление работ доступно у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ.",
             )
             return
 
