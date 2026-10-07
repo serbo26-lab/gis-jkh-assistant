@@ -76,6 +76,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_command: str | None = None
         self._queue_title = ""
         self._queue_running = False
+        self._queue_skipped = 0
         self._build_ui()
         self.refresh_organizations()
 
@@ -190,6 +191,13 @@ class QualityAssessmentPage(QWidget):
         self.load_gis_button.setToolTip(
             "Получить существующую оценку качества выбранного месяца из ГИС ЖКХ."
         )
+        self.load_gis_year_button = QPushButton(
+            "Загрузить оценки за доступные месяцы года"
+        )
+        self.load_gis_year_button.setToolTip(
+            "Последовательно получить оценки качества из ГИС ЖКХ за весь "
+            "доступный период выбранного перечня в этом году."
+        )
         self.save_button = QPushButton("Сохранить проект месяца")
         self.publish_button = QPushButton("Разместить месяц")
         self.save_year_button = QPushButton("Сохранить проекты года")
@@ -204,9 +212,10 @@ class QualityAssessmentPage(QWidget):
         actions.addWidget(self.load_gis_button, 0, 0)
         actions.addWidget(self.save_button, 0, 1)
         actions.addWidget(self.publish_button, 0, 2)
-        actions.addWidget(self.save_year_button, 1, 0)
-        actions.addWidget(self.publish_year_button, 1, 1)
-        actions.addWidget(self.cancel_button, 1, 2)
+        actions.addWidget(self.load_gis_year_button, 1, 0)
+        actions.addWidget(self.save_year_button, 1, 1)
+        actions.addWidget(self.publish_year_button, 1, 2)
+        actions.addWidget(self.cancel_button, 2, 2)
         for column in range(3):
             actions.setColumnStretch(column, 1)
         month_layout.addLayout(actions)
@@ -230,9 +239,11 @@ class QualityAssessmentPage(QWidget):
         table_layout = QVBoxLayout(table_card)
         table_layout.setContentsMargins(12, 12, 12, 12)
         note = QLabel(
-            "Для акта нарушения качества укажите количество дней ненадлежащего "
-            "качества. Размер уменьшения платы рассчитывается автоматически. "
-            "Для акта выполненных работ эти поля можно оставить пустыми."
+            "Поля «Стоимость в ежемесячной плате», «Дней ненадлежащего качества» "
+            "и «Уменьшение платы» заполняются только при ненадлежащем качестве "
+            "и перерасчёте. Для обычного акта выполненных работ они должны "
+            "оставаться пустыми; фактическая стоимость для PDF берётся из "
+            "раздела «Фиксация работ и услуг»."
         )
         note.setObjectName("Muted")
         note.setWordWrap(True)
@@ -241,11 +252,17 @@ class QualityAssessmentPage(QWidget):
         bulk_actions = QHBoxLayout()
         self.include_all_button = QPushButton("Включить все работы")
         self.exclude_all_button = QPushButton("Снять все")
+        self.clear_values_button = QPushButton("Очистить данные месяца")
+        self.clear_year_values_button = QPushButton(
+            "Очистить данные доступных месяцев года"
+        )
         self.month_acts_button = QPushButton("Акты месяца…")
         self.month_acts_summary = QLabel("Акты месяца: —")
         self.month_acts_summary.setObjectName("Muted")
         bulk_actions.addWidget(self.include_all_button)
         bulk_actions.addWidget(self.exclude_all_button)
+        bulk_actions.addWidget(self.clear_values_button)
+        bulk_actions.addWidget(self.clear_year_values_button)
         bulk_actions.addSpacing(12)
         bulk_actions.addWidget(self.month_acts_button)
         bulk_actions.addWidget(self.month_acts_summary)
@@ -285,6 +302,7 @@ class QualityAssessmentPage(QWidget):
         self.auto_act_month_button.clicked.connect(self._auto_generate_month_act)
         self.auto_act_year_button.clicked.connect(self._auto_generate_year_acts)
         self.load_gis_button.clicked.connect(self._load_from_gis)
+        self.load_gis_year_button.clicked.connect(self._load_year_from_gis)
         self.save_button.clicked.connect(self._save_project)
         self.publish_button.clicked.connect(self._publish)
         self.save_year_button.clicked.connect(self._save_year_projects)
@@ -297,6 +315,8 @@ class QualityAssessmentPage(QWidget):
         self.exclude_all_button.clicked.connect(
             lambda: self._set_all_included(False)
         )
+        self.clear_values_button.clicked.connect(self._clear_month_values)
+        self.clear_year_values_button.clicked.connect(self._clear_year_values)
         self.month_acts_button.clicked.connect(self._open_month_acts)
         self._set_enabled(False)
 
@@ -538,6 +558,66 @@ class QualityAssessmentPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
+    def _clear_month_values(self) -> None:
+        if not self._current_period_id:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Очистить данные месяца?",
+            "Будут очищены только поля перерасчёта: «Стоимость в ежемесячной "
+            "плате», «Дней ненадлежащего качества» и «Уменьшение платы». "
+            "Выбор работ и акты сохранятся. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        count = self.store.clear_quality_values(self._current_period_id)
+        self._load_table()
+        self._refresh_period_status()
+        self._refresh_year_status()
+        QMessageBox.information(
+            self,
+            "Данные очищены",
+            f"Очищено строк: {count}. Акты и включение работ не изменены.",
+        )
+
+    def _clear_year_values(self) -> None:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return
+        year = int(self.year_combo.currentData())
+        months = self._active_months()
+        answer = QMessageBox.question(
+            self,
+            "Очистить данные доступных месяцев года?",
+            f"Поля перерасчёта будут очищены во всех доступных месяцах "
+            f"выбранного периода ({len(months)}). Акты и выбор работ сохранятся. "
+            "Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        periods = {
+            period.month: period
+            for period in self.store.list_periods(
+                self._current_work_list_id,
+                year=year,
+            )
+        }
+        rows = 0
+        processed = 0
+        for month in months:
+            period = periods.get(month)
+            if period is None:
+                continue
+            rows += self.store.clear_quality_values(period.id)
+            processed += 1
+        self._month_changed()
+        self._refresh_year_status()
+        QMessageBox.information(
+            self,
+            "Данные года очищены",
+            f"Обработано месяцев: {processed}.\nОчищено строк: {rows}. "
+            "Акты и включение работ не изменены.",
+        )
+
     def _active_months(self) -> tuple[int, ...]:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return ()
@@ -560,7 +640,8 @@ class QualityAssessmentPage(QWidget):
             "Сформировать оценку за месяц?",
             "В оценку будут включены работы, по которым в выбранном месяце "
             "есть фактические показатели в разделе «Фиксация работ и услуг». "
-            "Стоимость будет взята из «Стоимость факт.».\n\n"
+            "Поля перерасчёта останутся пустыми. Фактическая стоимость "
+            "используется только при формировании PDF акта выполненных работ.\n\n"
             "Строки с пользовательскими или импортированными актами "
             "останутся без изменений. Продолжить?",
         )
@@ -1067,6 +1148,50 @@ class QualityAssessmentPage(QWidget):
         worker.finished.connect(finished)
         worker.start()
 
+    def _load_year_from_gis(self) -> None:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+
+        months = self._active_months()
+        if not months:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Загрузить оценки качества за доступные месяцы года?",
+            f"Будут последовательно проверены {len(months)} мес. выбранного "
+            "периода. Найденные в ГИС ЖКХ оценки заменят локальные данные "
+            "соответствующих месяцев. Месяцы без оценки будут пропущены. "
+            "Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        year = int(self.year_combo.currentData())
+        periods = [
+            self.store.get_or_create_period(
+                work_list_id=self._current_work_list_id,
+                year=year,
+                month=month,
+            )
+            for month in months
+        ]
+        self._queue_period_ids = [period.id for period in periods]
+        self._queue_index = 0
+        self._queue_successes = 0
+        self._queue_skipped = 0
+        self._queue_failed_period_id = None
+        self._queue_command = "load_quality_assessment"
+        self._queue_title = "Загрузка оценки качества из ГИС ЖКХ"
+        self._queue_running = True
+        self.queue_progress.setVisible(True)
+        self.queue_progress.setRange(0, len(self._queue_period_ids))
+        self.queue_progress.setValue(0)
+        self.continue_queue_button.setVisible(False)
+        self.queue_label.setText("Очередь загрузки запущена…")
+        self._start_next_queue_item()
+
     def _save_project(self) -> None:
         if not self._validate_local():
             return
@@ -1199,6 +1324,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_period_ids = [period.id for period in periods]
         self._queue_index = 0
         self._queue_successes = 0
+        self._queue_skipped = 0
         self._queue_failed_period_id = None
         self._queue_command = command
         self._queue_title = title
@@ -1232,9 +1358,14 @@ class QualityAssessmentPage(QWidget):
             self._integration_busy = False
             self._refresh_gis_buttons()
             self.queue_progress.setValue(len(self._queue_period_ids))
+            suffix = (
+                f" • не найдено в ГИС ЖКХ: {self._queue_skipped}"
+                if self._queue_command == "load_quality_assessment"
+                else ""
+            )
             self.queue_label.setText(
                 f"Очередь завершена. Успешно обработано месяцев: "
-                f"{self._queue_successes}."
+                f"{self._queue_successes}{suffix}."
             )
             self._refresh_year_status()
             if self._current_period_id:
@@ -1250,11 +1381,12 @@ class QualityAssessmentPage(QWidget):
             QTimer.singleShot(0, self._start_next_queue_item)
             return
 
-        action = (
-            "Сохраняется проект"
-            if self._queue_command == "save_quality_assessment"
-            else "Размещается"
-        )
+        if self._queue_command == "save_quality_assessment":
+            action = "Сохраняется проект"
+        elif self._queue_command == "load_quality_assessment":
+            action = "Загружается из ГИС ЖКХ"
+        else:
+            action = "Размещается"
         self.queue_label.setText(
             f"{action}: {_MONTHS[period.month - 1]} {period.year} "
             f"({self._queue_index + 1} из {len(self._queue_period_ids)})…"
@@ -1266,9 +1398,40 @@ class QualityAssessmentPage(QWidget):
             return
         if self._queue_command is None:
             return
-        payload = self._payload_for_period(period_id, show_error=False)
+
         period = self.store.get_period(period_id)
-        if payload is None or period is None:
+        if period is None:
+            return
+
+        if self._queue_command == "load_quality_assessment":
+            work_list = self.repository.get_work_list(period.work_list_id)
+            house = (
+                self.repository.get_house(work_list.house_id)
+                if work_list is not None
+                else None
+            )
+            fias = (
+                (house.fias_house_guid or house.gis_house_guid)
+                if house is not None
+                else None
+            )
+            if (
+                work_list is None
+                or not work_list.gis_work_list_guid
+                or not fias
+            ):
+                payload = None
+            else:
+                payload = {
+                    "fiasHouseCode": fias,
+                    "workListGuid": work_list.gis_work_list_guid,
+                    "year": period.year,
+                    "month": period.month,
+                }
+        else:
+            payload = self._payload_for_period(period_id, show_error=False)
+
+        if payload is None:
             self._queue_running = False
             self._queue_failed_period_id = period_id
             self.queue_label.setText(
@@ -1281,19 +1444,39 @@ class QualityAssessmentPage(QWidget):
         self._integration_busy = True
         self._refresh_gis_buttons()
         command_succeeded = {"value": False}
+        timeout = 150.0 if self._queue_command == "load_quality_assessment" else 180.0
         worker = GisIntegrationWorker(
             self.integration_gateway,
             self._queue_command,
             payload,
-            timeout=180.0,
+            timeout=timeout,
             parent=self,
         )
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
             command_succeeded["value"] = True
-            self._apply_gis_result(period_id, result)
-            self._queue_successes += 1
+            if self._queue_command == "load_quality_assessment":
+                if result.get("found"):
+                    try:
+                        apply_remote_quality_assessment(
+                            self.store,
+                            work_list_id=period.work_list_id,
+                            year=period.year,
+                            month=period.month,
+                            remote=result,
+                        )
+                    except ValueError as exc:
+                        command_succeeded["value"] = False
+                        failed(str(exc))
+                        return
+                    self._queue_successes += 1
+                else:
+                    self._queue_skipped += 1
+            else:
+                self._apply_gis_result(period_id, result)
+                self._queue_successes += 1
+
             self._queue_index += 1
             self.queue_progress.setValue(self._queue_index)
             self._refresh_year_status()
@@ -1321,7 +1504,6 @@ class QualityAssessmentPage(QWidget):
         def finished() -> None:
             self._integration_worker = None
             if command_succeeded["value"] and self._queue_failed_period_id is None:
-                # Keep all GIS buttons disabled between queue items.
                 self._integration_busy = True
                 self._refresh_integration_status()
                 QTimer.singleShot(250, self._start_next_queue_item)
@@ -1476,6 +1658,9 @@ class QualityAssessmentPage(QWidget):
         has_remote = bool(period and period.estimation_guid)
 
         self.load_gis_button.setEnabled(bool(period) and ready)
+        self.load_gis_year_button.setEnabled(
+            bool(self._current_work_list_id) and ready
+        )
         self.save_button.setEnabled(
             bool(period)
             and ready
@@ -1517,6 +1702,10 @@ class QualityAssessmentPage(QWidget):
         self.table.setEnabled(enabled)
         self.include_all_button.setEnabled(enabled)
         self.exclude_all_button.setEnabled(enabled)
+        self.clear_values_button.setEnabled(enabled)
+        self.clear_year_values_button.setEnabled(
+            bool(self._current_work_list_id) and not self._queue_running
+        )
         self.month_acts_button.setEnabled(enabled)
         local_enabled = enabled and not self._queue_running
         self.form_month_button.setEnabled(local_enabled)
