@@ -2669,7 +2669,7 @@ async function runGisCommand(command) {
       };
     }
 
-    async function prepareNewQualityAssessment(localPayload) {
+    async function prepareNewQualityAssessment(localPayload, options = {}) {
       const reportingPeriod = await findReportingPeriod(localPayload);
       const house = await getWorkplanningHouseByFias(localPayload.fiasHouseCode);
       const houseContext = await getHouseInfo(localPayload.houseObjectGuid);
@@ -2703,6 +2703,7 @@ async function runGisCommand(command) {
       const estimationList = [];
       const actMappings = [];
       const seededLocalActIds = new Set();
+      const allowMissingActs = Boolean(options?.allowMissingActs);
 
       for (const localItem of localItems) {
         const remoteItem = matchQualityItem(localItem, remote.estimationList);
@@ -2715,7 +2716,7 @@ async function runGisCommand(command) {
         }
 
         const localActs = Array.isArray(localItem?.acts) ? localItem.acts : [];
-        if (!localActs.length) {
+        if (!localActs.length && !allowMissingActs) {
           throw new Error(
             "Для работы «" + String(localItem?.workName || "") + "» не добавлен акт."
           );
@@ -2758,7 +2759,7 @@ async function runGisCommand(command) {
           });
         }
 
-        if (!qualityActs.length) {
+        if (!qualityActs.length && !allowMissingActs) {
           continue;
         }
 
@@ -2839,6 +2840,7 @@ async function runGisCommand(command) {
       const knownRemoteActsByGuid = new Map();
       const knownRemoteActsByContentGuid = new Map();
       const stageSharedNewActs = Boolean(options?.stageSharedNewActs);
+      const allowMissingActs = Boolean(options?.allowMissingActs);
 
       function rememberRemoteAct(act) {
         const normalized = normalizeRemoteQualityAct(act);
@@ -2986,7 +2988,7 @@ async function runGisCommand(command) {
           });
         }
 
-        if (!qualityActs.length) {
+        if (!qualityActs.length && !allowMissingActs) {
           if (stageSharedNewActs) {
             continue;
           }
@@ -3119,8 +3121,8 @@ async function runGisCommand(command) {
       return Array.from(counts.values()).some((count) => count > 1);
     }
 
-    async function saveNewQualityAssessment(localPayload) {
-      const prepared = await prepareNewQualityAssessment(localPayload);
+    async function saveNewQualityAssessment(localPayload, options = {}) {
+      const prepared = await prepareNewQualityAssessment(localPayload, options);
       await request(
         "POST",
         "/workplanning/api/rest/services/save/estimation",
@@ -3151,7 +3153,8 @@ async function runGisCommand(command) {
         const linked = await prepareExistingQualityAssessment(
           effectivePayload,
           prepared.reportingPeriod,
-          fresh
+          fresh,
+          options
         );
         await request(
           "POST",
@@ -3183,7 +3186,9 @@ async function runGisCommand(command) {
       let remote = await searchQualityAssessment(reportingPeriod.guid, false);
 
       if (!remote?.estimation?.guid) {
-        return saveNewQualityAssessment(localPayload);
+        return saveNewQualityAssessment(localPayload, {
+          allowMissingActs: true
+        });
       }
 
       const hasSharedNewAct = hasSharedNewQualityAct(localPayload);
@@ -3192,7 +3197,10 @@ async function runGisCommand(command) {
         effectivePayload,
         reportingPeriod,
         remote,
-        { stageSharedNewActs: hasSharedNewAct }
+        {
+          stageSharedNewActs: hasSharedNewAct,
+          allowMissingActs: true
+        }
       );
       await request(
         "POST",
@@ -3220,7 +3228,8 @@ async function runGisCommand(command) {
         prepared = await prepareExistingQualityAssessment(
           effectivePayload,
           reportingPeriod,
-          remote
+          remote,
+          { allowMissingActs: true }
         );
         await request(
           "POST",
@@ -3273,7 +3282,9 @@ async function runGisCommand(command) {
       let effectivePayload = localPayload;
 
       if (!remote?.estimation?.guid) {
-        const saved = await saveNewQualityAssessment(localPayload);
+        const saved = await saveNewQualityAssessment(localPayload, {
+          allowMissingActs: false
+        });
         remote = saved.fresh;
         effectivePayload = mergeSavedActMappings(localPayload, saved.result.acts);
         effectivePayload.knownEstimationGuid =
