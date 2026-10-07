@@ -2977,7 +2977,12 @@ class Repository:
         work_list = self.get_work_list(work_list_id)
         if work_list is None:
             raise ValueError("Перечень не найден.")
-        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND", "CANCELLED", "DRAFT"}:
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
             raise ValueError(
                 "Состав можно изменять только у локального, отменённого "
                 "перечня либо проекта ГИС ЖКХ."
@@ -3054,10 +3059,15 @@ class Repository:
         work_list = self.get_work_list(work_list_id)
         if work_list is None:
             raise ValueError("Перечень не найден.")
-        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
             raise ValueError(
-                "Состав можно изменять только у локального перечня, "
-                "который ещё не загружен в ГИС ЖКХ."
+                "Состав можно изменять только у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ."
             )
 
         ids = [str(item_id) for item_id in dict.fromkeys(item_ids) if item_id]
@@ -3161,6 +3171,7 @@ class Repository:
             "",
             "NOT_FOUND",
             "CANCELLED",
+            "DRAFT",
         }:
             raise ValueError(
                 "Заменить состав можно только у локального, отменённого "
