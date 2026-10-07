@@ -56,7 +56,11 @@ def apply_remote_work_fixation(
             connection.execute(
                 """
                 UPDATE work_fixation_items
-                SET fact_price = ?,
+                SET planned_price = COALESCE(?, planned_price),
+                    planned_amount = COALESCE(?, planned_amount),
+                    planned_count = COALESCE(?, planned_count),
+                    planned_total_cost = COALESCE(?, planned_total_cost),
+                    fact_price = ?,
                     fact_amount = ?,
                     fact_count = ?,
                     fact_total_cost = ?,
@@ -64,6 +68,12 @@ def apply_remote_work_fixation(
                 WHERE id = ?
                 """,
                 (
+                    _clean(row.get("plannedPrice")),
+                    _clean(row.get("plannedAmount")),
+                    int(row["plannedCount"])
+                    if row.get("plannedCount") is not None
+                    else None,
+                    _clean(row.get("plannedTotalCost")),
                     _clean(row.get("factPrice")),
                     _clean(row.get("factAmount")),
                     int(row["factCount"])
