@@ -48,12 +48,20 @@ def _manual_act_item_ids(
 ) -> set[str]:
     """Rows with user/imported acts are protected from automatic act generation."""
 
-    protected: set[str] = set()
-    for item in store.list_items(period_id):
-        acts = store.list_acts(item.id)
-        if any(not act.generated for act in acts):
-            protected.add(item.id)
-    return protected
+    rows = store.connection.execute(
+        """
+        SELECT DISTINCT l.quality_item_id
+        FROM quality_assessment_act_links l
+        JOIN quality_assessment_acts a ON a.id = l.act_id
+        JOIN quality_assessment_items i ON i.id = l.quality_item_id
+        WHERE i.quality_period_id = ?
+          AND a.deleted = 0
+          AND l.deleted = 0
+          AND a.generated = 0
+        """,
+        (period_id,),
+    ).fetchall()
+    return {str(row["quality_item_id"]) for row in rows}
 
 
 def fill_quality_period_from_fixation(
@@ -102,6 +110,7 @@ def fill_quality_period_from_fixation(
     protected = _manual_act_item_ids(store, period_id)
     included = 0
     excluded = 0
+    updates: list[tuple[int, str | None, int | None, str | None, str]] = []
 
     for item in store.list_items(period_id):
         if item.id in protected:
@@ -112,23 +121,30 @@ def fill_quality_period_from_fixation(
             or (by_code.get(str(item.work_code)) if item.work_code else None)
         )
         if fixation_item is not None and _has_fixation_fact(fixation_item):
-            store.update_item(
-                item.id,
-                included=True,
-                cost=getattr(fixation_item, "fact_total_cost", None),
-                days_count=0,
-                cost_reduction="0",
+            updates.append(
+                (
+                    1,
+                    getattr(fixation_item, "fact_total_cost", None),
+                    0,
+                    "0",
+                    item.id,
+                )
             )
             included += 1
         else:
-            store.update_item(
-                item.id,
-                included=False,
-                cost=None,
-                days_count=None,
-                cost_reduction=None,
-            )
+            updates.append((0, None, None, None, item.id))
             excluded += 1
+
+    with store.connection:
+        store.connection.executemany(
+            """
+            UPDATE quality_assessment_items
+            SET included = ?, cost = ?, days_count = ?, cost_reduction = ?
+            WHERE id = ?
+            """,
+            updates,
+        )
+        store._touch_period(period_id)
 
     return QualityFillResult(
         included=included,
