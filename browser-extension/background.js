@@ -1429,6 +1429,83 @@ async function runGisCommand(command) {
       );
     }
 
+    function fixedWorkUnitName(item) {
+      const work = item?.work || {};
+      return (
+        item?.unitName ||
+        work?.dimensionsUnit?.dimensionsUnitOkei?.nationalSymbolName ||
+        work?.dimensionsUnit?.dimensionsUnitString ||
+        null
+      );
+    }
+
+    function normalizeFixedWorkForImport(item, index) {
+      const monthly = item?.monthlyFixedWork || {};
+      return {
+        guid: item?.guid || null,
+        position: index + 1,
+        workPlanItemGuid: item?.workPlanItemGuid || null,
+        workGuid: item?.work?.guid || null,
+        workCode: item?.work?.code || null,
+        workName:
+          item?.workName ||
+          item?.work?.workName ||
+          item?.work?.name ||
+          "",
+        workTypeGuid: item?.workType?.guid || null,
+        workTypeCode: item?.workType?.code || null,
+        workTypeName:
+          item?.workTypeName ||
+          item?.workType?.serviceName ||
+          item?.workType?.name ||
+          null,
+        unitName: fixedWorkUnitName(item),
+        factPrice: item?.factPrice ?? null,
+        factAmount: item?.factAmount ?? null,
+        factCount:
+          monthly?.count === null || monthly?.count === undefined
+            ? null
+            : Number(monthly.count),
+        factTotalCost: item?.factTotalCost ?? null,
+        comment: item?.comment || null
+      };
+    }
+
+    async function loadWorkFixation(payload) {
+      let reportingPeriod = null;
+      try {
+        reportingPeriod = await findReportingPeriod(payload);
+      } catch (_) {
+        return { found: false };
+      }
+
+      const remote = await searchFixedWorks(reportingPeriod.guid);
+      const planned = Array.isArray(remote?.plannedWorkList)
+        ? remote.plannedWorkList
+        : [];
+      const unplanned = Array.isArray(remote?.unplannedWorkList)
+        ? remote.unplannedWorkList
+        : [];
+      const found =
+        planned.some((item) => Boolean(item?.guid)) ||
+        unplanned.some((item) => Boolean(item?.guid));
+
+      if (!found) {
+        return {
+          found: false,
+          reportingPeriodGuid: reportingPeriod.guid
+        };
+      }
+
+      return {
+        found: true,
+        reportingPeriodGuid: reportingPeriod.guid,
+        gisStatus: "SAVED",
+        plannedItems: planned.map(normalizeFixedWorkForImport),
+        unplannedItems: unplanned.map(normalizeFixedWorkForImport)
+      };
+    }
+
     function fixationLocalItemMatch(localItem, remoteItems, usedIndexes) {
       const workGuid = String(localItem?.workGuid || "").trim();
       const workCode = String(localItem?.workCode || "").trim();
