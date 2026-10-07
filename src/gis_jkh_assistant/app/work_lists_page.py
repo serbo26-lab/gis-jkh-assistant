@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import base64
 import shutil
 import tempfile
