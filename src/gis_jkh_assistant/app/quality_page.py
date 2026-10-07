@@ -537,6 +537,163 @@ class QualityAssessmentPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
+    def _active_months(self) -> tuple[int, ...]:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return ()
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None:
+            return ()
+        return active_months_for_work_list(
+            work_list,
+            int(self.year_combo.currentData()),
+        )
+
+    def _form_period_from_fixation(self, period_id: str):
+        return fill_quality_period_from_fixation(self.store, period_id)
+
+    def _form_month_from_fixation(self) -> None:
+        if not self._current_period_id:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Сформировать оценку за месяц?",
+            "В оценку будут включены работы, по которым в выбранном месяце "
+            "есть фактические показатели в разделе «Фиксация работ и услуг». "
+            "Стоимость будет взята из «Стоимость факт.».\n\n"
+            "Строки с пользовательскими или импортированными актами "
+            "останутся без изменений. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        result = self._form_period_from_fixation(self._current_period_id)
+        self._load_table()
+        self._refresh_act_summary()
+        self._refresh_period_status()
+        self._refresh_year_status()
+        QMessageBox.information(
+            self,
+            "Оценка сформирована",
+            f"Включено работ: {result.included}.\n"
+            f"Исключено без факта: {result.excluded}.\n"
+            f"Защищено пользовательскими актами: {result.protected}.",
+        )
+
+    def _form_year_from_fixation(self) -> None:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return
+        months = self._active_months()
+        if not months:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Сформировать оценку за доступные месяцы года?",
+            f"Будут последовательно сформированы месяцы: {len(months)}. "
+            "Для каждого месяца используются фактические показатели из фиксации. "
+            "Строки с пользовательскими или импортированными актами "
+            "не изменяются. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        year = int(self.year_combo.currentData())
+        included = excluded = protected = 0
+        for month in months:
+            period = self.store.get_or_create_period(
+                work_list_id=self._current_work_list_id,
+                year=year,
+                month=month,
+            )
+            result = self._form_period_from_fixation(period.id)
+            included += result.included
+            excluded += result.excluded
+            protected += result.protected
+
+        self._month_changed()
+        self._refresh_year_status()
+        QMessageBox.information(
+            self,
+            "Оценка за год сформирована",
+            f"Обработано месяцев: {len(months)}.\n"
+            f"Включено строк: {included}.\n"
+            f"Исключено без факта: {excluded}.\n"
+            f"Защищено пользовательскими актами: {protected}.",
+        )
+
+    def _auto_generate_act_for_period(self, period_id: str):
+        return generate_acceptance_act_for_period(
+            self.store,
+            period_id=period_id,
+            organization_name=self.organization_combo.currentText(),
+            house_address=self.house_combo.currentText(),
+        )
+
+    def _auto_generate_month_act(self) -> None:
+        if not self._current_period_id:
+            return
+        self._sync_work_units_for_act()
+        result = self._auto_generate_act_for_period(self._current_period_id)
+        self._load_table()
+        self._refresh_act_summary()
+        self._refresh_period_status()
+        self._refresh_year_status()
+        if result.created:
+            text = (
+                f"Акт сформирован и применён к работам: {result.linked_items}."
+            )
+            if result.protected_items:
+                text += (
+                    f"\nСтрок с пользовательскими/импортированными актами "
+                    f"пропущено: {result.protected_items}."
+                )
+            if result.missing_costs:
+                text += (
+                    f"\nБез значения «Стоимость факт.»: {result.missing_costs}."
+                )
+        else:
+            text = (
+                "Нет строк для автоматического акта. "
+                "Включённые строки уже защищены пользовательскими/импортированными "
+                "актами либо оценка ещё не сформирована."
+            )
+        QMessageBox.information(self, "Автоматический акт месяца", text)
+
+    def _auto_generate_year_acts(self) -> None:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return
+        self._sync_work_units_for_act()
+        year = int(self.year_combo.currentData())
+        months = self._active_months()
+        created = linked = protected = missing = 0
+        processed = 0
+        for month in months:
+            period = self.store.get_period_for_month(
+                self._current_work_list_id,
+                year=year,
+                month=month,
+            )
+            if period is None:
+                continue
+            if not any(item.included for item in self.store.list_items(period.id)):
+                continue
+            result = self._auto_generate_act_for_period(period.id)
+            processed += 1
+            created += result.created
+            linked += result.linked_items
+            protected += result.protected_items
+            missing += result.missing_costs
+
+        self._month_changed()
+        self._refresh_year_status()
+        QMessageBox.information(
+            self,
+            "Акты за год сформированы",
+            f"Обработано месяцев: {processed}.\n"
+            f"Сформировано актов: {created}.\n"
+            f"Связей с работами: {linked}.\n"
+            f"Защищено пользовательскими/импортированными актами: {protected}.\n"
+            f"Строк без фактической стоимости: {missing}.",
+        )
+
     def _sync_work_units_for_act(self) -> None:
         if not self._current_work_list_id:
             return
