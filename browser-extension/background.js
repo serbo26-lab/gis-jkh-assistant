@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.23";
+const HELPER_CODE_VERSION = "0.1.24";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -987,9 +987,13 @@ async function runGisCommand(command) {
         if (
           item &&
           item.status &&
-          !["NEW", "CREATED", "PROCESSING", "IN_PROCESS"].includes(
-            String(item.status).toUpperCase()
-          ) &&
+          ![
+            "NEW",
+            "CREATED",
+            "PROCESSING",
+            "IN_PROCESS",
+            "NOT_PROCESSED"
+          ].includes(String(item.status).toUpperCase()) &&
           item.status !== "PROCESSED"
         ) {
           throw new Error(
@@ -1167,6 +1171,45 @@ async function runGisCommand(command) {
         STATE_WORKPLANNING
       );
       return data?.workPlan || null;
+    }
+
+    function gisDateToIso(value) {
+      const text = String(value || "").trim();
+      if (!text) return null;
+      const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+      if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+      const ru = /^(\d{2})\.(\d{2})\.(\d{4})/.exec(text);
+      if (ru) return ru[3] + "-" + ru[2] + "-" + ru[1];
+      return null;
+    }
+
+    function normalizeWorkPlanForImport(plan) {
+      if (!plan?.guid) return { found: false };
+      return {
+        found: true,
+        workPlanGuid: plan.guid,
+        workListGuid: plan.workListGuid || null,
+        year: Number(plan.year || 0),
+        gisStatus: "SAVED",
+        lastUpdateDate: plan.lastUpdateDate || null,
+        items: (Array.isArray(plan.workPlanItems) ? plan.workPlanItems : []).map(
+          (item, index) => ({
+            guid: item?.guid || null,
+            sortIndex: item?.sortIndex ?? index + 1,
+            workGuid: item?.work?.guid || null,
+            workCode: item?.work?.code || null,
+            monthlyWorks: (
+              Array.isArray(item?.monthlyWorks) ? item.monthlyWorks : []
+            ).map((month) => ({
+              month: Number(month?.monthYear?.month || 0),
+              count: Number(month?.count || 0),
+              dates: (Array.isArray(month?.dates) ? month.dates : [])
+                .map((row) => gisDateToIso(row?.date ?? row))
+                .filter(Boolean)
+            }))
+          })
+        )
+      };
     }
 
     function planDateForGis(value) {
@@ -1384,6 +1427,91 @@ async function runGisCommand(command) {
         { workFixationPeriodGuid: reportingPeriodGuid },
         STATE_WORKPLANNING
       );
+    }
+
+    function fixedWorkUnitName(item) {
+      const work = item?.work || {};
+      return (
+        item?.unitName ||
+        work?.dimensionsUnit?.dimensionsUnitOkei?.nationalSymbolName ||
+        work?.dimensionsUnit?.dimensionsUnitString ||
+        null
+      );
+    }
+
+    function normalizeFixedWorkForImport(item, index) {
+      const monthly = item?.monthlyFixedWork || {};
+      return {
+        guid: item?.guid || null,
+        position: index + 1,
+        workPlanItemGuid: item?.workPlanItemGuid || null,
+        workGuid: item?.work?.guid || null,
+        workCode: item?.work?.code || null,
+        workName:
+          item?.workName ||
+          item?.work?.workName ||
+          item?.work?.name ||
+          "",
+        workTypeGuid: item?.workType?.guid || null,
+        workTypeCode: item?.workType?.code || null,
+        workTypeName:
+          item?.workTypeName ||
+          item?.workType?.serviceName ||
+          item?.workType?.name ||
+          null,
+        unitName: fixedWorkUnitName(item),
+        plannedPrice: item?.plannedPrice ?? null,
+        plannedAmount: item?.plannedAmount ?? null,
+        plannedCount:
+          item?.monthlyPlannedWork?.count === null ||
+          item?.monthlyPlannedWork?.count === undefined
+            ? null
+            : Number(item.monthlyPlannedWork.count),
+        plannedTotalCost: item?.plannedTotalCost ?? null,
+        factPrice: item?.factPrice ?? null,
+        factAmount: item?.factAmount ?? null,
+        factCount:
+          monthly?.count === null || monthly?.count === undefined
+            ? null
+            : Number(monthly.count),
+        factTotalCost: item?.factTotalCost ?? null,
+        comment: item?.comment || null
+      };
+    }
+
+    async function loadWorkFixation(payload) {
+      let reportingPeriod = null;
+      try {
+        reportingPeriod = await findReportingPeriod(payload);
+      } catch (_) {
+        return { found: false };
+      }
+
+      const remote = await searchFixedWorks(reportingPeriod.guid);
+      const planned = Array.isArray(remote?.plannedWorkList)
+        ? remote.plannedWorkList
+        : [];
+      const unplanned = Array.isArray(remote?.unplannedWorkList)
+        ? remote.unplannedWorkList
+        : [];
+      const found =
+        planned.some((item) => Boolean(item?.guid)) ||
+        unplanned.some((item) => Boolean(item?.guid));
+
+      if (!found) {
+        return {
+          found: false,
+          reportingPeriodGuid: reportingPeriod.guid
+        };
+      }
+
+      return {
+        found: true,
+        reportingPeriodGuid: reportingPeriod.guid,
+        gisStatus: "SAVED",
+        plannedItems: planned.map(normalizeFixedWorkForImport),
+        unplannedItems: unplanned.map(normalizeFixedWorkForImport)
+      };
     }
 
     function fixationLocalItemMatch(localItem, remoteItems, usedIndexes) {
@@ -2030,6 +2158,85 @@ async function runGisCommand(command) {
         STATE_WORKPLANNING
       );
       return Array.isArray(data?.actList) ? data.actList : [];
+    }
+
+    function qualityDateForImport(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const match = /^(\d{2}\.\d{2}\.\d{4})/.exec(text);
+      return match ? match[1] : text;
+    }
+
+    function normalizeQualityActForImport(act) {
+      const attachment = act?.attachment || {};
+      return {
+        guid: act?.guid || null,
+        actType: act?.actType || "ACCEPTANCE_ACT",
+        number: String(act?.number || ""),
+        regDate: qualityDateForImport(act?.regDate),
+        periodFrom: qualityDateForImport(act?.period?.from),
+        periodTo: qualityDateForImport(act?.period?.to),
+        contentGuid: attachment?.contentGuid || null,
+        fileName: attachment?.fileName || "Файл акта из ГИС ЖКХ",
+        description: attachment?.description || null,
+        contentType: attachment?.contentType || "application/octet-stream",
+        fileSize: Number(attachment?.fileSize || 0)
+      };
+    }
+
+    async function loadQualityAssessment(payload) {
+      let reportingPeriod = null;
+      try {
+        reportingPeriod = await findReportingPeriod(payload);
+      } catch (_) {
+        return { found: false };
+      }
+
+      const remote = await searchQualityAssessment(reportingPeriod.guid, false);
+      const estimation = remote?.estimation || null;
+      if (!estimation?.guid) {
+        return {
+          found: false,
+          reportingPeriodGuid: reportingPeriod.guid
+        };
+      }
+
+      const rows = Array.isArray(remote?.estimationList)
+        ? remote.estimationList
+        : [];
+      const items = [];
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        let acts = [];
+        if (row?.guid && row?.hasQualityActs) {
+          acts = (await searchQualityActs(row.guid)).map(
+            normalizeQualityActForImport
+          );
+        }
+        items.push({
+          guid: row?.guid || null,
+          position: index + 1,
+          workGuid: row?.work?.guid || row?.workGuid || null,
+          workCode: row?.work?.code || null,
+          workName: row?.workName || row?.work?.workName || "",
+          cost: row?.cost ?? null,
+          daysCount:
+            row?.daysCount === null || row?.daysCount === undefined
+              ? null
+              : Number(row.daysCount),
+          daysPerMonth: Number(row?.daysPerMonth || 0),
+          costReduction: row?.costReduction ?? null,
+          acts
+        });
+      }
+
+      return {
+        found: true,
+        reportingPeriodGuid: reportingPeriod.guid,
+        estimationGuid: estimation.guid,
+        gisStatus: estimation.status || estimation.dbStatus || "DRAFT",
+        items
+      };
     }
 
     async function getQualityActByGuid(
@@ -2979,6 +3186,13 @@ async function runGisCommand(command) {
     }
 
 
+    if (command.type === "load_quality_assessment") {
+      return {
+        ok: true,
+        result: await loadQualityAssessment(payload)
+      };
+    }
+
     if (command.type === "save_quality_assessment") {
       const saved = await saveQualityAssessment(payload);
       return { ok: true, result: saved.result };
@@ -2995,6 +3209,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await cancelQualityAssessment(payload)
+      };
+    }
+
+    if (command.type === "load_work_fixation") {
+      return {
+        ok: true,
+        result: await loadWorkFixation(payload)
       };
     }
 
@@ -3090,6 +3311,14 @@ async function runGisCommand(command) {
           unplannedItems,
           photoResults
         }
+      };
+    }
+
+    if (command.type === "load_work_plan") {
+      const plan = await searchWorkPlan(payload.workListGuid, payload.year);
+      return {
+        ok: true,
+        result: normalizeWorkPlanForImport(plan)
       };
     }
 

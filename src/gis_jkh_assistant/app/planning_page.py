@@ -30,6 +30,10 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
+from gis_jkh_assistant.work_lists.gis_plan_sync import (
+    apply_remote_work_plan,
+    local_plan_has_data,
+)
 from gis_jkh_assistant.work_planning import (
     active_months_for_work_list,
     balanced_period_distribution,
@@ -269,6 +273,10 @@ class PlanningPage(QWidget):
             "Для полного года и количества 12 получится по 1 в каждый месяц."
         )
         self.clear_button = QPushButton("Очистить план за выбранный год")
+        self.load_gis_button = QPushButton("Загрузить планирование из ГИС ЖКХ")
+        self.load_gis_button.setToolTip(
+            "Получить уже размещенный план выбранного перечня и года из ГИС ЖКХ."
+        )
         self.publish_button = QPushButton("Разместить / обновить план в ГИС ЖКХ")
         self.publish_button.setObjectName("PrimaryButton")
         self.publish_button.setToolTip(
@@ -280,6 +288,7 @@ class PlanningPage(QWidget):
         actions.addWidget(self.distribute_button)
         actions.addWidget(self.clear_button)
         actions.addStretch(1)
+        actions.addWidget(self.load_gis_button)
         actions.addWidget(self.publish_button)
         context_layout.addLayout(actions, 4, 0, 1, 4)
 
@@ -345,6 +354,7 @@ class PlanningPage(QWidget):
         self.year_combo.currentIndexChanged.connect(self._year_changed)
         self.distribute_button.clicked.connect(self._distribute)
         self.clear_button.clicked.connect(self._clear_year)
+        self.load_gis_button.clicked.connect(self._load_from_gis)
         self.publish_button.clicked.connect(self._publish_to_gis)
         self.table.itemChanged.connect(self._cell_changed)
         self.table.cellDoubleClicked.connect(self._open_dates)
@@ -879,12 +889,14 @@ class PlanningPage(QWidget):
             and status.gis_page_ready
             and helper_supports_work_plans(status.helper_version)
         )
-        self.publish_button.setEnabled(
+        enabled = (
             bool(self._current_plan_id)
             and bool(self._current_work_list_id)
             and ready
             and not self._integration_busy
         )
+        self.load_gis_button.setEnabled(enabled)
+        self.publish_button.setEnabled(enabled)
 
     def _set_integration_busy(self, busy: bool) -> None:
         self._integration_busy = busy
@@ -938,6 +950,130 @@ class PlanningPage(QWidget):
 
         worker.succeeded.connect(succeeded)
         worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
+    def _load_from_gis(self) -> None:
+        if (
+            not self._current_plan_id
+            or not self._current_work_list_id
+            or self.year_combo.currentData() is None
+        ):
+            return
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None or not work_list.gis_work_list_guid:
+            QMessageBox.warning(
+                self,
+                "Нет GUID размещенного перечня",
+                "Сначала загрузите или проверьте перечень в разделе "
+                "«Перечни работ и услуг».",
+            )
+            return
+
+        plan_id = self._current_plan_id
+        year = int(self.year_combo.currentData())
+        self._integration_busy = True
+        self._refresh_gis_action_button()
+        self.plan_status.setText("План: загрузка из ГИС ЖКХ…")
+
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "load_work_plan",
+            {
+                "workListGuid": work_list.gis_work_list_guid,
+                "year": year,
+            },
+            timeout=90.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            if not result.get("found"):
+                QMessageBox.information(
+                    self,
+                    "План в ГИС ЖКХ не найден",
+                    "Для выбранного перечня и года планирование в ГИС ЖКХ "
+                    "не найдено.",
+                )
+                return
+
+            remote_items = list(result.get("items") or [])
+            remote_months = sum(
+                len(row.get("monthlyWorks") or [])
+                for row in remote_items
+                if isinstance(row, dict)
+            )
+            has_local = local_plan_has_data(self.repository, plan_id)
+            question = (
+                f"В ГИС ЖКХ найден план: работ {len(remote_items)}, "
+                f"заполненных месячных значений {remote_months}.\n\n"
+            )
+            if has_local:
+                question += (
+                    "Локальный план уже содержит данные. Они будут заменены "
+                    "сведениями из ГИС ЖКХ. Продолжить?"
+                )
+            else:
+                question += "Загрузить эти данные в программу?"
+
+            answer = QMessageBox.question(
+                self,
+                "Загрузить планирование из ГИС ЖКХ?",
+                question,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                applied = apply_remote_work_plan(
+                    self.repository,
+                    work_list_id=self._current_work_list_id,
+                    year=year,
+                    remote=result,
+                )
+            except ValueError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Не удалось применить планирование",
+                    str(exc),
+                )
+                return
+
+            self._load_table()
+            self._update_plan_status()
+            QMessageBox.information(
+                self,
+                "Планирование загружено",
+                f"Сопоставлено работ: {applied['items']}.\n"
+                f"Загружено месячных значений: {applied['months']}.",
+            )
+
+        def progressed(progress: dict) -> None:
+            if str(progress.get("phase") or "") == "queued":
+                self.plan_status.setText(
+                    "План: ожидание предыдущей операции с ГИС ЖКХ…"
+                )
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(
+                self,
+                "Не удалось загрузить планирование из ГИС ЖКХ",
+                message,
+            )
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._integration_busy = False
+            self._update_plan_status()
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
 

@@ -27,6 +27,10 @@ from PySide6.QtWidgets import (
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.models import WorkFixationPeriod
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
+from gis_jkh_assistant.work_lists.gis_fixation_sync import (
+    apply_remote_work_fixation,
+    local_fixation_has_data,
+)
 from gis_jkh_assistant.work_fixation import (
     build_fixation_command_payload,
     calculate_fact_total_cost,
@@ -191,11 +195,16 @@ class FixationPage(QWidget):
         month_layout.addLayout(fill_actions)
 
         publish_actions = QHBoxLayout()
+        self.load_month_button = QPushButton("Загрузить фиксацию из ГИС ЖКХ")
+        self.load_month_button.setToolTip(
+            "Получить фактические показатели выбранного месяца из ГИС ЖКХ."
+        )
         self.publish_month_button = QPushButton("Разместить выбранный месяц")
         self.publish_year_button = QPushButton("Разместить заполненные месяцы года")
         self.publish_year_button.setObjectName("PrimaryButton")
         self.continue_queue_button = QPushButton("Продолжить очередь")
         self.continue_queue_button.setVisible(False)
+        publish_actions.addWidget(self.load_month_button)
         publish_actions.addWidget(self.publish_month_button)
         publish_actions.addWidget(self.publish_year_button)
         publish_actions.addWidget(self.continue_queue_button)
@@ -314,6 +323,7 @@ class FixationPage(QWidget):
         self.fill_month_button.clicked.connect(self._fill_month_from_plan)
         self.fill_year_button.clicked.connect(self._fill_year_from_plan)
         self.clear_month_button.clicked.connect(self._clear_month)
+        self.load_month_button.clicked.connect(self._load_selected_month_from_gis)
         self.publish_month_button.clicked.connect(self._publish_selected_month)
         self.publish_year_button.clicked.connect(self._publish_year)
         self.continue_queue_button.clicked.connect(self._continue_queue)
@@ -1063,6 +1073,150 @@ class FixationPage(QWidget):
             if self._period_has_data(period.id)
         ]
 
+    def _load_selected_month_from_gis(self) -> None:
+        if not self._current_period_id or not self._current_work_list_id:
+            return
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+
+        period = self.repository.get_work_fixation_period(self._current_period_id)
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if period is None or work_list is None:
+            return
+        house = self.repository.get_house(work_list.house_id)
+        if house is None:
+            return
+        fias = house.fias_house_guid or house.gis_house_guid
+        if not fias or not work_list.gis_work_list_guid:
+            QMessageBox.warning(
+                self,
+                "Не хватает идентификаторов",
+                "Для загрузки фиксации нужны ФИАС GUID дома и GUID размещенного перечня.",
+            )
+            return
+
+        period_id = period.id
+        self._integration_busy = True
+        self._refresh_gis_buttons()
+        self.month_status.setText(
+            f"{_MONTHS[period.month - 1]} {period.year}: загрузка из ГИС ЖКХ…"
+        )
+
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "load_work_fixation",
+            {
+                "fiasHouseCode": fias,
+                "workListGuid": work_list.gis_work_list_guid,
+                "year": period.year,
+                "month": period.month,
+            },
+            timeout=120.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            if not result.get("found"):
+                QMessageBox.information(
+                    self,
+                    "Фиксация в ГИС ЖКХ не найдена",
+                    "Для выбранного перечня и месяца сохраненная фиксация "
+                    "в ГИС ЖКХ не найдена.",
+                )
+                return
+
+            planned = list(result.get("plannedItems") or [])
+            unplanned = list(result.get("unplannedItems") or [])
+            filled = sum(
+                1
+                for row in planned
+                if isinstance(row, dict)
+                and any(
+                    row.get(key) not in (None, "")
+                    for key in (
+                        "factPrice",
+                        "factAmount",
+                        "factCount",
+                        "factTotalCost",
+                    )
+                )
+            )
+            question = (
+                f"Найдено плановых строк: {len(planned)}.\n"
+                f"Строк с фактическими показателями: {filled}.\n"
+                f"Внеплановых работ: {len(unplanned)}.\n\n"
+            )
+            if local_fixation_has_data(self.repository, period_id):
+                question += (
+                    "Локальные фактические показатели и внеплановые работы "
+                    "этого месяца будут заменены данными из ГИС ЖКХ. "
+                    "Фото плановых работ останутся локально. Продолжить?"
+                )
+            else:
+                question += "Загрузить эти данные в программу?"
+
+            answer = QMessageBox.question(
+                self,
+                "Загрузить фиксацию из ГИС ЖКХ?",
+                question,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                applied = apply_remote_work_fixation(
+                    self.repository,
+                    work_list_id=self._current_work_list_id,
+                    year=period.year,
+                    month=period.month,
+                    remote=result,
+                )
+            except ValueError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Не удалось применить фиксацию",
+                    str(exc),
+                )
+                return
+
+            self._load_table()
+            self._load_unplanned_table()
+            self._refresh_period_status()
+            self._refresh_year_status()
+            QMessageBox.information(
+                self,
+                "Фиксация загружена",
+                f"Плановых строк: {applied['planned']}.\n"
+                f"Строк с фактом: {applied['filled']}.\n"
+                f"Внеплановых работ: {applied['unplanned']}.",
+            )
+
+        def progressed(progress: dict) -> None:
+            if str(progress.get("phase") or "") == "queued":
+                self.month_status.setText(
+                    "Ожидание предыдущей операции с ГИС ЖКХ…"
+                )
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(
+                self,
+                "Не удалось загрузить фиксацию из ГИС ЖКХ",
+                message,
+            )
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._integration_busy = False
+            self._refresh_period_status()
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.progressed.connect(progressed)
+        worker.finished.connect(finished)
+        worker.start()
+
     def _publish_selected_month(self) -> None:
         if not self._current_period_id:
             return
@@ -1352,6 +1506,7 @@ class FixationPage(QWidget):
             and helper_supports_fixations(status.helper_version)
             and not self._integration_busy
         )
+        self.load_month_button.setEnabled(bool(self._current_period_id) and ready)
         self.publish_month_button.setEnabled(bool(self._current_period_id) and ready)
         self.publish_year_button.setEnabled(
             bool(self._current_work_list_id) and ready
