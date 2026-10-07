@@ -304,13 +304,22 @@ class MainWindow(QMainWindow):
 
         if name == "houses":
             if organization_id is not None:
+                changed = page.organization_combo.currentData() != organization_id
                 self._set_combo_data(page.organization_combo, organization_id)
-                page._organization_changed()
+                if changed:
+                    page._organization_changed()
             if house_id is None:
-                page.house_list.blockSignals(True)
-                page.house_list.setCurrentRow(-1)
-                page.house_list.blockSignals(False)
-                page._load_house(None)
+                if page.house_list.currentRow() >= 0:
+                    page.house_list.blockSignals(True)
+                    page.house_list.setCurrentRow(-1)
+                    page.house_list.blockSignals(False)
+                    page._load_house(None)
+                return
+            current = page.house_list.currentItem()
+            if (
+                current is not None
+                and current.data(Qt.ItemDataRole.UserRole) == house_id
+            ):
                 return
             for row in range(page.house_list.count()):
                 item = page.house_list.item(row)
@@ -324,49 +333,68 @@ class MainWindow(QMainWindow):
             return
 
         if organization_id is not None:
+            organization_changed = (
+                page.organization_combo.currentData() != organization_id
+            )
             self._set_combo_data(page.organization_combo, organization_id)
-            page._organization_changed()
+            if organization_changed:
+                page._organization_changed()
 
         if house_id is not None:
+            house_changed = page.house_combo.currentData() != house_id
             self._set_combo_data(page.house_combo, house_id)
-            page._house_changed()
+            if house_changed:
+                page._house_changed()
         else:
-            page.house_combo.blockSignals(True)
-            page.house_combo.setCurrentIndex(-1)
-            page.house_combo.blockSignals(False)
-            page._house_changed()
+            if page.house_combo.currentIndex() >= 0:
+                page.house_combo.blockSignals(True)
+                page.house_combo.setCurrentIndex(-1)
+                page.house_combo.blockSignals(False)
+                page._house_changed()
 
         if name == "work_lists":
-            if year is not None:
+            if year is not None and page.year_spin.value() != year:
                 page.year_spin.blockSignals(True)
                 page.year_spin.setValue(year)
                 page.year_spin.blockSignals(False)
 
-            selected = False
+            current = page.work_lists.currentItem()
+            current_id = (
+                current.data(Qt.ItemDataRole.UserRole)
+                if current is not None
+                else None
+            )
+            if work_list_id is not None and current_id == work_list_id:
+                return
+
             if work_list_id is not None:
                 for row in range(page.work_lists.count()):
                     item = page.work_lists.item(row)
                     if item.data(Qt.ItemDataRole.UserRole) == work_list_id:
                         page.work_lists.setCurrentItem(item)
-                        selected = True
-                        break
-            if not selected:
+                        return
+
+            if current_id is not None:
                 page.work_lists.blockSignals(True)
                 page.work_lists.setCurrentRow(-1)
                 page.work_lists.blockSignals(False)
                 page._load_work_list(None)
             return
 
+        current_work_list_id = page.work_list_combo.currentData()
         if work_list_id is not None:
             found = self._set_combo_data(page.work_list_combo, work_list_id)
         else:
-            page.work_list_combo.blockSignals(True)
-            page.work_list_combo.setCurrentIndex(-1)
-            page.work_list_combo.blockSignals(False)
             found = False
-        page._work_list_changed()
+            if page.work_list_combo.currentIndex() >= 0:
+                page.work_list_combo.blockSignals(True)
+                page.work_list_combo.setCurrentIndex(-1)
+                page.work_list_combo.blockSignals(False)
 
-        if year is not None and found:
+        if current_work_list_id != page.work_list_combo.currentData():
+            page._work_list_changed()
+
+        if year is not None and found and page.year_combo.currentData() != year:
             self._set_combo_data(page.year_combo, year)
             page._year_changed()
 
