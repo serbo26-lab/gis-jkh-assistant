@@ -1198,6 +1198,13 @@ async function runGisCommand(command) {
             sortIndex: item?.sortIndex ?? index + 1,
             workGuid: item?.work?.guid || null,
             workCode: item?.work?.code || null,
+            workName:
+              item?.work?.workName ||
+              item?.workName ||
+              item?.work?.name ||
+              "",
+            listQuantity: (Array.isArray(item?.monthlyWorks) ? item.monthlyWorks : [])
+              .reduce((total, month) => total + Number(month?.count || 0), 0),
             monthlyWorks: (
               Array.isArray(item?.monthlyWorks) ? item.monthlyWorks : []
             ).map((month) => ({
