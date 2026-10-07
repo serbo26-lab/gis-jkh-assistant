@@ -1140,19 +1140,51 @@ class WorkListsPage(QWidget):
             "Он нужен один раз как техническая основа для формирования XLSX."
         )
 
-    def _load_or_update_export_template(self) -> None:
+    def _install_export_template(
+        self,
+        source: Path,
+        *,
+        source_name: str | None = None,
+    ):
+        imported = parse_work_template(source)
+
+        suffix = source.suffix.lower()
+        if suffix not in {".xlsx", ".xlsm"}:
+            suffix = ".xlsx"
+
+        directory = gis_export_template_dir()
+        stored_path = directory / f"work-list-export-template{suffix}"
+
+        for old_file in directory.glob("work-list-export-template.*"):
+            if old_file != stored_path:
+                old_file.unlink(missing_ok=True)
+        if source.resolve() != stored_path.resolve():
+            shutil.copy2(source, stored_path)
+
+        self.repository.set_setting(_EXPORT_TEMPLATE_PATH_KEY, str(stored_path))
+        self.repository.set_setting(
+            _EXPORT_TEMPLATE_NAME_KEY,
+            source_name or source.name,
+        )
+        self.repository.set_setting(_EXPORT_TEMPLATE_TYPE_KEY, imported.file_type)
+        self.repository.set_setting(_EXPORT_TEMPLATE_VERSION_KEY, imported.version)
+        self.repository.set_setting(
+            _EXPORT_TEMPLATE_UPDATED_KEY,
+            datetime.now().isoformat(timespec="seconds"),
+        )
+        self._refresh_export_template_status()
+        return imported
+
+    def _load_export_template_file(self) -> None:
         message = QMessageBox(self)
-        message.setWindowTitle("Шаблон экспорта ГИС ЖКХ")
+        message.setWindowTitle("Ручной выбор шаблона экспорта")
         message.setIcon(QMessageBox.Icon.Information)
-        message.setText("Загрузить или обновить технический шаблон экспорта?")
+        message.setText("Выбрать официальный XLSX-шаблон вручную?")
         message.setInformativeText(
-            "Скачайте официальный XLSX в личном кабинете ГИС ЖКХ: "
-            "«Добавление перечня оказываемых услуг, выполняемых работ…» → "
-            "выберите любой дом → «Выгрузить шаблон».\n\n"
-            "Достаточно одного такого файла. Программа использует его только как "
-            "техническую основу, а GUID дома, период и строки перечня подставляет сама. "
-            "Если формат шаблона в ГИС ЖКХ изменится, нажмите эту кнопку снова и выберите "
-            "новый файл."
+            "Это резервный способ. Обычно шаблон можно получить автоматически "
+            "кнопкой «Получить / обновить шаблон из ГИС ЖКХ».\n\n"
+            "Выберите официальный файл «Экспорт перечня работ …xlsx», "
+            "ранее выгруженный из ГИС ЖКХ."
         )
         message.setStandardButtons(
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
@@ -1171,7 +1203,7 @@ class WorkListsPage(QWidget):
 
         source = Path(filename)
         try:
-            imported = parse_work_template(source)
+            imported = self._install_export_template(source)
         except (WorkTemplateImportError, OSError, ValueError) as exc:
             QMessageBox.critical(
                 self,
@@ -1180,36 +1212,6 @@ class WorkListsPage(QWidget):
                 + str(exc),
             )
             return
-
-        suffix = source.suffix.lower()
-        if suffix not in {".xlsx", ".xlsm"}:
-            suffix = ".xlsx"
-
-        directory = gis_export_template_dir()
-        stored_path = directory / f"work-list-export-template{suffix}"
-
-        try:
-            for old_file in directory.glob("work-list-export-template.*"):
-                if old_file != stored_path:
-                    old_file.unlink(missing_ok=True)
-            shutil.copy2(source, stored_path)
-        except OSError as exc:
-            QMessageBox.critical(
-                self,
-                "Не удалось сохранить шаблон",
-                str(exc),
-            )
-            return
-
-        self.repository.set_setting(_EXPORT_TEMPLATE_PATH_KEY, str(stored_path))
-        self.repository.set_setting(_EXPORT_TEMPLATE_NAME_KEY, source.name)
-        self.repository.set_setting(_EXPORT_TEMPLATE_TYPE_KEY, imported.file_type)
-        self.repository.set_setting(_EXPORT_TEMPLATE_VERSION_KEY, imported.version)
-        self.repository.set_setting(
-            _EXPORT_TEMPLATE_UPDATED_KEY,
-            datetime.now().isoformat(timespec="seconds"),
-        )
-        self._refresh_export_template_status()
 
         details = []
         if imported.file_type:
@@ -1221,6 +1223,161 @@ class WorkListsPage(QWidget):
         if details:
             text += "\n\n" + "\n".join(details)
         QMessageBox.information(self, "Шаблон экспорта обновлен", text)
+
+    def _download_export_template_from_gis(self) -> None:
+        self._save_period()
+
+        house_id = self.house_combo.currentData()
+        house = self.repository.get_house(house_id) if house_id else None
+        if house is None:
+            QMessageBox.information(
+                self,
+                "Не выбран дом",
+                "Сначала выберите дом. ГИС ЖКХ формирует технический шаблон "
+                "в контексте конкретного МКД.",
+            )
+            return
+        if not house.house_object_guid:
+            QMessageBox.warning(
+                self,
+                "Нет GUID дома",
+                "Сначала загрузите сведения о МКД из ГИС ЖКХ.",
+            )
+            return
+        if not self._directory_ready():
+            QMessageBox.information(
+                self,
+                "Нет подключения к ГИС ЖКХ",
+                "Откройте личный кабинет ГИС ЖКХ и убедитесь, что "
+                "ГИС ЖКХ помощник подключен.",
+            )
+            return
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Операция уже выполняется",
+                "Дождитесь завершения текущей операции с ГИС ЖКХ.",
+            )
+            return
+
+        self._set_integration_busy(True, "Запрос шаблона в ГИС ЖКХ…")
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "download_work_list_export_template",
+            {
+                "houseObjectGuid": house.house_object_guid,
+                "year": int(self.year_spin.value()),
+                "month": 1,
+            },
+            timeout=120.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            encoded = str(result.get("fileBase64") or "").strip()
+            file_name = str(
+                result.get("fileName") or "Экспорт перечня работ.xlsx"
+            ).strip()
+            if not encoded:
+                QMessageBox.critical(
+                    self,
+                    "Не удалось получить шаблон",
+                    "ГИС ЖКХ завершил выгрузку, но готовый файл не был получен.",
+                )
+                return
+
+            try:
+                payload = base64.b64decode(encoded, validate=True)
+            except (ValueError, TypeError) as exc:
+                QMessageBox.critical(
+                    self,
+                    "Не удалось получить шаблон",
+                    "Помощник вернул поврежденные данные XLSX.\n\n" + str(exc),
+                )
+                return
+
+            suffix = Path(file_name).suffix.lower()
+            if suffix not in {".xlsx", ".xlsm"}:
+                suffix = ".xlsx"
+
+            directory = gis_export_template_dir()
+            temporary_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    prefix="gis-work-list-template-",
+                    suffix=suffix,
+                    dir=directory,
+                    delete=False,
+                ) as tmp:
+                    tmp.write(payload)
+                    temporary_path = Path(tmp.name)
+
+                imported = self._install_export_template(
+                    temporary_path,
+                    source_name=file_name,
+                )
+            except (WorkTemplateImportError, OSError, ValueError) as exc:
+                QMessageBox.critical(
+                    self,
+                    "Полученный файл не распознан",
+                    "ГИС ЖКХ вернул файл, который не удалось использовать "
+                    "как шаблон перечня.\n\n"
+                    + str(exc),
+                )
+                return
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+
+            details = []
+            if imported.file_type:
+                details.append(f"TYPE: {imported.file_type}")
+            if imported.version:
+                details.append(f"VERSION: {imported.version}")
+
+            text = (
+                "Официальный шаблон получен напрямую из ГИС ЖКХ и сохранен "
+                "как техническая основа для формирования XLSX."
+            )
+            if details:
+                text += "\n\n" + "\n".join(details)
+            QMessageBox.information(self, "Шаблон экспорта обновлен", text)
+
+        def progressed(progress: dict) -> None:
+            phase = str(progress.get("phase") or "")
+            if phase == "queued":
+                self.save_status.setText("Ожидание предыдущей операции с ГИС ЖКХ…")
+                return
+            if phase != "template_export":
+                return
+            status = str(progress.get("status") or "")
+            labels = {
+                "requesting": "Запрос выгрузки шаблона…",
+                "processing": "ГИС ЖКХ формирует шаблон…",
+                "downloading": "Скачивание готового шаблона…",
+            }
+            self.save_status.setText(labels.get(status, "Получение шаблона…"))
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(
+                self,
+                "Не удалось получить шаблон из ГИС ЖКХ",
+                message
+                + "\n\nМожно воспользоваться резервной кнопкой "
+                "«Выбрать XLSX вручную…».",
+            )
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._set_integration_busy(False)
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.progressed.connect(progressed)
+        worker.finished.connect(finished)
+        worker.start()
 
     def _export_template_path(self) -> Path | None:
         path_text = self.repository.get_setting(_EXPORT_TEMPLATE_PATH_KEY)
