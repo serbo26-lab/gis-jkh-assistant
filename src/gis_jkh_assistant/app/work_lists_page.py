@@ -995,7 +995,7 @@ class WorkListsPage(QWidget):
             template_name = "Из ГИС ЖКХ"
         else:
             template_name = "Без шаблона"
-        status = "Локальный" if work_list.status.value == "local" else work_list.status.value
+        status = self._work_list_status_text(work_list)
 
         for row in range(self.work_lists.count()):
             item = self.work_lists.item(row)
@@ -2120,6 +2120,7 @@ class WorkListsPage(QWidget):
             return
 
         try:
+            self.repository.clear_work_list_downstream_data(work_list.id)
             deleted = self.repository.clear_work_list_items(work_list.id)
         except ValueError as exc:
             QMessageBox.warning(self, "Нельзя очистить состав", str(exc))
@@ -2221,6 +2222,7 @@ class WorkListsPage(QWidget):
                 return
 
             try:
+                self.repository.clear_work_list_downstream_data(work_list.id)
                 added = self.repository.replace_work_list_items(
                     work_list.id,
                     matched,
