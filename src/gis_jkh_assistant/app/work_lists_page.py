@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -53,7 +54,7 @@ from gis_jkh_assistant.work_lists.gis_sync import (
 
 from .gis_integration_worker import GisIntegrationWorker
 from .lazy_distribution_dialog import LazyDistributionDialog
-from .widgets import SafeComboBox, SafeSpinBox
+from .widgets import SafeComboBox, SafeSpinBox, StatusStrip
 from .work_directory_dialog import WorkDirectorySelectionDialog
 from .work_row_rules import editable_columns_for_mode, infer_work_row_mode
 from .work_templates_dialog import WorkTemplatesDialog
@@ -146,47 +147,49 @@ class WorkListsPage(QWidget):
         root.addLayout(title_row)
 
         context = QFrame()
-        context.setObjectName("Card")
+        context.setObjectName("ContextBar")
         self.context_card = context
         context_layout = QGridLayout(context)
         self.context_layout = context_layout
-        context_layout.setContentsMargins(14, 12, 14, 12)
+        context_layout.setContentsMargins(14, 10, 14, 10)
         context_layout.setHorizontalSpacing(10)
         context_layout.setVerticalSpacing(8)
 
-        context_title = QLabel("Контекст")
-        context_title.setObjectName("SectionTitle")
-        context_layout.addWidget(context_title, 0, 0, 1, 4)
-
-        context_layout.addWidget(QLabel("Управляющая организация"), 1, 0)
+        context_layout.addWidget(QLabel("Управляющая организация"), 0, 0)
         self.organization_combo = SafeComboBox()
         self.organization_combo.setMinimumWidth(280)
-        context_layout.addWidget(self.organization_combo, 1, 1, 1, 3)
+        context_layout.addWidget(self.organization_combo, 0, 1, 1, 3)
 
-        context_layout.addWidget(QLabel("Дом"), 2, 0)
+        context_layout.addWidget(QLabel("Дом"), 1, 0)
         self.house_combo = SafeComboBox()
         self.house_combo.setMinimumWidth(320)
-        context_layout.addWidget(self.house_combo, 2, 1, 1, 3)
+        context_layout.addWidget(self.house_combo, 1, 1, 1, 3)
+        context_layout.setColumnStretch(1, 1)
+        context_layout.setColumnStretch(3, 3)
+        root.addWidget(context)
 
-        creation_title = QLabel("Создание перечня")
-        creation_title.setObjectName("SectionTitle")
-        context_layout.addWidget(creation_title, 3, 0, 1, 4)
+        creation = QFrame()
+        creation.setObjectName("ContextBar")
+        creation_layout = QGridLayout(creation)
+        creation_layout.setContentsMargins(14, 10, 14, 10)
+        creation_layout.setHorizontalSpacing(10)
+        creation_layout.setVerticalSpacing(8)
 
-        context_layout.addWidget(QLabel("Год"), 4, 0)
+        creation_layout.addWidget(QLabel("Год"), 0, 0)
         self.year_spin = SafeSpinBox()
         self.year_spin.setRange(2015, 2100)
         self.year_spin.setValue(datetime.now().year)
         self.year_spin.setFixedWidth(138)
-        context_layout.addWidget(self.year_spin, 4, 1)
+        creation_layout.addWidget(self.year_spin, 0, 1)
 
-        context_layout.addWidget(QLabel("Шаблон перечня"), 4, 2)
+        creation_layout.addWidget(QLabel("Шаблон перечня"), 0, 2)
         self.template_combo = SafeComboBox()
         self.template_combo.setMinimumWidth(260)
-        context_layout.addWidget(self.template_combo, 4, 3)
+        creation_layout.addWidget(self.template_combo, 0, 3)
 
         self.templates_button = QPushButton("Шаблоны пользователя")
         self.create_from_current_button = QPushButton("Создать на основе выбранного перечня")
-        self.create_button = QPushButton("Создать новый перечень")
+        self.create_button = QPushButton("+ Создать перечень")
         self.create_button.setObjectName("PrimaryButton")
 
         creation_actions = QGridLayout()
@@ -197,20 +200,11 @@ class WorkListsPage(QWidget):
         creation_actions.addWidget(self.create_button, 0, 3)
         creation_actions.setColumnStretch(1, 1)
         creation_actions.setColumnStretch(2, 1)
-        context_layout.addLayout(creation_actions, 5, 0, 1, 4)
+        creation_layout.addLayout(creation_actions, 1, 0, 1, 4)
+        creation_layout.setColumnStretch(3, 1)
+        root.addWidget(creation)
 
-        gis_title = QLabel("Обмен с ГИС ЖКХ")
-        gis_title.setObjectName("SectionTitle")
-        context_layout.addWidget(gis_title, 6, 0, 1, 4)
-
-        self.export_template_status = QLabel("Шаблон экспорта: не загружен")
-        self.export_template_status.setObjectName("Muted")
-        self.export_template_status.setWordWrap(True)
-        context_layout.addWidget(self.export_template_status, 7, 0, 1, 4)
-
-        self.load_gis_lists_button = QPushButton(
-            "Загрузить перечни работ и услуг по МКД"
-        )
+        self.load_gis_lists_button = QPushButton("Загрузить перечни по МКД")
         self.load_gis_lists_button.setToolTip(
             "Получить из ГИС ЖКХ перечни только для выбранного дома."
         )
@@ -226,40 +220,59 @@ class WorkListsPage(QWidget):
             "Резервный способ: выбрать ранее выгруженный официальный XLSX-файл."
         )
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
-        self.upload_to_gis_button = QPushButton("Загрузить в ГИС ЖКХ")
-        self.sync_gis_button = QPushButton("Проверить статус в ГИС")
-        self.cancel_gis_button = QPushButton("Отменить перечень в ГИС ЖКХ")
+        self.upload_to_gis_button = QPushButton("Загрузить XLSX в ГИС")
+        self.sync_gis_button = QPushButton("Проверить статус")
+        self.cancel_gis_button = QPushButton("Отменить перечень")
         self.cancel_gis_button.setObjectName("DangerButton")
         self.cancel_gis_button.setToolTip(
             "Отменить размещенный перечень. ГИС ЖКХ удалит связанные планирование, "
             "фиксацию и оценку качества; после этого состав перечня можно изменить."
         )
-        self.save_editable_gis_button = QPushButton("Сохранить изменения в ГИС ЖКХ")
+        self.save_editable_gis_button = QPushButton("Сохранить проект")
         self.save_editable_gis_button.setToolTip(
             "Сохранить новый состав отмененного перечня или проекта напрямую в ГИС ЖКХ."
         )
-        self.approve_gis_button = QPushButton("Разместить информацию")
+        self.approve_gis_button = QPushButton("Разместить в ГИС ЖКХ")
         self.approve_gis_button.setObjectName("PrimaryButton")
 
-        gis_actions = QGridLayout()
+        self.files_actions_button = QPushButton("Файлы и шаблоны ▾")
+        files_menu = QMenu(self.files_actions_button)
+        files_menu.addAction(
+            "Получить / обновить официальный шаблон",
+            self.load_export_template_button.click,
+        )
+        files_menu.addAction(
+            "Выбрать официальный XLSX вручную…",
+            self.load_export_template_file_button.click,
+        )
+        files_menu.addSeparator()
+        files_menu.addAction(
+            "Сформировать XLSX из выбранного перечня",
+            self.export_button.click,
+        )
+        self.files_actions_button.setMenu(files_menu)
+
+        gis_frame = QFrame()
+        gis_frame.setObjectName("ActionToolbar")
+        gis_actions = QGridLayout(gis_frame)
         self.gis_actions = gis_actions
+        gis_actions.setContentsMargins(10, 8, 10, 8)
         gis_actions.setHorizontalSpacing(8)
         gis_actions.setVerticalSpacing(6)
-        gis_actions.addWidget(self.load_gis_lists_button, 0, 0)
-        gis_actions.addWidget(self.load_export_template_button, 0, 1)
-        gis_actions.addWidget(self.load_export_template_file_button, 0, 2)
-        gis_actions.addWidget(self.export_button, 1, 0)
-        gis_actions.addWidget(self.upload_to_gis_button, 1, 1)
-        gis_actions.addWidget(self.sync_gis_button, 1, 2)
-        gis_actions.addWidget(self.cancel_gis_button, 2, 0)
-        gis_actions.addWidget(self.save_editable_gis_button, 2, 1)
-        gis_actions.addWidget(self.approve_gis_button, 2, 2)
-        gis_actions.setColumnStretch(1, 1)
-        context_layout.addLayout(gis_actions, 8, 0, 1, 4)
+        gis_actions.addWidget(self.files_actions_button, 0, 0)
+        gis_actions.addWidget(self.load_gis_lists_button, 0, 1)
+        gis_actions.addWidget(self.sync_gis_button, 0, 2)
+        gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
+        gis_actions.addWidget(self.save_editable_gis_button, 1, 1)
+        gis_actions.addWidget(self.approve_gis_button, 1, 2)
+        gis_actions.addWidget(self.cancel_gis_button, 2, 2)
+        for column in range(3):
+            gis_actions.setColumnStretch(column, 1)
+        root.addWidget(gis_frame)
 
-        context_layout.setColumnStretch(1, 1)
-        context_layout.setColumnStretch(3, 3)
-        root.addWidget(context)
+        self.export_status_strip = StatusStrip("Шаблон экспорта: не загружен")
+        self.export_template_status = self.export_status_strip.label
+        root.addWidget(self.export_status_strip)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
