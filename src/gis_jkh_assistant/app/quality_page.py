@@ -632,7 +632,15 @@ class QualityAssessmentPage(QWidget):
         if not self._current_period_id:
             return
         self._sync_work_units_for_act()
-        result = self._auto_generate_act_for_period(self._current_period_id)
+        try:
+            result = self._auto_generate_act_for_period(self._current_period_id)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Не удалось сформировать акт",
+                str(exc),
+            )
+            return
         self._load_table()
         self._refresh_act_summary()
         self._refresh_period_status()
@@ -676,7 +684,15 @@ class QualityAssessmentPage(QWidget):
                 continue
             if not any(item.included for item in self.store.list_items(period.id)):
                 continue
-            result = self._auto_generate_act_for_period(period.id)
+            try:
+                result = self._auto_generate_act_for_period(period.id)
+            except (OSError, RuntimeError, ValueError) as exc:
+                QMessageBox.warning(
+                    self,
+                    "Массовое формирование актов остановлено",
+                    f"{_MONTHS[month - 1]} {year}: {exc}",
+                )
+                break
             processed += 1
             created += result.created
             linked += result.linked_items
