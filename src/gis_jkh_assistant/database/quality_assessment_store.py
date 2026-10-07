@@ -379,6 +379,23 @@ class QualityAssessmentStore:
             )
             self._touch_period(period_id)
 
+    def clear_quality_values(self, period_id: str) -> int:
+        """Clear recalculation-only fields without touching inclusion or acts."""
+
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                UPDATE quality_assessment_items
+                SET cost = NULL,
+                    days_count = NULL,
+                    cost_reduction = NULL
+                WHERE quality_period_id = ?
+                """,
+                (period_id,),
+            )
+            self._touch_period(period_id)
+        return int(cursor.rowcount or 0)
+
     def get_act(self, act_id: str) -> QualityAssessmentAct | None:
         row = self.connection.execute(
             """
