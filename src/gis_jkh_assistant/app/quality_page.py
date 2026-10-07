@@ -239,9 +239,11 @@ class QualityAssessmentPage(QWidget):
         table_layout = QVBoxLayout(table_card)
         table_layout.setContentsMargins(12, 12, 12, 12)
         note = QLabel(
-            "Для акта нарушения качества укажите количество дней ненадлежащего "
-            "качества. Размер уменьшения платы рассчитывается автоматически. "
-            "Для акта выполненных работ эти поля можно оставить пустыми."
+            "Поля «Стоимость в ежемесячной плате», «Дней ненадлежащего качества» "
+            "и «Уменьшение платы» заполняются только при ненадлежащем качестве "
+            "и перерасчёте. Для обычного акта выполненных работ они должны "
+            "оставаться пустыми; фактическая стоимость для PDF берётся из "
+            "раздела «Фиксация работ и услуг»."
         )
         note.setObjectName("Muted")
         note.setWordWrap(True)
@@ -556,6 +558,66 @@ class QualityAssessmentPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
+    def _clear_month_values(self) -> None:
+        if not self._current_period_id:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Очистить данные месяца?",
+            "Будут очищены только поля перерасчёта: «Стоимость в ежемесячной "
+            "плате», «Дней ненадлежащего качества» и «Уменьшение платы». "
+            "Выбор работ и акты сохранятся. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        count = self.store.clear_quality_values(self._current_period_id)
+        self._load_table()
+        self._refresh_period_status()
+        self._refresh_year_status()
+        QMessageBox.information(
+            self,
+            "Данные очищены",
+            f"Очищено строк: {count}. Акты и включение работ не изменены.",
+        )
+
+    def _clear_year_values(self) -> None:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return
+        year = int(self.year_combo.currentData())
+        months = self._active_months()
+        answer = QMessageBox.question(
+            self,
+            "Очистить данные доступных месяцев года?",
+            f"Поля перерасчёта будут очищены во всех доступных месяцах "
+            f"выбранного периода ({len(months)}). Акты и выбор работ сохранятся. "
+            "Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        periods = {
+            period.month: period
+            for period in self.store.list_periods(
+                self._current_work_list_id,
+                year=year,
+            )
+        }
+        rows = 0
+        processed = 0
+        for month in months:
+            period = periods.get(month)
+            if period is None:
+                continue
+            rows += self.store.clear_quality_values(period.id)
+            processed += 1
+        self._month_changed()
+        self._refresh_year_status()
+        QMessageBox.information(
+            self,
+            "Данные года очищены",
+            f"Обработано месяцев: {processed}.\nОчищено строк: {rows}. "
+            "Акты и включение работ не изменены.",
+        )
+
     def _active_months(self) -> tuple[int, ...]:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return ()
@@ -578,7 +640,8 @@ class QualityAssessmentPage(QWidget):
             "Сформировать оценку за месяц?",
             "В оценку будут включены работы, по которым в выбранном месяце "
             "есть фактические показатели в разделе «Фиксация работ и услуг». "
-            "Стоимость будет взята из «Стоимость факт.».\n\n"
+            "Поля перерасчёта останутся пустыми. Фактическая стоимость "
+            "используется только при формировании PDF акта выполненных работ.\n\n"
             "Строки с пользовательскими или импортированными актами "
             "останутся без изменений. Продолжить?",
         )
