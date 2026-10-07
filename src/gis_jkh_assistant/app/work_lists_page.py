@@ -491,7 +491,14 @@ class WorkListsPage(QWidget):
 
     def _house_changed(self) -> None:
         self._save_period()
-        self._current_work_list_id = None
+        selected_house_id = self.house_combo.currentData()
+        current = (
+            self.repository.get_work_list(self._current_work_list_id)
+            if self._current_work_list_id
+            else None
+        )
+        if current is not None and current.house_id != selected_house_id:
+            self._current_work_list_id = None
         self.refresh_work_lists()
 
     def refresh_work_lists(self, select_id: str | None = None) -> None:
