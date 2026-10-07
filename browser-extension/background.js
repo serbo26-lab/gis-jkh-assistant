@@ -3178,6 +3178,13 @@ async function runGisCommand(command) {
     }
 
 
+    if (command.type === "load_quality_assessment") {
+      return {
+        ok: true,
+        result: await loadQualityAssessment(payload)
+      };
+    }
+
     if (command.type === "save_quality_assessment") {
       const saved = await saveQualityAssessment(payload);
       return { ok: true, result: saved.result };
@@ -3194,6 +3201,13 @@ async function runGisCommand(command) {
       return {
         ok: true,
         result: await cancelQualityAssessment(payload)
+      };
+    }
+
+    if (command.type === "load_work_fixation") {
+      return {
+        ok: true,
+        result: await loadWorkFixation(payload)
       };
     }
 
@@ -3289,6 +3303,14 @@ async function runGisCommand(command) {
           unplannedItems,
           photoResults
         }
+      };
+    }
+
+    if (command.type === "load_work_plan") {
+      const plan = await searchWorkPlan(payload.workListGuid, payload.year);
+      return {
+        ok: true,
+        result: normalizeWorkPlanForImport(plan)
       };
     }
 
