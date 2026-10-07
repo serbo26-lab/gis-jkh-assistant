@@ -1104,12 +1104,14 @@ class WorkListsPage(QWidget):
 
         house_id = self.house_combo.currentData()
         house = self.repository.get_house(house_id) if house_id else None
+        house_ready = house is not None and bool(house.house_object_guid)
         self.load_gis_lists_button.setEnabled(
-            ready
-            and house is not None
-            and bool(house.house_object_guid)
-            and not self._integration_busy
+            ready and house_ready and not self._integration_busy
         )
+        self.load_export_template_button.setEnabled(
+            ready and house_ready and not self._integration_busy
+        )
+        self.load_export_template_file_button.setEnabled(not self._integration_busy)
 
         enabled = ready and selected and not self._integration_busy
         self.sync_gis_button.setEnabled(enabled)
@@ -1403,9 +1405,9 @@ class WorkListsPage(QWidget):
             QMessageBox.information(
                 self,
                 "Не загружен шаблон экспорта",
-                "Сначала нажмите «Загрузить / обновить шаблон экспорта» и выберите "
-                "официальный XLSX, выгруженный из ГИС ЖКХ. Это отдельная разовая "
-                "настройка и она не выполняется внутри формирования файла.",
+                "Сначала нажмите «Получить / обновить шаблон из ГИС ЖКХ». "
+                "Если автоматическая загрузка недоступна, используйте "
+                "«Выбрать XLSX вручную…».",
             )
             self._refresh_export_template_status()
             return
