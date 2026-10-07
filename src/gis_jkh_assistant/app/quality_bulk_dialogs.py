@@ -254,9 +254,13 @@ class GenerateAcceptanceActDialog(QDialog):
     def _set_checks(self, item_ids: set[str]) -> None:
         for index in range(self.list.count()):
             row = self.list.item(index)
+            item_id = str(row.data(Qt.ItemDataRole.UserRole))
+            if item_id in self.locked_ids:
+                row.setCheckState(Qt.CheckState.Unchecked)
+                continue
             row.setCheckState(
                 Qt.CheckState.Checked
-                if row.data(Qt.ItemDataRole.UserRole) in item_ids
+                if item_id in item_ids
                 else Qt.CheckState.Unchecked
             )
 
