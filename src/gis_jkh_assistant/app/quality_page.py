@@ -1074,6 +1074,212 @@ class QualityAssessmentPage(QWidget):
             return
         self._run_gis("approve_quality_assessment", success)
 
+    def _periods_with_quality_for_year(self) -> list:
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return []
+        year = int(self.year_combo.currentData())
+        return [
+            period
+            for period in self.store.list_periods(
+                self._current_work_list_id,
+                year=year,
+            )
+            if any(item.included for item in self.store.list_items(period.id))
+        ]
+
+    def _save_year_projects(self) -> None:
+        self._start_year_queue(
+            "save_quality_assessment",
+            title="Сохранение проектов оценки качества",
+            confirmation=(
+                "Сохранить проекты оценки качества для всех сформированных "
+                "месяцев выбранного года?"
+            ),
+        )
+
+    def _publish_year(self) -> None:
+        self._start_year_queue(
+            "approve_quality_assessment",
+            title="Размещение оценки качества",
+            confirmation=(
+                "Разместить оценку качества для всех сформированных месяцев "
+                "выбранного года? Месяцы будут обработаны последовательно."
+            ),
+        )
+
+    def _start_year_queue(
+        self,
+        command: str,
+        *,
+        title: str,
+        confirmation: str,
+    ) -> None:
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+        periods = self._periods_with_quality_for_year()
+        if not periods:
+            QMessageBox.information(
+                self,
+                "Нет сформированных месяцев",
+                "Сначала сформируйте оценку качества хотя бы за один месяц.",
+            )
+            return
+
+        errors = []
+        for period in periods:
+            error = self._validation_error(period.id)
+            if error:
+                errors.append(
+                    f"{_MONTHS[period.month - 1]} {period.year}: {error}"
+                )
+        if errors:
+            details = "\n".join(f"• {value}" for value in errors[:6])
+            if len(errors) > 6:
+                details += f"\n… ещё месяцев: {len(errors) - 6}"
+            QMessageBox.warning(
+                self,
+                "Не все месяцы готовы",
+                "Перед массовой отправкой нужно исправить следующие месяцы:\n\n"
+                + details,
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            title,
+            confirmation
+            + f"\n\nБудет обработано месяцев: {len(periods)}. "
+            "При ошибке очередь остановится на проблемном месяце.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._queue_period_ids = [period.id for period in periods]
+        self._queue_index = 0
+        self._queue_successes = 0
+        self._queue_failed_period_id = None
+        self._queue_command = command
+        self._queue_title = title
+        self.queue_progress.setVisible(True)
+        self.queue_progress.setRange(0, len(self._queue_period_ids))
+        self.queue_progress.setValue(0)
+        self.continue_queue_button.setVisible(False)
+        self.queue_label.setText("Очередь запущена…")
+        self._start_next_queue_item()
+
+    def _continue_queue(self) -> None:
+        if not self._queue_failed_period_id:
+            return
+        try:
+            failed_index = self._queue_period_ids.index(
+                self._queue_failed_period_id
+            )
+        except ValueError:
+            return
+        self._queue_index = failed_index
+        self._queue_failed_period_id = None
+        self.continue_queue_button.setVisible(False)
+        self.queue_label.setText("Продолжаем очередь…")
+        self._start_next_queue_item()
+
+    def _start_next_queue_item(self) -> None:
+        if self._queue_index >= len(self._queue_period_ids):
+            self.queue_progress.setValue(len(self._queue_period_ids))
+            self.queue_label.setText(
+                f"Очередь завершена. Успешно обработано месяцев: "
+                f"{self._queue_successes}."
+            )
+            self._refresh_year_status()
+            if self._current_period_id:
+                self._load_table()
+                self._refresh_act_summary()
+                self._refresh_period_status()
+            return
+
+        period_id = self._queue_period_ids[self._queue_index]
+        period = self.store.get_period(period_id)
+        if period is None or self._queue_command is None:
+            self._queue_index += 1
+            QTimer.singleShot(0, self._start_next_queue_item)
+            return
+
+        action = (
+            "Сохраняется проект"
+            if self._queue_command == "save_quality_assessment"
+            else "Размещается"
+        )
+        self.queue_label.setText(
+            f"{action}: {_MONTHS[period.month - 1]} {period.year} "
+            f"({self._queue_index + 1} из {len(self._queue_period_ids)})…"
+        )
+        self._send_queue_period(period_id)
+
+    def _send_queue_period(self, period_id: str) -> None:
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+        if self._queue_command is None:
+            return
+        payload = self._payload_for_period(period_id, show_error=False)
+        period = self.store.get_period(period_id)
+        if payload is None or period is None:
+            self._queue_failed_period_id = period_id
+            self.queue_label.setText(
+                "Очередь остановлена: не хватает идентификаторов ГИС ЖКХ."
+            )
+            self.continue_queue_button.setVisible(True)
+            return
+
+        self._integration_busy = True
+        self._refresh_gis_buttons()
+        command_succeeded = {"value": False}
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            self._queue_command,
+            payload,
+            timeout=180.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            command_succeeded["value"] = True
+            self._apply_gis_result(period_id, result)
+            self._queue_successes += 1
+            self._queue_index += 1
+            self.queue_progress.setValue(self._queue_index)
+            self._refresh_year_status()
+            if self._current_period_id == period_id:
+                self._load_table()
+                self._refresh_act_summary()
+                self._refresh_period_status()
+
+        def failed(message: str) -> None:
+            self.store.set_error(period_id, message)
+            self._queue_failed_period_id = period_id
+            self.queue_label.setText(
+                f"Очередь остановлена на {_MONTHS[period.month - 1]} "
+                f"{period.year}: {message}"
+            )
+            self.continue_queue_button.setText(
+                f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"
+            )
+            self.continue_queue_button.setVisible(True)
+            self._refresh_year_status()
+            if self._current_period_id == period_id:
+                self._refresh_period_status()
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._integration_busy = False
+            self._refresh_integration_status()
+            if command_succeeded["value"] and self._queue_failed_period_id is None:
+                QTimer.singleShot(250, self._start_next_queue_item)
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
     def _cancel(self) -> None:
         if not self._current_period_id:
             return
@@ -1113,36 +1319,9 @@ class QualityAssessmentPage(QWidget):
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
-            if result.get("cancelled"):
-                self.store.mark_cancelled(period_id)
-                self._load_table()
-                self._refresh_period_status()
-                self._refresh_year_status()
-                QMessageBox.information(self, "ГИС ЖКХ", success_message)
-                return
-
-            item_guids = {
-                str(row.get("localItemId")): str(row.get("guid"))
-                for row in (result.get("items") or [])
-                if row.get("localItemId") and row.get("guid")
-            }
-            act_guids = {}
-            for row in result.get("acts") or []:
-                local_id = row.get("localActId")
-                if local_id:
-                    act_guids[str(local_id)] = (
-                        row.get("contentGuid"),
-                        row.get("guid"),
-                    )
-            self.store.set_gis_state(
-                period_id,
-                reporting_period_guid=result.get("reportingPeriodGuid"),
-                estimation_guid=result.get("estimationGuid"),
-                gis_status=result.get("gisStatus"),
-                item_guids=item_guids,
-                act_guids=act_guids,
-            )
+            self._apply_gis_result(period_id, result)
             self._load_table()
+            self._refresh_act_summary()
             self._refresh_period_status()
             self._refresh_year_status()
             QMessageBox.information(self, "ГИС ЖКХ", success_message)
