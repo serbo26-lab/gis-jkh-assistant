@@ -4,6 +4,7 @@ from PySide6.QtCore import QTimer
 from .page_layouts import MONTHS
 
 TITLES = {
+    "get_current_organization": "Загрузка управляющей организации",
     "save_work_plan": "Размещение плана", "load_work_plan": "Загрузка плана",
     "load_work_fixation": "Загрузка фиксации", "save_work_fixation": "Размещение фиксации",
     "load_quality_assessment": "Загрузка оценки", "save_quality_assessment": "Сохранение проектов",

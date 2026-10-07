@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QMouseEvent, QResizeEvent, QWheelEvent
+from PySide6.QtCore import QEvent, QObject, QTimer, Signal, Qt
+from PySide6.QtGui import QFont, QFontMetrics, QMouseEvent, QResizeEvent, QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
+    QApplication,
     QButtonGroup,
     QComboBox,
     QFrame,
@@ -13,10 +14,64 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QToolButton,
     QWidget,
 )
+
+from .icons import icon
+from .styles import color
+
+
+class _ComboChevron(QObject):
+    def __init__(self, combo):
+        super().__init__(combo)
+        self.combo = combo
+        self.label = QLabel(combo)
+        self.label.setObjectName("ComboChevron")
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.label.setAccessibleName("Открыть список")
+        combo.installEventFilter(self)
+        self.refresh()
+
+    def refresh(self):
+        app = QApplication.instance()
+        scale = float(app.property("uiScale") or 1.0) if app else 1.0
+        size = round(16 * scale)
+        self.label.setPixmap(icon("chevron_down", color("muted_text"), size).pixmap(size, size))
+        self.label.setGeometry(self.combo.width() - round(21 * scale),
+                               (self.combo.height() - size) // 2, size, size)
+        self.label.raise_()
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange, QEvent.Type.StyleChange,
+                            QEvent.Type.PaletteChange):
+            self.refresh()
+        return super().eventFilter(watched, event)
+
+
+def ensure_combo_chevron(combo):
+    if not hasattr(combo, "_svg_chevron"):
+        combo._svg_chevron = _ComboChevron(combo)
+    else:
+        combo._svg_chevron.refresh()
+
+
+class _ComboChevronInstaller(QObject):
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.Polish and isinstance(watched, QComboBox):
+            ensure_combo_chevron(watched)
+        return super().eventFilter(watched, event)
+
+
+def refresh_combo_chevrons(app):
+    if not hasattr(app, "_combo_chevron_installer"):
+        app._combo_chevron_installer = _ComboChevronInstaller(app)
+        app.installEventFilter(app._combo_chevron_installer)
+    for widget in app.allWidgets():
+        if isinstance(widget, QComboBox):
+            ensure_combo_chevron(widget)
 
 
 class SafeSpinBox(QSpinBox):
@@ -85,6 +140,7 @@ class SafeComboBox(QComboBox):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        ensure_combo_chevron(self)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         self.setFocus(Qt.FocusReason.MouseFocusReason)
@@ -145,6 +201,9 @@ class ScopeSwitcher(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("ScopeSwitcher")
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._fit_text)
         self._keys = (first_key, second_key)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -161,13 +220,34 @@ class ScopeSwitcher(QFrame):
             button.setObjectName("ScopeSwitcherButton")
             button.setCheckable(True)
             button.setProperty("scopeKey", key)
+            button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             self.group.addButton(button)
             layout.addWidget(button)
             self.buttons[key] = button
             button.clicked.connect(
                 lambda _checked=False, value=key: self.scopeChanged.emit(value)
             )
+            button.toggled.connect(self._queue_fit)
         self.buttons[first_key].setChecked(True)
+        self._fit_text()
+        self._queue_fit()
+
+    def _queue_fit(self, *_args) -> None:
+        if not self._fit_timer.isActive():
+            self._fit_timer.start(0)
+
+    def _fit_text(self) -> None:
+        for button in self.buttons.values():
+            font = QFont(button.font())
+            font.setBold(True)
+            metrics = QFontMetrics(font)
+            button.setMinimumWidth(metrics.horizontalAdvance(button.text()) + 32)
+            button.setMinimumHeight(max(button.minimumSizeHint().height(), metrics.height() + 20))
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange) and hasattr(self, "buttons"):
+            self._queue_fit()
 
     def scope(self) -> str:
         for key, button in self.buttons.items():

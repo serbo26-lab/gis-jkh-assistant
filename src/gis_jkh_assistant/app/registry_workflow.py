@@ -171,6 +171,10 @@ def refresh_work_lists(page) -> None:
     remote_reason = "Дождитесь завершения текущей операции." if busy else connection
     if not remote_reason and (not house or not house.house_object_guid):
         remote_reason = "Загрузите сведения о доме в разделе «Дома»: нужен идентификатор ГИС."
+    page.network_hint.setText(remote_reason)
+    page.network_hint.setVisible(bool(remote_reason))
+    page.load_gis_lists_button.setToolTip(remote_reason or "Загрузить все перечни выбранного дома из ГИС ЖКХ.")
+    page.sync_gis_button.setToolTip(remote_reason or "Проверить текущее состояние выбранного перечня в ГИС ЖКХ.")
     status = str(work_list.gis_status or "").upper() if work_list else ""
     editable = bool(work_list and status in {"", "NOT_FOUND", "CANCELLED", "DRAFT"})
     for button in (page.create_button, page.creation_toggle):
@@ -199,13 +203,18 @@ def refresh_work_lists(page) -> None:
             connection or "Работы проверяются по актуальному справочнику УО в ГИС ЖКХ."
         )
     page.remote_danger.sync()
-    page.remote_danger.setEnabled(bool(work_list) and not busy)
+    page.remote_danger.setEnabled(page.cancel_gis_button.isEnabled() and not busy)
+    page.remote_danger.setVisible(page.cancel_gis_button.isEnabled())
+    page.local_list_danger.sync()
+    page.local_list_danger.setEnabled(bool(work_list) and not busy)
     page.composition_menu.sync()
     page.composition_danger.sync()
     page.composition_menu.setEnabled(bool(work_list) and not busy)
     page.composition_danger.setEnabled(editable and not busy)
     page.project_actions.setEnabled(bool(work_list) and not busy)
     page.project_actions.sync()
+    page.xlsx_network_actions.sync()
+    page.xlsx_network_actions.setEnabled(not busy and not connection)
     page.context_status.setVisible(bool(work_list))
     page.items_hint.setText(
         "Локальные изменения сохраняются автоматически. Заполните цену, объём и количество "
@@ -346,8 +355,16 @@ def refresh_houses(page) -> None:
     page.card_widget.setEnabled(not busy and bool(house))
     connection = _connection_reason(page)
     ready = bool(organization_id and not busy and not connection)
+    from .organization_sync import organization_import_reason
+    organization_reason = organization_import_reason(page)
+    page.load_organization_button.setEnabled(not organization_reason)
+    page.load_organization_button.setToolTip(organization_reason or "Реквизиты из открытого кабинета ГИС ЖКХ. Перед добавлением можно проверить.")
     page.add_house_button.setEnabled(bool(organization_id) and not busy)
     page.add_org_button.setEnabled(not busy)
+    page.edit_org_button.setEnabled(bool(organization_id) and not busy)
+    page.delete_org_button.setEnabled(bool(organization_id) and not busy)
+    page.organization_danger.setEnabled(bool(organization_id) and not busy)
+    page.organization_danger.sync()
     page.organization_add_action.setEnabled(not busy)
     page.organization_edit_action.setEnabled(bool(organization_id) and not busy)
     page.organization_delete_action.setEnabled(bool(organization_id) and not busy)
@@ -364,12 +381,16 @@ def refresh_houses(page) -> None:
     page.sync_management_button.setEnabled(bool(house and house.house_object_guid) and ready)
     page.delete_house_button.setEnabled(bool(house) and not busy)
     if not organization_id:
+        from_gis = not organization_reason
         page.workflow.show_step(
             0,
             "Добавьте управляющую организацию",
-            "Работа начинается с УО. Затем загрузите её дома из ГИС или добавьте дом вручную.",
-            "organization",
-            "Добавить УО",
+            "Возьмите реквизиты из открытого кабинета ГИС и проверьте их перед добавлением. "
+            "Затем загрузите дома этой организации. Ручное добавление также доступно ниже."
+            if from_gis else "Работа начинается с УО. Добавьте её реквизиты вручную. " + organization_reason,
+            "organization_load" if from_gis else "organization",
+            "Добавить УО из ГИС" if from_gis else "Добавить УО вручную",
+            reason="Дождитесь завершения операции." if busy else "",
         )
     elif not page.house_list.count():
         searching = bool(page.search_edit.text().strip())

@@ -133,3 +133,80 @@ test("keepalive uses the page's authorized relative echo and harmless activity",
   assert.equal(requests[0].url, "/auth/api/rest/services/auth/echo/");
   assert.equal(result.result.timeoutDialogWasVisible, false);
 });
+
+function organizationPage(http) {
+  const { context } = helper([]);
+  const element = {};
+  context.document = {
+    body: element, documentElement: element, querySelector: () => element
+  };
+  context.window = { angular: { element: () => ({ injector: () => ({
+    get: name => { assert.equal(name, "$http"); return http; }
+  }) }) } };
+  return context;
+}
+
+test("loads the authorized organization with a read-only GET and narrow result", async () => {
+  const requests = [];
+  const context = organizationPage(async config => {
+    requests.push(config);
+    // Anonymized response with the same shape as the organization information
+    // page. In particular the version GUID and root GUID are distinct.
+    return { data: {
+      guid: "organization-version-guid", registryOrganizationRootEntityGuid: "organization-root-guid",
+      fullName: "Общество с ограниченной ответственностью Пример",
+      shortName: "  УК Пример  ", ogrn: "1022600000000", kpp: "260001001",
+      inn: "2600000000", orgEmail: "example@example.invalid", phones: [],
+      chiefFirstName: "Пример", factualAddress: { formattedAddress: "Примерная, 1" }
+    } };
+  });
+  const reply = await vm.runInContext(
+    'runGisCommand({type: "get_current_organization", payload: {}})', context
+  );
+  assert.equal(reply.ok, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "GET");
+  assert.equal(requests[0].url, "/ppa/api/rest/services/ppa/organizations/details");
+  assert.equal(requests[0].headers["State-GUID"], "/organization/information");
+  assert.equal(requests[0].data, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(reply.result)), { organization: {
+    name: "УК Пример", ogrn: "1022600000000", kpp: "260001001",
+    organizationGuid: "organization-version-guid", organizationRootGuid: "organization-root-guid"
+  } });
+});
+
+test("uses full name for an organization without a short name", async () => {
+  const context = organizationPage(async () => ({ data: {
+    guid: "version", registryOrganizationRootEntityGuid: "root",
+    fullName: "Полное наименование", shortName: "", ogrn: "1022600000000", kpp: null
+  } }));
+  const reply = await vm.runInContext(
+    'runGisCommand({type: "get_current_organization", payload: {}})', context
+  );
+  assert.equal(reply.ok, true);
+  assert.equal(reply.result.organization.name, "Полное наименование");
+  assert.equal(reply.result.organization.kpp, null);
+});
+
+for (const status of [401, 403]) {
+  test(`organization load explains an expired/unauthorized session (${status})`, async () => {
+    const context = organizationPage(async () => { throw { status }; });
+    const reply = await vm.runInContext(
+      'runGisCommand({type: "get_current_organization", payload: {}})', context
+    );
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /Войдите в личный кабинет/);
+  });
+}
+
+for (const data of ["<html>Sign in</html>", {}, { shortName: "Пример", ogrn: "bad" }]) {
+  test(`rejects an organization reply without a valid authorized identity: ${JSON.stringify(data)}`, async () => {
+    const context = organizationPage(async () => ({ data }));
+    const reply = await vm.runInContext(
+      'runGisCommand({type: "get_current_organization", payload: {}})', context
+    );
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /Информация об организации/);
+    assert.equal(reply.result, undefined);
+  });
+}

@@ -68,7 +68,8 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {
 }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: @accent; }
 QComboBox { padding-right: 26px; }
-QComboBox::drop-down { width: 24px; border: none; border-left: 1px solid @border; }
+QComboBox::drop-down { width: 24px; border: none; }
+QComboBox::down-arrow { image: none; width: 0; height: 0; }
 QComboBox QAbstractItemView { background: @surface; color: @text; selection-background-color: @selection; selection-color: @selection_text; }
 QSpinBox { min-height: 25px; }
 QToolButton#SpinPlusButton, QToolButton#SpinMinusButton {
@@ -115,15 +116,22 @@ QMenu::item:disabled { color: @muted_text; }
 QMenu::separator { height: 1px; background: @border; margin: 5px; }
 QToolTip { background: @surface; color: @text; border: 1px solid @border; padding: 6px; }
 QRadioButton, QCheckBox { spacing: 8px; background: transparent; }
+QRadioButton::indicator { width: 14px; height: 14px; border: 2px solid @muted_text; border-radius: 9px; background: @surface; }
+QRadioButton::indicator:checked { border-color: @accent; background: @accent; }
 """
 
 
-def stylesheet(theme: str = "light") -> str:
+def stylesheet(theme: str = "light", scale: float = 1.0) -> str:
     palette = tokens(theme)
-    return re.sub(r"@([a-z_]+)", lambda match: palette[match[1]], _SHEET)
+    sheet = re.sub(r"@([a-z_]+)", lambda match: palette[match[1]], _SHEET)
+    return re.sub(
+        r"(\d+(?:\.\d+)?)(pt|px)",
+        lambda match: (f"{round(float(match[1]) * scale)}px" if match[2] == "px"
+                       else f"{float(match[1]) * scale:g}pt"), sheet,
+    )
 
 
-def apply_theme(app, theme: str) -> None:
+def apply_theme(app, theme: str, scale: float = 1.0) -> None:
     global _theme
     _theme = theme if theme in THEMES else "light"
     values = tokens()
@@ -141,7 +149,12 @@ def apply_theme(app, theme: str) -> None:
     for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
         palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(values["muted_text"]))
     app.setPalette(palette)
-    app.setStyleSheet(stylesheet(_theme))
+    app.setProperty("uiScale", scale)
+    app.setStyleSheet(stylesheet(_theme, scale))
+    from .icons import refresh_button_icons
+    refresh_button_icons(app)
+    from .widgets import refresh_combo_chevrons
+    refresh_combo_chevrons(app)
 
 
 APP_STYLESHEET = stylesheet("light")

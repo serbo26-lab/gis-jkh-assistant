@@ -1,7 +1,9 @@
 """Theme-aware SVG icons adapted from the supplied GIS JKH icon concept."""
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
+
+from .styles import color as theme_color
 
 _PATHS = {
     "houses": '<path d="M3 10 12 3l9 7v10H3Z"/><path d="M9 20v-8h6v8"/>',
@@ -20,10 +22,16 @@ _PATHS = {
     "files": '<path d="M3 6h7l2 3h9v12H3Z"/>',
     "organization": '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h2m4 0h2M8 11h2m4 0h2M10 21v-6h4v6"/>',
     "more": '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+    "actions": '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    "chevron_down": '<path d="m6 9 6 6 6-6"/>',
+    "chevron_up": '<path d="m6 15 6-6 6 6"/>',
+    "check": '<path d="m5 12 4 4L19 6"/>',
+    "edit": '<path d="m15 4 5 5-11 11-6 1 1-6ZM13 6l5 5"/>',
 }
 
 
-def icon(name: str, color: str = "#54708e", size: int = 20) -> QIcon:
+def icon(name: str, color: str | None = None, size: int = 20) -> QIcon:
+    color = color or theme_color("muted_text")
     body = _PATHS.get(name, _PATHS["more"])
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
            f'fill="none" stroke="{color}" stroke-width="1.7" '
@@ -35,3 +43,24 @@ def icon(name: str, color: str = "#54708e", size: int = 20) -> QIcon:
     painter.end()
     pixmap.setDevicePixelRatio(2)
     return QIcon(pixmap)
+
+
+def set_button_icon(button, name: str, semantic: str = "muted_text", size: int = 20) -> None:
+    """Remember SVG intent so changing the theme or text scale redraws it."""
+    from PySide6.QtWidgets import QApplication
+    button.setProperty("iconName", name)
+    button.setProperty("iconSemantic", semantic)
+    button.setProperty("iconBaseSize", size)
+    app = QApplication.instance()
+    scale = float(app.property("uiScale") or 1.0) if app else 1.0
+    pixels = round(size * scale)
+    button.setIcon(icon(name, theme_color(semantic), pixels))
+    button.setIconSize(QSize(pixels, pixels))
+
+
+def refresh_button_icons(app) -> None:
+    for widget in app.allWidgets():
+        name = widget.property("iconName")
+        if name:
+            set_button_icon(widget, name, widget.property("iconSemantic") or "muted_text",
+                            int(widget.property("iconBaseSize") or 20))

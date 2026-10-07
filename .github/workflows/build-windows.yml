@@ -43,6 +43,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
+          "BUILD_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           New-Item -ItemType Directory -Path dist/package -Force | Out-Null
           Copy-Item "dist/GIS JKH Assistant.exe" "dist/package/GIS JKH Assistant.exe" -Force
           Copy-Item browser-extension dist/package/browser-extension -Recurse -Force
@@ -52,7 +53,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GIS JKH Assistant 0.1.0.dev55 windows
+          name: GIS JKH Assistant ${{ env.BUILD_VERSION }} windows
           path: "dist/GIS JKH Assistant-windows.zip"
 
       - name: Publish rolling GitHub prerelease

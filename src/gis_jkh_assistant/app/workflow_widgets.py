@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEvent, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
+    QApplication, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
     QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from .icons import icon
+from .icons import icon, set_button_icon
+from .action_layout import ActionFlowLayout
+from .styles import color
 from .widgets import StatusStrip
 
 
@@ -83,7 +85,8 @@ class ContextBar(QFrame):
             self.grid.setColumnStretch(column, weight if column < self._columns else 0)
 
     def resizeEvent(self, event):  # noqa: N802
-        width = event.size().width()
+        scale = float(QApplication.instance().property("uiScale") or 1.0)
+        width = event.size().width() / scale
         columns = 4 if len(self.fields) == 4 and width >= 960 else 1 if width < 620 else 2
         if columns != self._columns:
             self._columns = columns
@@ -98,21 +101,22 @@ class SectionCard(QFrame):
         self.body = QVBoxLayout(self)
         self.body.setContentsMargins(12, 10, 12, 12)
         self.body.setSpacing(8)
-        self.actions = QHBoxLayout()
+        self.actions = ActionFlowLayout()
         self.actions.setSpacing(6)
         if title:
             label = QLabel(title)
             label.setObjectName("SectionTitle")
-            self.actions.addWidget(label)
-        self.actions.addStretch(1)
+            label.setWordWrap(True)
+            self.body.addWidget(label)
         self.body.addLayout(self.actions)
 
 
 class ActionMenuButton(QPushButton):
     """Menu entries observe existing commands, keeping one execution path."""
-    def __init__(self, text: str, name: str = "more", parent=None):
+    def __init__(self, text: str, name: str = "actions", parent=None):
         super().__init__(text, parent)
-        self.setIcon(icon(name))
+        set_button_icon(self, name)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.menu_model = QMenu(self)
         self.setMenu(self.menu_model)
         self.entries: list[tuple[object, QPushButton, Callable[[], bool] | None]] = []
@@ -154,17 +158,28 @@ class WorkflowPanel(QFrame):
         self.body.setContentsMargins(12, 10, 12, 10)
         self.body.setSpacing(8)
         self.steps: list[QLabel] = []
+        self.step_icons: list[QLabel] = []
         step_row = QHBoxLayout()
         step_row.setSpacing(6)
         for index, title in enumerate(steps):
-            label = QLabel(f"{index + 1}  {title}")
+            step = QWidget()
+            step_layout = QHBoxLayout(step)
+            step_layout.setContentsMargins(0, 0, 0, 0)
+            step_layout.setSpacing(2)
+            status_icon = QLabel()
+            status_icon.hide()
+            step_layout.addWidget(status_icon)
+            label = QLabel(f"{index + 1}. {title}")
             label.setObjectName("WorkflowStep")
             label.setProperty("stepTitle", title)
             label.setWordWrap(True)
-            step_row.addWidget(label, 1)
+            step_layout.addWidget(label, 1)
+            step_row.addWidget(step, 1)
             self.steps.append(label)
+            self.step_icons.append(status_icon)
         self.body.addLayout(step_row)
         row = QHBoxLayout()
+        self.action_row = row
         row.setSpacing(12)
         text = QVBoxLayout()
         text.setSpacing(4)
@@ -180,7 +195,7 @@ class WorkflowPanel(QFrame):
         self.primary = QPushButton()
         self.primary.setObjectName("PrimaryButton")
         self.primary.setMinimumWidth(160)
-        self.primary.setMaximumWidth(290)
+        self.primary.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.primary.clicked.connect(self._execute)
         row.addWidget(self.primary)
         self.body.addLayout(row)
@@ -200,8 +215,11 @@ class WorkflowPanel(QFrame):
             is_done = (index < active if done is None else index in done) or completed
             state = "done" if is_done else "current" if index == active else "next"
             label.setProperty("stage", state)
-            prefix = "✓" if state == "done" else str(index + 1)
-            label.setText(f"{prefix}  {label.property('stepTitle')}")
+            prefix = "" if state == "done" else f"{index + 1}. "
+            label.setText(f"{prefix}{label.property('stepTitle')}")
+            status_icon = self.step_icons[index]
+            status_icon.setPixmap(icon("check", color("success"), 16).pixmap(16, 16))
+            status_icon.setVisible(state == "done")
             repolish(label)
         self.title.setText(title)
         self.detail.setText(detail)
@@ -214,10 +232,23 @@ class WorkflowPanel(QFrame):
                  "review_acts": "act", "resume": "sync", "sync": "sync", "new": "add",
                  "create": "add", "organization": "organization", "add": "add",
                  "context": "lists", "fixation": "fixation", "missing": "next", "plan": "planning"}.get(key, "upload")
-        self.primary.setIcon(icon("next" if key and key.startswith("next") else glyph, "#ffffff"))
+        set_button_icon(self.primary, "next" if key and key.startswith("next") else glyph, "on_accent")
         self.primary.setAccessibleName(text)
         self.reason.setText(reason)
         self.reason.setVisible(bool(reason))
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        scale = float(QApplication.instance().property("uiScale") or 1.0)
+        direction = (QBoxLayout.Direction.TopToBottom if event.size().width() < 760 * scale
+                     else QBoxLayout.Direction.LeftToRight)
+        if self.action_row.direction() != direction:
+            self.action_row.setDirection(direction)
+        super().resizeEvent(event)
+
+    def changeEvent(self, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.FontChange and hasattr(self, "primary"):
+            self.primary.setMinimumWidth(max(160, self.primary.sizeHint().width()))
+        super().changeEvent(event)
 
     def _execute(self) -> None:
         command = self.commands.get(self._key)

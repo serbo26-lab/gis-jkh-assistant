@@ -6,7 +6,7 @@ const GIS_MATCH = [
 ];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.28";
+const HELPER_CODE_VERSION = "0.1.29";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -324,6 +324,49 @@ async function runGisCommand(command) {
       }
       const response = await $http(config);
       return response.data;
+    }
+
+    async function getCurrentOrganization() {
+      // Read the current authorized cabinet, not a locally selected house. The
+      // information page uses this same GET without an organization parameter.
+      let details;
+      try {
+        details = await request(
+          "GET",
+          "/ppa/api/rest/services/ppa/organizations/details",
+          undefined,
+          "/organization/information"
+        );
+      } catch (error) {
+        if (error?.status === 401 || error?.status === 403) {
+          throw new Error(
+            "Войдите в личный кабинет ГИС ЖКХ и выберите управляющую организацию. Затем повторите загрузку."
+          );
+        }
+        throw error;
+      }
+      const text = (value) => typeof value === "string" ? value.trim() : "";
+      const name = text(details?.shortName) || text(details?.fullName);
+      const ogrn = text(details?.ogrn);
+      const organizationGuid = text(details?.guid);
+      const organizationRootGuid = text(details?.registryOrganizationRootEntityGuid);
+      if (!name || !/^\d{13}(\d{2})?$/.test(ogrn) ||
+          !organizationGuid || !organizationRootGuid) {
+        throw new Error(
+          "ГИС ЖКХ не вернул сведения об организации. Откройте «Информация об организации» в личном кабинете, проверьте авторизацию и повторите загрузку."
+        );
+      }
+      // Return only fields supported by the local organization model. Contacts,
+      // personal names and all session information stay inside the browser.
+      return {
+        organization: {
+          name,
+          ogrn,
+          kpp: text(details?.kpp) || null,
+          organizationGuid,
+          organizationRootGuid
+        }
+      };
     }
 
     function arrayBufferToBase64(buffer) {
@@ -2209,6 +2252,10 @@ async function runGisCommand(command) {
           pageTitle: document.title
         }
       };
+    }
+
+    if (command.type === "get_current_organization") {
+      return { ok: true, result: await getCurrentOrganization() };
     }
 
     if (command.type === "get_house_management_info") {
