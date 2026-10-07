@@ -77,7 +77,7 @@ def test_apply_remote_work_plan(tmp_path) -> None:
     plan = repository.get_work_plan_for_list_year(work_list.id, 2026)
     assert plan is not None
     assert plan.gis_work_plan_guid == "plan-guid"
-    assert applied == {"items": 1, "months": 1}
+    assert applied == {"items": 1, "months": 1, "historical": 0}
     months = repository.list_work_plan_months(plan.id)
     assert len(months) == 1
     assert months[0].month == 1
@@ -200,4 +200,125 @@ def test_apply_remote_quality_assessment_with_act_metadata(tmp_path) -> None:
     assert acts[0].remote_act_guid == "act-guid"
     assert acts[0].remote_content_guid == "content-guid"
     assert applied == {"items": 1, "acts": 1}
+    repository.close()
+
+
+def test_historical_plan_and_fixation_rows_can_be_imported(tmp_path) -> None:
+    repository, work_list = _setup(tmp_path)
+
+    applied_plan = apply_remote_work_plan(
+        repository,
+        work_list_id=work_list.id,
+        year=2026,
+        remote={
+            "found": True,
+            "workPlanGuid": "plan-guid",
+            "items": [
+                {
+                    "sortIndex": 1,
+                    "workGuid": "work-guid",
+                    "workCode": "12",
+                    "workName": "Работа",
+                    "monthlyWorks": [{"month": 1, "count": 1, "dates": []}],
+                },
+                {
+                    "sortIndex": 2,
+                    "workGuid": "historical-guid",
+                    "workCode": "7.2",
+                    "workName": "Историческая работа",
+                    "monthlyWorks": [{"month": 1, "count": 1, "dates": []}],
+                },
+            ],
+        },
+    )
+
+    assert applied_plan["historical"] == 1
+    plan = repository.get_work_plan_for_list_year(work_list.id, 2026)
+    assert plan is not None
+    plan_rows = repository.list_work_plan_items(plan.id)
+    historical = [row for row in plan_rows if row.work_guid == "historical-guid"]
+    assert len(historical) == 1
+    assert historical[0].work_list_item_id is None
+
+    applied_fixation = apply_remote_work_fixation(
+        repository,
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+        remote={
+            "found": True,
+            "reportingPeriodGuid": "period-guid",
+            "plannedItems": [
+                {
+                    "position": 1,
+                    "workGuid": "work-guid",
+                    "workCode": "12",
+                    "workName": "Работа",
+                    "guid": "fixed-1",
+                    "factCount": 1,
+                },
+                {
+                    "position": 2,
+                    "workGuid": "historical-guid",
+                    "workCode": "7.2",
+                    "workName": "Историческая работа",
+                    "guid": "fixed-2",
+                    "factCount": 1,
+                },
+            ],
+            "unplannedItems": [],
+        },
+    )
+
+    assert applied_fixation["planned"] == 2
+    period = repository.get_work_fixation_period_for_month(
+        work_list.id, year=2026, month=1
+    )
+    assert period is not None
+    fixation_rows = repository.list_work_fixation_items(period.id)
+    imported = [row for row in fixation_rows if row.work_guid == "historical-guid"]
+    assert len(imported) == 1
+    assert imported[0].fact_count == 1
+    repository.close()
+
+
+def test_historical_quality_row_can_be_imported(tmp_path) -> None:
+    repository, work_list = _setup(tmp_path)
+    store = QualityAssessmentStore(repository)
+
+    applied = apply_remote_quality_assessment(
+        store,
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+        remote={
+            "found": True,
+            "reportingPeriodGuid": "period-guid",
+            "estimationGuid": "estimation-guid",
+            "gisStatus": "APPROVED",
+            "items": [
+                {
+                    "position": 2,
+                    "workGuid": "historical-guid",
+                    "workCode": "7.2",
+                    "workName": "Историческая работа",
+                    "guid": "quality-guid",
+                    "cost": "10",
+                    "daysCount": 0,
+                    "daysPerMonth": 31,
+                    "costReduction": "0",
+                    "acts": [],
+                }
+            ],
+        },
+    )
+
+    assert applied["items"] == 1
+    period = store.get_period_for_month(work_list.id, year=2026, month=1)
+    assert period is not None
+    rows = store.list_items(period.id)
+    historical = [row for row in rows if row.work_guid == "historical-guid"]
+    assert len(historical) == 1
+    assert historical[0].work_list_item_id is None
+    assert historical[0].gis_estimation_item_guid == "quality-guid"
     repository.close()

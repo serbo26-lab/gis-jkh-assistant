@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.24";
+const HELPER_CODE_VERSION = "0.1.25";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -1198,6 +1198,13 @@ async function runGisCommand(command) {
             sortIndex: item?.sortIndex ?? index + 1,
             workGuid: item?.work?.guid || null,
             workCode: item?.work?.code || null,
+            workName:
+              item?.work?.workName ||
+              item?.workName ||
+              item?.work?.name ||
+              "",
+            listQuantity: (Array.isArray(item?.monthlyWorks) ? item.monthlyWorks : [])
+              .reduce((total, month) => total + Number(month?.count || 0), 0),
             monthlyWorks: (
               Array.isArray(item?.monthlyWorks) ? item.monthlyWorks : []
             ).map((month) => ({

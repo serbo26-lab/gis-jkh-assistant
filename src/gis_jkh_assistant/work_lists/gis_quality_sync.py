@@ -10,7 +10,7 @@ from gis_jkh_assistant.database.quality_assessment_store import (
     QualityAssessmentStore,
 )
 
-from .gis_match import match_remote_rows
+from .gis_match import match_remote_rows_allow_missing
 
 
 def _now() -> str:
@@ -44,10 +44,11 @@ def apply_remote_quality_assessment(
     remote_items = [
         row for row in list(remote.get("items") or []) if isinstance(row, dict)
     ]
-    matched = match_remote_rows(local_items, remote_items)
+    pairs = match_remote_rows_allow_missing(local_items, remote_items)
 
     timestamp = _now()
     connection = store.connection
+    applied_rows: list[tuple[str, dict[str, Any]]] = []
     with connection:
         connection.execute(
             """
@@ -75,37 +76,45 @@ def apply_remote_quality_assessment(
             (period.id,),
         )
 
-        local_by_id = {item.id: item for item in local_items}
-        for local_id, row in matched.items():
-            local = local_by_id[local_id]
+        for index, (local, row) in enumerate(pairs, start=1):
             days_per_month = int(
-                row.get("daysPerMonth") or local.days_per_month or 0
+                row.get("daysPerMonth")
+                or (local.days_per_month if local is not None else 0)
+                or 0
             )
-            connection.execute(
-                """
-                UPDATE quality_assessment_items
-                SET included = 1,
-                    cost = ?,
-                    days_count = ?,
-                    days_per_month = ?,
-                    cost_reduction = ?,
-                    gis_estimation_item_guid = ?
-                WHERE id = ?
-                """,
-                (
-                    _clean(row.get("cost")),
-                    int(row["daysCount"])
-                    if row.get("daysCount") is not None
-                    else None,
-                    days_per_month,
-                    _clean(row.get("costReduction")),
-                    _clean(row.get("guid")),
-                    local_id,
-                ),
-            )
-
+            if local is None:
+                local_id = str(uuid.uuid4())
+                connection.execute(
+                    "INSERT INTO quality_assessment_items ("
+                    "id, quality_period_id, work_list_item_id, position, work_code, "
+                    "work_name, work_guid, included, cost, days_count, days_per_month, "
+                    "cost_reduction, gis_estimation_item_guid) "
+                    "VALUES (?, ?, NULL, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+                    (
+                        local_id, period.id, int(row.get("position") or index),
+                        _clean(row.get("workCode")),
+                        str(row.get("workName") or row.get("workCode") or "Работа из ГИС ЖКХ"),
+                        _clean(row.get("workGuid")), _clean(row.get("cost")),
+                        int(row["daysCount"]) if row.get("daysCount") is not None else None,
+                        days_per_month, _clean(row.get("costReduction")), _clean(row.get("guid")),
+                    ),
+                )
+            else:
+                local_id = str(local.id)
+                connection.execute(
+                    "UPDATE quality_assessment_items SET included = 1, cost = ?, "
+                    "days_count = ?, days_per_month = ?, cost_reduction = ?, "
+                    "gis_estimation_item_guid = ? WHERE id = ?",
+                    (
+                        _clean(row.get("cost")),
+                        int(row["daysCount"]) if row.get("daysCount") is not None else None,
+                        days_per_month, _clean(row.get("costReduction")),
+                        _clean(row.get("guid")), local_id,
+                    ),
+                )
+            applied_rows.append((local_id, row))
         acts: dict[str, dict[str, Any]] = {}
-        for local_id, row in matched.items():
+        for local_id, row in applied_rows:
             for act in row.get("acts") or []:
                 if not isinstance(act, dict):
                     continue

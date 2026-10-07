@@ -414,8 +414,16 @@ class MainWindow(QMainWindow):
 
     def _navigation_changed(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
-        if 0 <= index <= 4:
+        context_name = {
+            0: "houses",
+            1: "work_lists",
+            2: "planning",
+            3: "fixation",
+            4: "quality",
+        }.get(index)
+        if context_name is not None:
             self._last_context_page_index = index
+
         if index == 1:
             self.work_lists_page.refresh_organizations()
         elif index == 2:
@@ -424,6 +432,17 @@ class MainWindow(QMainWindow):
             self.fixation_page.refresh_organizations()
         elif index == 4:
             self.quality_page.refresh_organizations()
+
+        if (
+            context_name is not None
+            and self.settings_page.shared_context_enabled()
+            and not self._applying_shared_context
+        ):
+            self._applying_shared_context = True
+            try:
+                self._apply_shared_context_to_page(context_name)
+            finally:
+                self._applying_shared_context = False
 
     def resizeEvent(self, event) -> None:
         width = event.size().width()
