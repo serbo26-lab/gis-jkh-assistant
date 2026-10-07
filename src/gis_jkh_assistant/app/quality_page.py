@@ -1438,9 +1438,9 @@ class QualityAssessmentPage(QWidget):
             )
         )
         self.publish_button.setText(
-            "Разместить изменения"
+            "Разместить изменения месяца"
             if has_remote and gis_status == "MODIFIED"
-            else "Разместить информацию"
+            else "Разместить месяц"
         )
         self.cancel_button.setEnabled(
             bool(period)
@@ -1448,12 +1448,23 @@ class QualityAssessmentPage(QWidget):
             and has_remote
             and gis_status in {"DRAFT", "APPROVED", "MODIFIED"}
         )
+        self.save_year_button.setEnabled(
+            bool(self._current_work_list_id) and ready
+        )
+        self.publish_year_button.setEnabled(
+            bool(self._current_work_list_id) and ready
+        )
+        self.continue_queue_button.setEnabled(ready)
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
         self.include_all_button.setEnabled(enabled)
         self.exclude_all_button.setEnabled(enabled)
         self.month_acts_button.setEnabled(enabled)
+        self.form_month_button.setEnabled(enabled)
+        self.form_year_button.setEnabled(bool(self._current_work_list_id))
+        self.auto_act_month_button.setEnabled(enabled)
+        self.auto_act_year_button.setEnabled(bool(self._current_work_list_id))
         self._refresh_gis_buttons()
 
     def _relayout_month_buttons(self, columns: int | None = None) -> None:
