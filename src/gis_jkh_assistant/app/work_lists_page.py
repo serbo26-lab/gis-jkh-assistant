@@ -228,6 +228,16 @@ class WorkListsPage(QWidget):
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
         self.upload_to_gis_button = QPushButton("Загрузить в ГИС ЖКХ")
         self.sync_gis_button = QPushButton("Проверить статус в ГИС")
+        self.cancel_gis_button = QPushButton("Отменить перечень в ГИС ЖКХ")
+        self.cancel_gis_button.setObjectName("DangerButton")
+        self.cancel_gis_button.setToolTip(
+            "Отменить размещенный перечень. ГИС ЖКХ удалит связанные планирование, "
+            "фиксацию и оценку качества; после этого состав перечня можно изменить."
+        )
+        self.save_editable_gis_button = QPushButton("Сохранить изменения в ГИС ЖКХ")
+        self.save_editable_gis_button.setToolTip(
+            "Сохранить новый состав отмененного перечня или проекта напрямую в ГИС ЖКХ."
+        )
         self.approve_gis_button = QPushButton("Разместить информацию")
         self.approve_gis_button.setObjectName("PrimaryButton")
 
@@ -241,6 +251,8 @@ class WorkListsPage(QWidget):
         gis_actions.addWidget(self.export_button, 1, 0)
         gis_actions.addWidget(self.upload_to_gis_button, 1, 1)
         gis_actions.addWidget(self.sync_gis_button, 1, 2)
+        gis_actions.addWidget(self.cancel_gis_button, 2, 0)
+        gis_actions.addWidget(self.save_editable_gis_button, 2, 1)
         gis_actions.addWidget(self.approve_gis_button, 2, 2)
         gis_actions.setColumnStretch(1, 1)
         context_layout.addLayout(gis_actions, 8, 0, 1, 4)
@@ -359,6 +371,15 @@ class WorkListsPage(QWidget):
         self.remove_works_button.setToolTip(
             "Удалить выбранные строки из локального перечня."
         )
+        self.clear_works_button = QPushButton("Очистить состав")
+        self.clear_works_button.setToolTip(
+            "Удалить все работы и услуги из локального состава перечня."
+        )
+        self.replace_from_template_button = QPushButton("Заменить по шаблону")
+        self.replace_from_template_button.setToolTip(
+            "Полностью заменить состав перечня работами выбранного сверху шаблона, "
+            "сопоставленными с актуальным справочником ГИС ЖКХ."
+        )
         self.save_as_template_button = QPushButton("В шаблон…")
         self.save_as_template_button.setToolTip(
             "Сохранить текущий состав перечня как пользовательский шаблон."
@@ -412,12 +433,20 @@ class WorkListsPage(QWidget):
         self.export_button.clicked.connect(self._export_current_work_list)
         self.upload_to_gis_button.clicked.connect(self._upload_current_work_list_to_gis)
         self.sync_gis_button.clicked.connect(self._sync_current_work_list_from_gis)
+        self.cancel_gis_button.clicked.connect(self._cancel_current_work_list_in_gis)
+        self.save_editable_gis_button.clicked.connect(
+            self._save_editable_work_list_to_gis
+        )
         self.approve_gis_button.clicked.connect(self._approve_current_work_list_in_gis)
         self.create_button.clicked.connect(self._create_work_list)
         self.create_from_current_button.clicked.connect(self._clone_current_work_list)
         self.delete_button.clicked.connect(self._delete_work_list)
         self.add_works_button.clicked.connect(self._add_works_from_directory)
         self.remove_works_button.clicked.connect(self._remove_selected_works)
+        self.clear_works_button.clicked.connect(self._clear_all_works)
+        self.replace_from_template_button.clicked.connect(
+            self._replace_current_from_template
+        )
         self.save_as_template_button.clicked.connect(self._save_current_as_template)
         self.lazy_fill_button.clicked.connect(self._open_lazy_distribution)
         self.work_lists.currentItemChanged.connect(self._work_list_changed)
