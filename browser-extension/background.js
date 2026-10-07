@@ -2152,6 +2152,85 @@ async function runGisCommand(command) {
       return Array.isArray(data?.actList) ? data.actList : [];
     }
 
+    function qualityDateForImport(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const match = /^(\d{2}\.\d{2}\.\d{4})/.exec(text);
+      return match ? match[1] : text;
+    }
+
+    function normalizeQualityActForImport(act) {
+      const attachment = act?.attachment || {};
+      return {
+        guid: act?.guid || null,
+        actType: act?.actType || "ACCEPTANCE_ACT",
+        number: String(act?.number || ""),
+        regDate: qualityDateForImport(act?.regDate),
+        periodFrom: qualityDateForImport(act?.period?.from),
+        periodTo: qualityDateForImport(act?.period?.to),
+        contentGuid: attachment?.contentGuid || null,
+        fileName: attachment?.fileName || "Файл акта из ГИС ЖКХ",
+        description: attachment?.description || null,
+        contentType: attachment?.contentType || "application/octet-stream",
+        fileSize: Number(attachment?.fileSize || 0)
+      };
+    }
+
+    async function loadQualityAssessment(payload) {
+      let reportingPeriod = null;
+      try {
+        reportingPeriod = await findReportingPeriod(payload);
+      } catch (_) {
+        return { found: false };
+      }
+
+      const remote = await searchQualityAssessment(reportingPeriod.guid, false);
+      const estimation = remote?.estimation || null;
+      if (!estimation?.guid) {
+        return {
+          found: false,
+          reportingPeriodGuid: reportingPeriod.guid
+        };
+      }
+
+      const rows = Array.isArray(remote?.estimationList)
+        ? remote.estimationList
+        : [];
+      const items = [];
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        let acts = [];
+        if (row?.guid && row?.hasQualityActs) {
+          acts = (await searchQualityActs(row.guid)).map(
+            normalizeQualityActForImport
+          );
+        }
+        items.push({
+          guid: row?.guid || null,
+          position: index + 1,
+          workGuid: row?.work?.guid || row?.workGuid || null,
+          workCode: row?.work?.code || null,
+          workName: row?.workName || row?.work?.workName || "",
+          cost: row?.cost ?? null,
+          daysCount:
+            row?.daysCount === null || row?.daysCount === undefined
+              ? null
+              : Number(row.daysCount),
+          daysPerMonth: Number(row?.daysPerMonth || 0),
+          costReduction: row?.costReduction ?? null,
+          acts
+        });
+      }
+
+      return {
+        found: true,
+        reportingPeriodGuid: reportingPeriod.guid,
+        estimationGuid: estimation.guid,
+        gisStatus: estimation.status || estimation.dbStatus || "DRAFT",
+        items
+      };
+    }
+
     async function getQualityActByGuid(
       actGuid,
       orgRootGuid,
