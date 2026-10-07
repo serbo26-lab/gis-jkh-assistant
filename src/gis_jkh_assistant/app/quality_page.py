@@ -798,43 +798,48 @@ class QualityAssessmentPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
-    def _validate_local(self) -> bool:
-        if not self._current_period_id:
-            return False
-        selected = [item for item in self.store.list_items(self._current_period_id) if item.included]
+    def _validation_error(self, period_id: str) -> str | None:
+        selected = [
+            item for item in self.store.list_items(period_id) if item.included
+        ]
         if not selected:
-            QMessageBox.warning(
-                self,
-                "Нет работ в оценке",
-                "Включите в оценку качества хотя бы одну работу или услугу.",
-            )
-            return False
+            return "Нет работ, включённых в оценку качества."
         for item in selected:
             acts = self.store.list_acts(item.id)
             if not acts:
-                QMessageBox.warning(
-                    self,
-                    "Не добавлен акт",
-                    f"Для работы «{item.work_name}» нужно добавить хотя бы один акт.",
+                return (
+                    f"Для работы «{item.work_name}» нужно добавить "
+                    "хотя бы один акт."
                 )
-                return False
             if any(act.act_type == "QUALITY_VIOLATION_ACT" for act in acts):
                 if item.days_count is None:
-                    QMessageBox.warning(
-                        self,
-                        "Укажите дни ненадлежащего качества",
-                        f"Для работы «{item.work_name}» добавлен акт нарушения качества. "
-                        "Укажите количество дней ненадлежащего качества.",
+                    return (
+                        f"Для работы «{item.work_name}» добавлен акт нарушения "
+                        "качества, но не указано количество дней "
+                        "ненадлежащего качества."
                     )
-                    return False
+        return None
+
+    def _validate_local(self) -> bool:
+        if not self._current_period_id:
+            return False
+        error = self._validation_error(self._current_period_id)
+        if error:
+            QMessageBox.warning(self, "Оценка не готова", error)
+            return False
         return True
 
-    def _payload(self) -> dict | None:
-        if not self._current_period_id or not self._current_work_list_id:
+    def _payload_for_period(
+        self,
+        period_id: str,
+        *,
+        show_error: bool = True,
+    ) -> dict | None:
+        period = self.store.get_period(period_id)
+        if period is None:
             return None
-        period = self.store.get_period(self._current_period_id)
-        work_list = self.repository.get_work_list(self._current_work_list_id)
-        if period is None or work_list is None:
+        work_list = self.repository.get_work_list(period.work_list_id)
+        if work_list is None:
             return None
         house = self.repository.get_house(work_list.house_id)
         if (
@@ -843,13 +848,15 @@ class QualityAssessmentPage(QWidget):
             or not house.house_object_guid
             or not work_list.gis_work_list_guid
         ):
-            QMessageBox.warning(
-                self,
-                "Не хватает идентификаторов",
-                "Для обмена с ГИС ЖКХ нужны ФИАС GUID дома, GUID объекта "
-                "жилищного фонда и GUID размещённого перечня.",
-            )
+            if show_error:
+                QMessageBox.warning(
+                    self,
+                    "Не хватает идентификаторов",
+                    "Для обмена с ГИС ЖКХ нужны ФИАС GUID дома, GUID объекта "
+                    "жилищного фонда и GUID размещённого перечня.",
+                )
             return None
+
         items = self.store.list_items(period.id)
         acts = {
             item.id: self.store.list_acts(item.id, include_deleted=True)
@@ -867,6 +874,38 @@ class QualityAssessmentPage(QWidget):
         payload["knownEstimationGuid"] = period.estimation_guid
         payload["knownGisStatus"] = period.gis_status
         return payload
+
+    def _payload(self) -> dict | None:
+        if not self._current_period_id:
+            return None
+        return self._payload_for_period(self._current_period_id)
+
+    def _apply_gis_result(self, period_id: str, result: dict) -> None:
+        if result.get("cancelled"):
+            self.store.mark_cancelled(period_id)
+            return
+
+        item_guids = {
+            str(row.get("localItemId")): str(row.get("guid"))
+            for row in (result.get("items") or [])
+            if row.get("localItemId") and row.get("guid")
+        }
+        act_guids = {}
+        for row in result.get("acts") or []:
+            local_id = row.get("localActId")
+            if local_id:
+                act_guids[str(local_id)] = (
+                    row.get("contentGuid"),
+                    row.get("guid"),
+                )
+        self.store.set_gis_state(
+            period_id,
+            reporting_period_guid=result.get("reportingPeriodGuid"),
+            estimation_guid=result.get("estimationGuid"),
+            gis_status=result.get("gisStatus"),
+            item_guids=item_guids,
+            act_guids=act_guids,
+        )
 
     def _load_from_gis(self) -> None:
         if not self._current_period_id or not self._current_work_list_id:
