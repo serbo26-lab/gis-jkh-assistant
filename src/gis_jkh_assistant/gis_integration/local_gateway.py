@@ -93,6 +93,7 @@ class LocalIntegrationGateway:
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._error: str | None = None
+        self._execution_lock = threading.Lock()
 
     def start(self) -> None:
         if self._server is not None:
@@ -228,6 +229,27 @@ class LocalIntegrationGateway:
         return self._state.status(self._server is not None, self._error)
 
     def execute(
+        self,
+        command_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout: float = 120.0,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Run one GIS command at a time; later callers wait in a local queue."""
+
+        if self._execution_lock.locked() and progress_callback is not None:
+            progress_callback({"phase": "queued"})
+
+        with self._execution_lock:
+            return self._execute_locked(
+                command_type,
+                payload,
+                timeout=timeout,
+                progress_callback=progress_callback,
+            )
+
+    def _execute_locked(
         self,
         command_type: str,
         payload: dict[str, Any] | None = None,
