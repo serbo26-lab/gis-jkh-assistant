@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -71,6 +72,7 @@ class HousesPage(QWidget):
         self._management_worker: GisIntegrationWorker | None = None
         self._houses_sync_worker: GisIntegrationWorker | None = None
         self._work_lists_sync_worker: GisIntegrationWorker | None = None
+        self._bulk_operation_name: str | None = None
         self._current_house_id: str | None = None
         self._pending_house_id: str | None = None
         self._pending_fields: dict[str, object] = {}
@@ -127,9 +129,6 @@ class HousesPage(QWidget):
         self.sync_houses_button.setToolTip(
             "Получить все дома текущей управляющей организации напрямую из ГИС ЖКХ."
         )
-        self.houses_sync_status = QLabel("")
-        self.houses_sync_status.setObjectName("Muted")
-        self.houses_sync_status.hide()
         self.add_house_button = QPushButton("Добавить дом")
         self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
         self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
@@ -147,12 +146,8 @@ class HousesPage(QWidget):
             "Получить перечни работ и услуг для всех домов выбранной "
             "управляющей организации."
         )
-        self.bulk_work_lists_status = QLabel("")
-        self.bulk_work_lists_status.setObjectName("Muted")
-        self.bulk_work_lists_status.hide()
-        self.bulk_management_status = QLabel("")
-        self.bulk_management_status.setObjectName("Muted")
-        self.bulk_management_status.hide()
+        self.bulk_operation_status = QLabel("Готово к запуску массовой операции.")
+        self.bulk_operation_status.setObjectName("BulkStatusText")
 
         self.add_org_button.clicked.connect(self._add_organization)
         self.edit_org_button.clicked.connect(self._edit_organization)
@@ -185,6 +180,7 @@ class HousesPage(QWidget):
         house_data_row.setSpacing(8)
         house_data_row.addWidget(self.export_house_data_button)
         house_data_row.addWidget(self.import_house_data_button)
+        house_data_row.addWidget(self.import_button)
         house_data_row.addStretch(1)
         toolbar_layout.addLayout(house_data_row)
 
@@ -198,21 +194,27 @@ class HousesPage(QWidget):
         house_data_hint.setObjectName("Muted")
         toolbar_layout.addWidget(house_data_hint)
 
-        gis_houses_title = QLabel("Сведения о МКД")
+        gis_houses_title = QLabel("Сведения о МКД (массовые действия)")
         gis_houses_title.setObjectName("SectionTitle")
         toolbar_layout.addWidget(gis_houses_title)
 
-        gis_houses_row = QHBoxLayout()
-        gis_houses_row.setSpacing(8)
-        gis_houses_row.addWidget(self.sync_houses_button)
-        gis_houses_row.addWidget(self.sync_all_management_button)
-        gis_houses_row.addWidget(self.sync_all_work_lists_button)
-        gis_houses_row.addWidget(self.import_button)
-        gis_houses_row.addWidget(self.houses_sync_status)
-        gis_houses_row.addWidget(self.bulk_management_status)
-        gis_houses_row.addWidget(self.bulk_work_lists_status)
-        gis_houses_row.addStretch(1)
-        toolbar_layout.addLayout(gis_houses_row)
+        bulk_status_frame = QFrame()
+        bulk_status_frame.setObjectName("BulkStatusFrame")
+        bulk_status_layout = QHBoxLayout(bulk_status_frame)
+        bulk_status_layout.setContentsMargins(10, 6, 10, 6)
+        bulk_status_layout.addWidget(self.bulk_operation_status)
+        bulk_status_layout.addStretch(1)
+        toolbar_layout.addWidget(bulk_status_frame)
+
+        gis_houses_grid = QGridLayout()
+        gis_houses_grid.setHorizontalSpacing(8)
+        gis_houses_grid.setVerticalSpacing(6)
+        gis_houses_grid.addWidget(self.sync_houses_button, 0, 0)
+        gis_houses_grid.addWidget(self.sync_all_management_button, 0, 1)
+        gis_houses_grid.addWidget(self.sync_all_work_lists_button, 0, 2)
+        for column in range(3):
+            gis_houses_grid.setColumnStretch(column, 1)
+        toolbar_layout.addLayout(gis_houses_grid)
 
         root.addWidget(toolbar)
 
@@ -799,6 +801,54 @@ class HousesPage(QWidget):
             if remote_ids.intersection(self._house_sync_identity_values(house)):
                 return house
         return None
+
+    def _bulk_worker_running(self) -> bool:
+        workers = (
+            self._houses_sync_worker,
+            self._management_worker,
+            self._work_lists_sync_worker,
+        )
+        return any(worker is not None and worker.isRunning() for worker in workers)
+
+    def _set_bulk_status(self, text: str) -> None:
+        self.bulk_operation_status.setText(text)
+        QCoreApplication.processEvents()
+
+    def _begin_bulk_operation(self, name: str, status_text: str) -> bool:
+        if self._bulk_operation_name is not None or self._bulk_worker_running():
+            QMessageBox.information(
+                self,
+                "Массовая операция уже выполняется",
+                "Дождитесь завершения текущей массовой операции. "
+                "Следующий запрос к ГИС ЖКХ будет выполнен после неё.",
+            )
+            return False
+
+        self._bulk_operation_name = name
+        for button in (
+            self.sync_houses_button,
+            self.sync_all_management_button,
+            self.sync_all_work_lists_button,
+            self.import_button,
+        ):
+            button.setEnabled(False)
+        if self._current_house_id:
+            self.sync_management_button.setEnabled(False)
+        self._set_bulk_status(status_text)
+        return True
+
+    def _finish_bulk_operation(self, status_text: str) -> None:
+        self._bulk_operation_name = None
+        for button in (
+            self.sync_houses_button,
+            self.sync_all_management_button,
+            self.sync_all_work_lists_button,
+            self.import_button,
+        ):
+            button.setEnabled(True)
+        if self._current_house_id:
+            self.sync_management_button.setEnabled(True)
+        self._set_bulk_status(status_text)
 
     @staticmethod
     def _gis_house_changed(house, item: dict) -> bool:
