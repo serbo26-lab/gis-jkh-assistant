@@ -22,6 +22,10 @@ from PySide6.QtWidgets import (
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
 from gis_jkh_assistant.gis_integration import IntegrationError, LocalIntegrationGateway
+from gis_jkh_assistant.work_lists.gis_quality_sync import (
+    apply_remote_quality_assessment,
+    local_quality_has_data,
+)
 from gis_jkh_assistant.quality_assessment import (
     build_quality_command_payload,
     helper_supports_quality_assessment,
@@ -149,9 +153,14 @@ class QualityAssessmentPage(QWidget):
         month_layout.addWidget(self.month_status)
 
         actions = QHBoxLayout()
+        self.load_gis_button = QPushButton("Загрузить оценку качества из ГИС ЖКХ")
+        self.load_gis_button.setToolTip(
+            "Получить существующую оценку качества выбранного месяца из ГИС ЖКХ."
+        )
         self.save_button = QPushButton("Сохранить проект")
         self.publish_button = QPushButton("Разместить информацию")
         self.cancel_button = QPushButton("Аннулировать информацию")
+        actions.addWidget(self.load_gis_button)
         actions.addWidget(self.save_button)
         actions.addWidget(self.publish_button)
         actions.addWidget(self.cancel_button)
@@ -214,6 +223,7 @@ class QualityAssessmentPage(QWidget):
         self.work_list_combo.currentIndexChanged.connect(self._work_list_changed)
         self.year_combo.currentIndexChanged.connect(self._year_changed)
         self.table.itemChanged.connect(self._table_item_changed)
+        self.load_gis_button.clicked.connect(self._load_from_gis)
         self.save_button.clicked.connect(self._save_project)
         self.publish_button.clicked.connect(self._publish)
         self.cancel_button.clicked.connect(self._cancel)
@@ -638,6 +648,139 @@ class QualityAssessmentPage(QWidget):
         payload["knownGisStatus"] = period.gis_status
         return payload
 
+    def _load_from_gis(self) -> None:
+        if not self._current_period_id or not self._current_work_list_id:
+            return
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return
+
+        period = self.store.get_period(self._current_period_id)
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if period is None or work_list is None:
+            return
+        house = self.repository.get_house(work_list.house_id)
+        if house is None:
+            return
+        fias = house.fias_house_guid or house.gis_house_guid
+        if not fias or not work_list.gis_work_list_guid:
+            QMessageBox.warning(
+                self,
+                "Не хватает идентификаторов",
+                "Для загрузки оценки нужны ФИАС GUID дома и GUID размещенного перечня.",
+            )
+            return
+
+        period_id = period.id
+        self._integration_busy = True
+        self._refresh_gis_buttons()
+        self.month_status.setText(
+            f"{_MONTHS[period.month - 1]} {period.year}: загрузка оценки из ГИС ЖКХ…"
+        )
+
+        worker = GisIntegrationWorker(
+            self.integration_gateway,
+            "load_quality_assessment",
+            {
+                "fiasHouseCode": fias,
+                "workListGuid": work_list.gis_work_list_guid,
+                "year": period.year,
+                "month": period.month,
+            },
+            timeout=150.0,
+            parent=self,
+        )
+        self._integration_worker = worker
+
+        def succeeded(result: dict) -> None:
+            if not result.get("found"):
+                QMessageBox.information(
+                    self,
+                    "Оценка качества не найдена",
+                    "Для выбранного перечня и месяца оценка качества "
+                    "в ГИС ЖКХ не найдена.",
+                )
+                return
+
+            items = list(result.get("items") or [])
+            acts_count = sum(
+                len(row.get("acts") or [])
+                for row in items
+                if isinstance(row, dict)
+            )
+            question = (
+                f"В ГИС ЖКХ найдена оценка качества.\n"
+                f"Работ в оценке: {len(items)}.\n"
+                f"Связей с актами: {acts_count}.\n"
+                f"Статус: {result.get('gisStatus') or '—'}.\n\n"
+            )
+            if local_quality_has_data(self.store, period_id):
+                question += (
+                    "Локальная оценка выбранного месяца будет заменена "
+                    "сведениями из ГИС ЖКХ. Продолжить?"
+                )
+            else:
+                question += "Загрузить эти данные в программу?"
+
+            answer = QMessageBox.question(
+                self,
+                "Загрузить оценку качества из ГИС ЖКХ?",
+                question,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                applied = apply_remote_quality_assessment(
+                    self.store,
+                    work_list_id=self._current_work_list_id,
+                    year=period.year,
+                    month=period.month,
+                    remote=result,
+                )
+            except ValueError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Не удалось применить оценку качества",
+                    str(exc),
+                )
+                return
+
+            self._load_table()
+            self._refresh_act_summary()
+            self._refresh_period_status()
+            self._refresh_year_status()
+            QMessageBox.information(
+                self,
+                "Оценка качества загружена",
+                f"Загружено работ: {applied['items']}.\n"
+                f"Загружено актов: {applied['acts']}.",
+            )
+
+        def progressed(progress: dict) -> None:
+            if str(progress.get("phase") or "") == "queued":
+                self.month_status.setText(
+                    "Ожидание предыдущей операции с ГИС ЖКХ…"
+                )
+
+        def failed(message: str) -> None:
+            QMessageBox.critical(
+                self,
+                "Не удалось загрузить оценку качества из ГИС ЖКХ",
+                message,
+            )
+
+        def finished() -> None:
+            self._integration_worker = None
+            self._integration_busy = False
+            self._refresh_period_status()
+            self._refresh_integration_status()
+
+        worker.succeeded.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.progressed.connect(progressed)
+        worker.finished.connect(finished)
+        worker.start()
+
     def _save_project(self) -> None:
         if not self._validate_local():
             return
@@ -839,6 +982,7 @@ class QualityAssessmentPage(QWidget):
         gis_status = str(period.gis_status or "").upper() if period else ""
         has_remote = bool(period and period.estimation_guid)
 
+        self.load_gis_button.setEnabled(bool(period) and ready)
         self.save_button.setEnabled(
             bool(period)
             and ready
