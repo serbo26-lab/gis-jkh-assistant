@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.23";
+const HELPER_CODE_VERSION = "0.1.24";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -987,9 +987,13 @@ async function runGisCommand(command) {
         if (
           item &&
           item.status &&
-          !["NEW", "CREATED", "PROCESSING", "IN_PROCESS"].includes(
-            String(item.status).toUpperCase()
-          ) &&
+          ![
+            "NEW",
+            "CREATED",
+            "PROCESSING",
+            "IN_PROCESS",
+            "NOT_PROCESSED"
+          ].includes(String(item.status).toUpperCase()) &&
           item.status !== "PROCESSED"
         ) {
           throw new Error(
