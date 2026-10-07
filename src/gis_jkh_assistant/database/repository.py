@@ -3115,7 +3115,7 @@ class Repository:
                 (work_list_id,),
             )
             self.connection.execute(
-                "UPDATE work_lists SET updated_at = ? WHERE id = ?",
+                "UPDATE work_lists SET planned_total = NULL, updated_at = ? WHERE id = ?",
                 (_now(), work_list_id),
             )
         return int(cursor.rowcount or 0)
@@ -3214,7 +3214,7 @@ class Repository:
             self.connection.execute(
                 """
                 UPDATE work_lists
-                SET template_id = ?, updated_at = ?
+                SET template_id = ?, planned_total = NULL, updated_at = ?
                 WHERE id = ?
                 """,
                 (
