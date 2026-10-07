@@ -2078,6 +2078,7 @@ class WorkListsPage(QWidget):
 
         def on_success(work_list_id: str, result: dict) -> None:
             self._apply_gis_result(work_list_id, result)
+            self.repository.clear_work_list_downstream_data(work_list_id)
             self.refresh_work_lists(select_id=work_list_id)
             QMessageBox.information(
                 self,
