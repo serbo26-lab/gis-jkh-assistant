@@ -669,9 +669,19 @@ class QualityAssessmentPage(QWidget):
     def _auto_generate_year_acts(self) -> None:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return
+        months = self._active_months()
+        answer = QMessageBox.question(
+            self,
+            "Сформировать акты за доступные месяцы года?",
+            f"Будут обработаны сформированные оценки в доступных месяцах "
+            f"выбранного года ({len(months)} мес. в периоде перечня). "
+            "Пользовательские и импортированные акты не изменяются. "
+            "Ранее сформированные программой акты будут заменены. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self._sync_work_units_for_act()
         year = int(self.year_combo.currentData())
-        months = self._active_months()
         created = linked = protected = missing = 0
         processed = 0
         for month in months:
@@ -1244,11 +1254,13 @@ class QualityAssessmentPage(QWidget):
         payload = self._payload_for_period(period_id, show_error=False)
         period = self.store.get_period(period_id)
         if payload is None or period is None:
+            self._queue_running = False
             self._queue_failed_period_id = period_id
             self.queue_label.setText(
                 "Очередь остановлена: не хватает идентификаторов ГИС ЖКХ."
             )
             self.continue_queue_button.setVisible(True)
+            self._refresh_gis_buttons()
             return
 
         self._integration_busy = True
