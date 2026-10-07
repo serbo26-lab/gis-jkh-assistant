@@ -27,6 +27,9 @@ jobs:
       - name: Check browser helper syntax
         run: node --check browser-extension/background.js
 
+      - name: Test browser helper
+        run: node --test tests/browser_helper.test.cjs
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

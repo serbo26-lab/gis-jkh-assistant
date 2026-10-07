@@ -1,9 +1,12 @@
 const LOCAL_BASE = "http://127.0.0.1:8765/api/integration";
 const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
-const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
+const GIS_MATCH = [
+  "https://my.dom.gosuslugi.ru/*",
+  "https://lk.dom.gosuslugi.ru/*"
+];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.27";
+const HELPER_CODE_VERSION = "0.1.28";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;

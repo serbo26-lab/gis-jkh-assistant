@@ -173,6 +173,46 @@ def _select_page(desktop, index):
     return desktop.window.pages.widget(index)
 
 
+@pytest.mark.parametrize("empty_registry", [True, False])
+def test_houses_actions_follow_helper_reconnection_and_busy_state(desktop, empty_registry):
+    page = _select_page(desktop, 0)
+    if empty_registry:
+        organization = desktop.repository.create_organization(
+            name="Новая УО для проверки подключения", ogrn="1022600000550"
+        )
+        page.refresh_organizations(select_id=organization.id)
+        assert page.workflow._key == "load"
+    selected = page._current_house_id
+    address = page.address_edit.text()
+    desktop.gateway.ready = False
+    desktop.window._refresh_integration_status()
+    assert not page.gis_actions_button.isEnabled()
+    assert not page.sync_houses_button.isEnabled()
+    assert not page.sync_houses_action.isEnabled()
+    if empty_registry:
+        assert not page.workflow.primary.isEnabled()
+        assert page.workflow.reason.text()
+
+    desktop.gateway.ready = True
+    desktop.window._refresh_integration_status()
+    assert page.gis_actions_button.isEnabled()
+    assert page.sync_houses_button.isEnabled()
+    assert page.sync_houses_action.isEnabled()
+    if empty_registry:
+        assert page.workflow.primary.isEnabled()
+        assert not page.workflow.reason.text()
+    assert page._current_house_id == selected
+    assert page.address_edit.text() == address
+
+    page._workflow_busy = True
+    desktop.window._refresh_integration_status()
+    assert not page.gis_actions_button.isEnabled()
+    assert not page.sync_houses_button.isEnabled()
+    page._workflow_busy = False
+    desktop.window._refresh_integration_status()
+    assert page.sync_houses_button.isEnabled()
+
+
 def _include_quality(page, month):
     page._select_month(month)
     item = page.store.list_items(page._current_period_id)[0]
