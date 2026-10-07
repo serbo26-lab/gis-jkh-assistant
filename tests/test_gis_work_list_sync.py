@@ -70,7 +70,7 @@ def test_prepare_point_sync_is_limited_to_selected_house(tmp_path) -> None:
 def test_apply_sync_imports_new_list_and_updates_linked_status(tmp_path) -> None:
     repository = Repository(tmp_path / "app.db")
     org = repository.create_organization(name="УК", ogrn="1022600000701")
-    house = repository.create_house(
+    repository.create_house(
         organization_id=org.id,
         address="Дом",
         house_object_guid="house-1",
