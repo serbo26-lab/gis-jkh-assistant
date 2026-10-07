@@ -1,7 +1,7 @@
 """Shared page composition; execution and persistence stay in page controllers."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel, QPushButton,
     QScrollArea, QTableWidget, QVBoxLayout, QWidget,
@@ -17,6 +17,46 @@ MONTHS = (
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
 )
+
+
+class MonthSelectorCard(SectionCard):
+    """Choose rows from real month-label widths, including larger UI text."""
+
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._fit)
+
+    def _queue_fit(self):
+        if not self._fit_timer.isActive():
+            self._fit_timer.start(0)
+
+    def _fit(self):
+        if not hasattr(self.page, "month_buttons"):
+            return
+        margins = self.body.contentsMargins()
+        available = self.width() - margins.left() - margins.right()
+        minimum = max(button.minimumSizeHint().width() for button in self.page.month_buttons.values())
+        spacing = self.page.month_buttons_layout.spacing()
+        columns = next((count for count in (12, 6, 4, 3, 2, 1)
+                        if count * minimum + (count - 1) * spacing <= available), 1)
+        if columns != self.page._month_button_columns:
+            for column in range(12):
+                self.page.month_buttons_layout.setColumnStretch(column, 0)
+            self.page._relayout_month_buttons(columns)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._queue_fit()
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange, QEvent.Type.LayoutRequest):
+            if hasattr(self, "_fit_timer"):
+                self._queue_fit()
+        return result
 
 
 def page_root(page, title: str, subtitle: str) -> QVBoxLayout:
@@ -125,11 +165,10 @@ def build_planning(page, table_class):
     page.workflow.register("fill", page.distribute_button)
     page.workflow.register("publish", page.publish_button)
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(3))
-    sync = QHBoxLayout()
-    sync.addWidget(page.load_gis_button)
+    sync = SectionCard("Загрузка плана из ГИС ЖКХ")
+    sync.actions.addWidget(page.load_gis_button)
     page.load_gis_button.show()
-    sync.addStretch(1)
-    root.addLayout(sync)
+    root.addWidget(sync)
     page.operation_status = OperationStatus()
     page.plan_status_strip = page.operation_status
     page.plan_status = page.operation_status.label
@@ -166,7 +205,7 @@ def build_monthly(page, kind: str):
                      "Фиксация → оценка → акты → проект → размещение" if quality
                      else "План → фактические показатели → размещение → оценка качества")
     root.addWidget(context_for(page))
-    months = SectionCard()
+    months = MonthSelectorCard(page)
     from PySide6.QtWidgets import QGridLayout
     page.month_buttons_layout = QGridLayout()
     page.month_buttons_layout.setSpacing(4)
@@ -208,21 +247,26 @@ def build_monthly(page, kind: str):
         _quality_commands(page)
     else:
         _fixation_commands(page)
-    network = QHBoxLayout()
+    network = SectionCard("Обмен с ГИС ЖКХ — для выбранного месяца или периода")
     load = page.load_gis_button if quality else page.load_month_button
     load.setText("Загрузить из ГИС")
     load.show()
-    network.addWidget(load)
-    page.network_menu = ActionMenuButton("Другие действия")
+    network.actions.addWidget(load)
+    page.network_menu = ActionMenuButton("Проект и размещение в ГИС" if quality else "Размещение в ГИС", "upload")
     for name in (("save_button", "publish_button") if quality else ("publish_month_button",)):
         page.network_menu.add_command(getattr(page, name))
-    network.addWidget(page.network_menu)
-    network.addStretch(1)
+    if quality:
+        network.actions.addWidget(page.network_menu)
+    else:
+        # Fixation has no separate GIS project; show its only sending command.
+        page.network_menu.hide()
+        page.publish_month_button.show()
+        network.actions.addWidget(page.publish_month_button)
     if quality:
         page.remote_danger = DangerZone()
         page.remote_danger.add_command(page.cancel_button, when=lambda: page.cancel_button.isEnabled())
-        network.addWidget(page.remote_danger)
-    root.addLayout(network)
+        network.actions.addWidget(page.remote_danger)
+    root.addWidget(network)
     root.addWidget(page.operation_status)
     root.addWidget(page.month_status)
     page.empty_hint = QLabel("Выберите размещённый перечень и месяц для работы.")
@@ -278,10 +322,10 @@ def _fixation_commands(page):
 
 def _quality_data(page, root):
     card = SectionCard("Работы в оценке качества")
-    page.preparation_menu = ActionMenuButton("Подготовка")
-    page.preparation_menu.add_command(page.form_month_button)
-    page.preparation_menu.add_command(page.auto_act_month_button)
-    page.preparation_menu.menu_model.addSeparator()
+    for button in (page.form_month_button, page.auto_act_month_button):
+        card.actions.addWidget(button)
+        button.show()
+    page.preparation_menu = ActionMenuButton("Выбор работ в оценке", "lists")
     page.preparation_menu.add_command(page.include_all_button)
     page.preparation_menu.add_command(page.exclude_all_button)
     card.actions.addWidget(page.preparation_menu)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, QTimer, Qt
+from PySide6.QtCore import QEvent, QSize, QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -26,9 +26,9 @@ from .icons import icon
 from .planning_page import PlanningPage
 from .quality_page import QualityAssessmentPage
 from .settings_page import SettingsPage
-from .styles import (
-    COMPACT_WINDOW_STYLESHEET, NARROW_WINDOW_STYLESHEET, apply_theme, color,
-)
+from .styles import apply_theme, color
+from .ui_scale import SCALE_SETTING, apply_layout_scale, scale_factor, scaled
+from .window_chrome import apply_window_theme
 from .work_lists_page import WorkListsPage
 
 
@@ -36,10 +36,11 @@ class MainWindow(QMainWindow):
     def __init__(self, repository: Repository) -> None:
         super().__init__()
         self.repository = repository
+        self._ui_scale = scale_factor(repository.get_setting(SCALE_SETTING))
         app = QApplication.instance()
         if app is not None:
             app.setStyle("Fusion")
-            apply_theme(app, repository.get_setting("ui.theme") or "light")
+            apply_theme(app, repository.get_setting("ui.theme") or "light", self._ui_scale)
         self.integration_gateway = LocalIntegrationGateway()
         self.integration_gateway.start()
         self.setWindowTitle("ГИС ЖКХ Ассистент")
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         sidebar.setObjectName("Sidebar")
         sidebar.setFixedWidth(228)
         sidebar_layout = QVBoxLayout(sidebar)
+        self.sidebar_layout = sidebar_layout
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
         app_name = QLabel("ГИС ЖКХ\nАссистент")
         app_name.setObjectName("SectionTitle")
@@ -105,6 +107,7 @@ class MainWindow(QMainWindow):
         self.integration_card = QFrame()
         self.integration_card.setObjectName("SidebarStatusCard")
         integration_layout = QVBoxLayout(self.integration_card)
+        self.integration_layout = integration_layout
         integration_layout.setContentsMargins(10, 9, 10, 9)
         integration_layout.setSpacing(4)
 
@@ -140,6 +143,7 @@ class MainWindow(QMainWindow):
             self._shared_context_mode_changed
         )
         self.settings_page.themeChanged.connect(self._theme_changed)
+        self.settings_page.scaleChanged.connect(self._scale_changed)
         for name in ("houses", "work_lists", "planning", "fixation", "quality"):
             page = self._page_by_context_name(name)
             page.context_notice = QLabel()
@@ -167,6 +171,7 @@ class MainWindow(QMainWindow):
             self._apply_shared_context()
         self.navigation.setCurrentRow(0)
         self._update_context_summary()
+        self._update_display_layout(force=True)
 
     def _connect_shared_context_sources(self) -> None:
         self.houses_page.organization_combo.currentIndexChanged.connect(
@@ -592,7 +597,9 @@ class MainWindow(QMainWindow):
     def _theme_changed(self, theme: str) -> None:
         app = QApplication.instance()
         if app is not None:
-            apply_theme(app, theme)
+            apply_theme(app, theme, self._ui_scale)
+        self._apply_window_chrome()
+        self._update_display_layout(force=True)
         for row in range(self.navigation.count()):
             item = self.navigation.item(row)
             item.setIcon(icon(str(item.data(Qt.ItemDataRole.UserRole)), color("muted_text")))
@@ -605,6 +612,19 @@ class MainWindow(QMainWindow):
             else:
                 self._reload_page_theme(page)
         self._refresh_integration_status()
+
+    def _scale_changed(self, percent: int) -> None:
+        """Only change presentation; keep edits, selected objects and queues intact."""
+        self._ui_scale = scale_factor(percent)
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, self.settings_page.theme_name(), self._ui_scale)
+        self._update_display_layout(force=True)
+
+    def _apply_window_chrome(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        apply_window_theme(self, self.repository.get_setting("ui.theme") or "light")
 
     def _reload_page_theme(self, page) -> None:
         if self._closing:
@@ -747,9 +767,11 @@ class MainWindow(QMainWindow):
         if selected_scope is not None:
             target_page.scope_switcher.set_scope(selected_scope)
 
-    def resizeEvent(self, event) -> None:
-        width = event.size().width()
-        height = event.size().height()
+    def _update_display_layout(self, *, force: bool = False) -> None:
+        if not hasattr(self, "settings_page"):
+            return
+        width = self.width() / self._ui_scale
+        height = self.height() / self._ui_scale
 
         if width < 980 or height < 600:
             mode = "narrow"
@@ -758,26 +780,51 @@ class MainWindow(QMainWindow):
         else:
             mode = "normal"
 
-        if mode != self._view_mode:
+        if force or mode != self._view_mode:
             self._view_mode = mode
-
-            if mode == "normal":
-                self.sidebar.setFixedWidth(228)
-                self.setStyleSheet("")
-            elif mode == "compact":
-                self.sidebar.setFixedWidth(196)
-                self.setStyleSheet(COMPACT_WINDOW_STYLESHEET)
-            else:
-                self.sidebar.setFixedWidth(172)
-                self.setStyleSheet(NARROW_WINDOW_STYLESHEET)
-
+            # Density changes layout, never the user's chosen text size.
+            base_width = {"normal": 228, "compact": 196, "narrow": 172}[mode]
+            self.navigation.ensurePolished()
+            icon_size = scaled(20, self._ui_scale)
+            self.navigation.setIconSize(QSize(icon_size, icon_size))
+            text_width = max(
+                self.navigation.fontMetrics().horizontalAdvance(self.navigation.item(i).text())
+                for i in range(self.navigation.count())
+            )
+            self.sidebar.setFixedWidth(max(
+                scaled(max(228, base_width), self._ui_scale),
+                text_width + icon_size + scaled(50, self._ui_scale),
+            ))
+            self.sidebar_layout.setContentsMargins(*(
+                scaled(value, self._ui_scale) for value in (12, 16, 12, 16)
+            ))
+            self.integration_layout.setContentsMargins(*(
+                scaled(value, self._ui_scale) for value in (10, 9, 10, 9)
+            ))
+            self.integration_layout.setSpacing(scaled(4, self._ui_scale))
             self.houses_page.set_compact_mode(mode != "normal")
             self.work_lists_page.set_view_mode(mode)
             self.planning_page.set_view_mode(mode)
             self.fixation_page.set_view_mode(mode)
             self.quality_page.set_view_mode(mode)
+            # The houses density hook supplies new base margins at each mode.
+            self.houses_page.card_layout.setProperty("uiBaseMargins", None)
+            self.houses_page.card_layout.setProperty("uiBaseSpacing", None)
+            apply_layout_scale(self.pages, self._ui_scale)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._update_display_layout()
         super().resizeEvent(event)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._apply_window_chrome()
+
+    def event(self, event) -> bool:
+        result = super().event(event)
+        if event.type() == QEvent.Type.WinIdChange and hasattr(self, "repository"):
+            QTimer.singleShot(0, self._apply_window_chrome)
+        return result
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self._closing = True
