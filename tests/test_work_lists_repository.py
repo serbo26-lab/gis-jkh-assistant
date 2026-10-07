@@ -465,7 +465,7 @@ def test_create_work_list_can_use_validated_template_subset(tmp_path) -> None:
     repository.close()
 
 
-def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
+def test_placed_list_composition_cannot_be_changed(tmp_path) -> None:
     import pytest
 
     repository = Repository(tmp_path / "app.db")
@@ -478,10 +478,10 @@ def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
     repository.update_work_list_gis_state(
         work_list.id,
         gis_work_list_guid="gis-list",
-        gis_status="DRAFT",
+        gis_status="APPROVED",
     )
 
-    with pytest.raises(ValueError, match="локального перечня"):
+    with pytest.raises(ValueError, match="локального, отменённого"):
         repository.add_work_list_items(
             work_list.id,
             [
@@ -495,7 +495,7 @@ def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
         )
 
     item = repository.list_work_list_items(work_list.id)[0]
-    with pytest.raises(ValueError, match="локального перечня"):
+    with pytest.raises(ValueError, match="локального, отменённого"):
         repository.delete_work_list_items(work_list.id, [item.id])
     repository.close()
 
