@@ -1689,6 +1689,7 @@ class FixationPage(QWidget):
             and not self._integration_busy
         )
         self.load_month_button.setEnabled(bool(self._current_period_id) and ready)
+        self.load_year_button.setEnabled(bool(self._current_work_list_id) and ready)
         self.publish_month_button.setEnabled(bool(self._current_period_id) and ready)
         self.publish_year_button.setEnabled(
             bool(self._current_work_list_id) and ready
@@ -1702,6 +1703,9 @@ class FixationPage(QWidget):
         self.fill_month_button.setEnabled(enabled)
         self.fill_year_button.setEnabled(enabled)
         self.clear_month_button.setEnabled(enabled)
+        self.load_year_button.setEnabled(
+            bool(self._current_work_list_id) and enabled
+        )
         self._refresh_gis_buttons()
 
     def set_view_mode(self, mode: str) -> None:
