@@ -214,7 +214,17 @@ class WorkListsPage(QWidget):
         self.load_gis_lists_button.setToolTip(
             "Получить из ГИС ЖКХ перечни только для выбранного дома."
         )
-        self.load_export_template_button = QPushButton("Загрузить / обновить шаблон экспорта")
+        self.load_export_template_button = QPushButton(
+            "Получить / обновить шаблон из ГИС ЖКХ"
+        )
+        self.load_export_template_button.setToolTip(
+            "Автоматически запросить официальный XLSX-шаблон перечня в ГИС ЖКХ "
+            "и сохранить его как техническую основу."
+        )
+        self.load_export_template_file_button = QPushButton("Выбрать XLSX вручную…")
+        self.load_export_template_file_button.setToolTip(
+            "Резервный способ: выбрать ранее выгруженный официальный XLSX-файл."
+        )
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
         self.upload_to_gis_button = QPushButton("Загрузить в ГИС ЖКХ")
         self.sync_gis_button = QPushButton("Проверить статус в ГИС")
@@ -227,7 +237,8 @@ class WorkListsPage(QWidget):
         gis_actions.setVerticalSpacing(6)
         gis_actions.addWidget(self.load_gis_lists_button, 0, 0)
         gis_actions.addWidget(self.load_export_template_button, 0, 1)
-        gis_actions.addWidget(self.export_button, 0, 2)
+        gis_actions.addWidget(self.load_export_template_file_button, 0, 2)
+        gis_actions.addWidget(self.export_button, 1, 2)
         gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
         gis_actions.addWidget(self.sync_gis_button, 1, 1)
         gis_actions.addWidget(self.approve_gis_button, 1, 2)
@@ -392,7 +403,12 @@ class WorkListsPage(QWidget):
         self.house_combo.currentIndexChanged.connect(self._house_changed)
         self.templates_button.clicked.connect(self._manage_templates)
         self.load_gis_lists_button.clicked.connect(self._load_house_work_lists_from_gis)
-        self.load_export_template_button.clicked.connect(self._load_or_update_export_template)
+        self.load_export_template_button.clicked.connect(
+            self._download_export_template_from_gis
+        )
+        self.load_export_template_file_button.clicked.connect(
+            self._load_export_template_file
+        )
         self.export_button.clicked.connect(self._export_current_work_list)
         self.upload_to_gis_button.clicked.connect(self._upload_current_work_list_to_gis)
         self.sync_gis_button.clicked.connect(self._sync_current_work_list_from_gis)
@@ -2010,10 +2026,11 @@ class WorkListsPage(QWidget):
 
             self.gis_actions.addWidget(self.load_gis_lists_button, 0, 0)
             self.gis_actions.addWidget(self.load_export_template_button, 0, 1)
-            self.gis_actions.addWidget(self.export_button, 0, 2)
+            self.gis_actions.addWidget(self.load_export_template_file_button, 0, 2)
             self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
             self.gis_actions.addWidget(self.sync_gis_button, 1, 1)
-            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
+            self.gis_actions.addWidget(self.export_button, 1, 2)
+            self.gis_actions.addWidget(self.approve_gis_button, 2, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
             self.items_actions.addWidget(self.add_works_button, 0, 0)
@@ -2041,10 +2058,11 @@ class WorkListsPage(QWidget):
 
             self.gis_actions.addWidget(self.load_gis_lists_button, 0, 0)
             self.gis_actions.addWidget(self.load_export_template_button, 0, 1)
-            self.gis_actions.addWidget(self.export_button, 0, 2)
+            self.gis_actions.addWidget(self.load_export_template_file_button, 0, 2)
             self.gis_actions.addWidget(self.upload_to_gis_button, 1, 0)
             self.gis_actions.addWidget(self.sync_gis_button, 1, 1)
-            self.gis_actions.addWidget(self.approve_gis_button, 1, 2)
+            self.gis_actions.addWidget(self.export_button, 1, 2)
+            self.gis_actions.addWidget(self.approve_gis_button, 2, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
             self.items_actions.addWidget(self.add_works_button, 0, 0)
@@ -2075,10 +2093,11 @@ class WorkListsPage(QWidget):
 
             self.gis_actions.addWidget(self.load_gis_lists_button, 0, 0, 1, 2)
             self.gis_actions.addWidget(self.load_export_template_button, 1, 0, 1, 2)
-            self.gis_actions.addWidget(self.export_button, 2, 0, 1, 2)
-            self.gis_actions.addWidget(self.upload_to_gis_button, 3, 0, 1, 2)
-            self.gis_actions.addWidget(self.sync_gis_button, 4, 0)
-            self.gis_actions.addWidget(self.approve_gis_button, 4, 1)
+            self.gis_actions.addWidget(self.load_export_template_file_button, 2, 0, 1, 2)
+            self.gis_actions.addWidget(self.export_button, 3, 0, 1, 2)
+            self.gis_actions.addWidget(self.upload_to_gis_button, 4, 0, 1, 2)
+            self.gis_actions.addWidget(self.sync_gis_button, 5, 0)
+            self.gis_actions.addWidget(self.approve_gis_button, 5, 1)
             self.gis_actions.setColumnStretch(0, 1)
             self.gis_actions.setColumnStretch(1, 1)
 
