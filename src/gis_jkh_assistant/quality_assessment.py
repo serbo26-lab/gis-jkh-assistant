@@ -8,7 +8,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping
 
-MIN_QUALITY_HELPER_VERSION = (0, 1, 20)
+MIN_QUALITY_HELPER_VERSION = (0, 1, 27)
 
 
 def helper_supports_quality_assessment(version: str | None) -> bool:
