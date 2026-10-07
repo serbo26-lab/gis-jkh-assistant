@@ -508,8 +508,9 @@ def test_quality_automation_preserves_user_act_and_skips_its_row(tmp_path) -> No
     assert refreshed[0].included is True
     assert refreshed[0].cost == "999.00"
     assert refreshed[1].included is True
-    assert refreshed[1].cost == "200.00"
-    assert refreshed[1].days_count == 0
+    assert refreshed[1].cost is None
+    assert refreshed[1].days_count is None
+    assert refreshed[1].cost_reduction is None
 
     generated = generate_acceptance_act_for_period(
         store,
@@ -538,4 +539,47 @@ def test_quality_automation_preserves_user_act_and_skips_its_row(tmp_path) -> No
     assert [act.id for act in store.list_acts(refreshed[0].id)] == [manual.id]
     assert len(store.list_acts(refreshed[1].id)) == 1
     assert store.list_acts(refreshed[1].id)[0].generated is True
+    repository.close()
+
+
+def test_clear_quality_values_preserves_inclusion_and_acts(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+    period = store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    item = store.list_items(period.id)[0]
+    store.update_item(
+        item.id,
+        included=True,
+        cost="123.45",
+        days_count=2,
+        cost_reduction="7.96",
+    )
+    act = store.add_act(
+        item_id=item.id,
+        act_type="QUALITY_VIOLATION_ACT",
+        number="1",
+        reg_date="31.01.2026",
+        period_from="01.01.2026",
+        period_to="31.01.2026",
+        file_name="violation.pdf",
+        description="violation.pdf",
+        content_type="application/pdf",
+        content=b"pdf",
+        generated=False,
+    )
+
+    count = store.clear_quality_values(period.id)
+    refreshed = store.get_item(item.id)
+    assert refreshed is not None
+    assert count >= 1
+    assert refreshed.included is True
+    assert refreshed.cost is None
+    assert refreshed.days_count is None
+    assert refreshed.cost_reduction is None
+    assert [value.id for value in store.list_acts(item.id)] == [act.id]
     repository.close()
