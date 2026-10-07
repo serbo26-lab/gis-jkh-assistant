@@ -2977,10 +2977,10 @@ class Repository:
         work_list = self.get_work_list(work_list_id)
         if work_list is None:
             raise ValueError("Перечень не найден.")
-        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND", "CANCELLED"}:
+        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND", "CANCELLED", "DRAFT"}:
             raise ValueError(
-                "Состав можно изменять только у локального либо отменённого "
-                "перечня ГИС ЖКХ."
+                "Состав можно изменять только у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ."
             )
 
         existing = self.list_work_list_items(work_list_id)
@@ -3102,10 +3102,11 @@ class Repository:
             "",
             "NOT_FOUND",
             "CANCELLED",
+            "DRAFT",
         }:
             raise ValueError(
-                "Полностью очистить состав можно только у локального либо "
-                "отменённого перечня ГИС ЖКХ."
+                "Полностью очистить состав можно только у локального, "
+                "отменённого перечня либо проекта ГИС ЖКХ."
             )
 
         with self.connection:
@@ -3160,8 +3161,8 @@ class Repository:
             "CANCELLED",
         }:
             raise ValueError(
-                "Заменить состав можно только у локального либо отменённого "
-                "перечня ГИС ЖКХ."
+                "Заменить состав можно только у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ."
             )
 
         prepared = list(items)
