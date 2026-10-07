@@ -1101,18 +1101,32 @@ class QualityAssessmentPage(QWidget):
             return
         self._run_gis("approve_quality_assessment", success)
 
-    def _periods_with_quality_for_year(self) -> list:
+    def _periods_with_quality_for_year(self, command: str) -> list:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return []
         year = int(self.year_combo.currentData())
-        return [
-            period
-            for period in self.store.list_periods(
-                self._current_work_list_id,
-                year=year,
-            )
-            if any(item.included for item in self.store.list_items(period.id))
-        ]
+        result = []
+        for period in self.store.list_periods(
+            self._current_work_list_id,
+            year=year,
+        ):
+            if not any(item.included for item in self.store.list_items(period.id)):
+                continue
+            status = str(period.gis_status or "LOCAL").upper()
+            has_remote = bool(period.estimation_guid)
+            if command == "save_quality_assessment":
+                if has_remote and status not in {"DRAFT", "MODIFIED", "LOCAL"}:
+                    continue
+            elif command == "approve_quality_assessment":
+                if has_remote and status not in {
+                    "DRAFT",
+                    "MODIFIED",
+                    "CANCELLED",
+                    "LOCAL",
+                }:
+                    continue
+            result.append(period)
+        return result
 
     def _save_year_projects(self) -> None:
         self._start_year_queue(
@@ -1143,12 +1157,13 @@ class QualityAssessmentPage(QWidget):
     ) -> None:
         if self._integration_worker is not None and self._integration_worker.isRunning():
             return
-        periods = self._periods_with_quality_for_year()
+        periods = self._periods_with_quality_for_year(command)
         if not periods:
             QMessageBox.information(
                 self,
-                "Нет сформированных месяцев",
-                "Сначала сформируйте оценку качества хотя бы за один месяц.",
+                "Нет месяцев для обработки",
+                "Нет сформированных месяцев, которым требуется выбранное действие. "
+                "Уже размещённые и не изменённые месяцы повторно не отправляются.",
             )
             return
 
