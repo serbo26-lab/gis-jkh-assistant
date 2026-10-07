@@ -75,6 +75,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_failed_period_id: str | None = None
         self._queue_command: str | None = None
         self._queue_title = ""
+        self._queue_running = False
         self._build_ui()
         self.refresh_organizations()
 
@@ -1160,6 +1161,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_failed_period_id = None
         self._queue_command = command
         self._queue_title = title
+        self._queue_running = True
         self.queue_progress.setVisible(True)
         self.queue_progress.setRange(0, len(self._queue_period_ids))
         self.queue_progress.setValue(0)
@@ -1178,12 +1180,16 @@ class QualityAssessmentPage(QWidget):
             return
         self._queue_index = failed_index
         self._queue_failed_period_id = None
+        self._queue_running = True
         self.continue_queue_button.setVisible(False)
         self.queue_label.setText("Продолжаем очередь…")
         self._start_next_queue_item()
 
     def _start_next_queue_item(self) -> None:
         if self._queue_index >= len(self._queue_period_ids):
+            self._queue_running = False
+            self._integration_busy = False
+            self._refresh_gis_buttons()
             self.queue_progress.setValue(len(self._queue_period_ids))
             self.queue_label.setText(
                 f"Очередь завершена. Успешно обработано месяцев: "
@@ -1255,6 +1261,7 @@ class QualityAssessmentPage(QWidget):
 
         def failed(message: str) -> None:
             self.store.set_error(period_id, message)
+            self._queue_running = False
             self._queue_failed_period_id = period_id
             self.queue_label.setText(
                 f"Очередь остановлена на {_MONTHS[period.month - 1]} "
@@ -1270,10 +1277,14 @@ class QualityAssessmentPage(QWidget):
 
         def finished() -> None:
             self._integration_worker = None
-            self._integration_busy = False
-            self._refresh_integration_status()
             if command_succeeded["value"] and self._queue_failed_period_id is None:
+                # Keep all GIS buttons disabled between queue items.
+                self._integration_busy = True
+                self._refresh_integration_status()
                 QTimer.singleShot(250, self._start_next_queue_item)
+            else:
+                self._integration_busy = False
+                self._refresh_integration_status()
 
         worker.succeeded.connect(succeeded)
         worker.failed.connect(failed)
@@ -1405,13 +1416,14 @@ class QualityAssessmentPage(QWidget):
 
     def _refresh_gis_buttons(self) -> None:
         status = self.integration_gateway.status()
-        ready = (
+        base_ready = (
             status.running
             and status.helper_connected
             and status.gis_page_ready
             and helper_supports_quality_assessment(status.helper_version)
             and not self._integration_busy
         )
+        ready = base_ready and not self._queue_running
         period = (
             self.store.get_period(self._current_period_id)
             if self._current_period_id
@@ -1454,17 +1466,24 @@ class QualityAssessmentPage(QWidget):
         self.publish_year_button.setEnabled(
             bool(self._current_work_list_id) and ready
         )
-        self.continue_queue_button.setEnabled(ready)
+        self.continue_queue_button.setEnabled(
+            base_ready and bool(self._queue_failed_period_id)
+        )
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)
         self.include_all_button.setEnabled(enabled)
         self.exclude_all_button.setEnabled(enabled)
         self.month_acts_button.setEnabled(enabled)
-        self.form_month_button.setEnabled(enabled)
-        self.form_year_button.setEnabled(bool(self._current_work_list_id))
-        self.auto_act_month_button.setEnabled(enabled)
-        self.auto_act_year_button.setEnabled(bool(self._current_work_list_id))
+        local_enabled = enabled and not self._queue_running
+        self.form_month_button.setEnabled(local_enabled)
+        self.form_year_button.setEnabled(
+            bool(self._current_work_list_id) and not self._queue_running
+        )
+        self.auto_act_month_button.setEnabled(local_enabled)
+        self.auto_act_year_button.setEnabled(
+            bool(self._current_work_list_id) and not self._queue_running
+        )
         self._refresh_gis_buttons()
 
     def _relayout_month_buttons(self, columns: int | None = None) -> None:
