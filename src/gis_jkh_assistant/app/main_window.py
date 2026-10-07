@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QSize, QTimer, Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -21,10 +22,13 @@ from gis_jkh_assistant.quality_assessment import helper_supports_quality_assessm
 
 from .fixation_page import FixationPage
 from .houses_page import HousesPage
+from .icons import icon
 from .planning_page import PlanningPage
 from .quality_page import QualityAssessmentPage
 from .settings_page import SettingsPage
-from .styles import COMPACT_WINDOW_STYLESHEET, NARROW_WINDOW_STYLESHEET
+from .styles import (
+    COMPACT_WINDOW_STYLESHEET, NARROW_WINDOW_STYLESHEET, apply_theme, color,
+)
 from .work_lists_page import WorkListsPage
 
 
@@ -32,20 +36,27 @@ class MainWindow(QMainWindow):
     def __init__(self, repository: Repository) -> None:
         super().__init__()
         self.repository = repository
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyle("Fusion")
+            apply_theme(app, repository.get_setting("ui.theme") or "light")
         self.integration_gateway = LocalIntegrationGateway()
         self.integration_gateway.start()
         self.setWindowTitle("ГИС ЖКХ Ассистент")
-        self.resize(1360, 820)
+        self.resize(1366, 768)
         self.setMinimumSize(720, 520)
         self._view_mode = "normal"
         self._last_context_page_index = 0
         self._applying_shared_context = False
+        self._closing = False
         self._shared_context = {
             "organization_id": self.repository.get_setting("ui.context.organization_id"),
             "house_id": self.repository.get_setting("ui.context.house_id"),
             "work_list_id": self.repository.get_setting("ui.context.work_list_id"),
             "year": self.repository.get_setting("ui.context.year"),
         }
+        self._shared_context_revision = 0
+        self._last_context_snapshot = self._normalized_context(self._shared_context)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -55,26 +66,41 @@ class MainWindow(QMainWindow):
 
         sidebar = QWidget()
         self.sidebar = sidebar
-        sidebar.setFixedWidth(220)
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(228)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
-        app_name = QLabel("ГИС ЖКХ Ассистент")
+        app_name = QLabel("ГИС ЖКХ\nАссистент")
         app_name.setObjectName("SectionTitle")
         sidebar_layout.addWidget(app_name)
 
+        workflow_caption = QLabel("Рабочий процесс")
+        workflow_caption.setObjectName("ContextCaption")
+        sidebar_layout.addWidget(workflow_caption)
+
         self.navigation = QListWidget()
+        self.navigation.setObjectName("Navigation")
         self.navigation.setFrameShape(QFrame.NoFrame)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        for title in (
-            "Дома",
-            "Перечни работ и услуг",
-            "Планирование",
-            "Фиксация работ и услуг",
-            "Оценка качества",
-            "Настройки",
+        self.navigation.setIconSize(QSize(20, 20))
+        for title, name, description in (
+            ("Дома", "houses", "Управляющая организация и данные дома"),
+            ("Перечни", "lists", "Перечни работ и услуг: состав и размещение"),
+            ("Планирование", "planning", "План работ по размещённому перечню"),
+            ("Фиксация", "fixation", "Фиксация выполненных работ и услуг по месяцам"),
+            ("Оценка качества", "quality", "Оценка качества, акты и размещение"),
+            ("Настройки", "settings", "Рабочий контекст и оформление"),
         ):
-            self.navigation.addItem(QListWidgetItem(title))
+            item = QListWidgetItem(icon(name, color("muted_text")), title)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setToolTip(description)
+            self.navigation.addItem(item)
         sidebar_layout.addWidget(self.navigation, 1)
+
+        self.context_mode_label = QLabel()
+        self.context_mode_label.setObjectName("ContextCaption")
+        self.context_mode_label.setWordWrap(True)
+        sidebar_layout.addWidget(self.context_mode_label)
 
         self.integration_card = QFrame()
         self.integration_card.setObjectName("SidebarStatusCard")
@@ -113,6 +139,20 @@ class MainWindow(QMainWindow):
         self.settings_page.sharedContextChanged.connect(
             self._shared_context_mode_changed
         )
+        self.settings_page.themeChanged.connect(self._theme_changed)
+        for name in ("houses", "work_lists", "planning", "fixation", "quality"):
+            page = self._page_by_context_name(name)
+            page.context_notice = QLabel()
+            page.context_notice.setObjectName("BlockingReason")
+            page.context_notice.setWordWrap(True)
+            page.context_notice.hide()
+            page_layout = getattr(page, "page_layout", page.layout())
+            page_layout.insertWidget(1, page.context_notice)
+            workflow = getattr(page, "workflow", None)
+            if workflow is not None:
+                workflow.navigateRequested.connect(
+                    lambda index, source=name: self._workflow_navigation_requested(source, index)
+                )
         self._connect_shared_context_sources()
 
         self.integration_status_timer = QTimer(self)
@@ -121,11 +161,12 @@ class MainWindow(QMainWindow):
         self._refresh_integration_status()
         self.integration_status_timer.start()
 
-        self.navigation.setCurrentRow(0)
         if self.settings_page.shared_context_enabled():
             if not self._shared_context.get("house_id"):
                 self._capture_shared_context("houses", "house")
             self._apply_shared_context()
+        self.navigation.setCurrentRow(0)
+        self._update_context_summary()
 
     def _connect_shared_context_sources(self) -> None:
         self.houses_page.organization_combo.currentIndexChanged.connect(
@@ -144,9 +185,11 @@ class MainWindow(QMainWindow):
         self.work_lists_page.work_lists.currentItemChanged.connect(
             lambda *_: self._capture_shared_context("work_lists", "work_list")
         )
-        self.work_lists_page.year_spin.valueChanged.connect(
-            lambda *_: self._capture_shared_context("work_lists", "year")
+        self.work_lists_page.contextSelectionChanged.connect(
+            self._explicit_registry_selection_changed
         )
+        # The registry's year input belongs to creating a new list. Changing it
+        # must not replace the current year used by planning/monthly workflows.
 
         for name, page in (
             ("planning", self.planning_page),
@@ -195,15 +238,21 @@ class MainWindow(QMainWindow):
             }
         if name == "work_lists":
             current_item = page.work_lists.currentItem()
+            work_list_id = (
+                current_item.data(Qt.ItemDataRole.UserRole) if current_item else None
+            )
+            work_list = self.repository.get_work_list(str(work_list_id)) if work_list_id else None
+            year = work_list.base_year if work_list else None
+            shared_year = self._shared_context.get("year")
+            if work_list and shared_year not in (None, ""):
+                candidate = int(shared_year)
+                if work_list.start_year <= candidate <= work_list.end_year:
+                    year = candidate
             return {
                 "organization_id": page.organization_combo.currentData(),
                 "house_id": page.house_combo.currentData(),
-                "work_list_id": (
-                    current_item.data(Qt.ItemDataRole.UserRole)
-                    if current_item
-                    else None
-                ),
-                "year": page.year_spin.value(),
+                "work_list_id": work_list_id,
+                "year": year,
             }
         return {
             "organization_id": page.organization_combo.currentData(),
@@ -213,29 +262,105 @@ class MainWindow(QMainWindow):
         }
 
     def _store_shared_context(self) -> None:
+        snapshot = self._normalized_context(self._shared_context)
+        if snapshot != self._last_context_snapshot:
+            self._shared_context_revision += 1
+            self._last_context_snapshot = snapshot
         for field in ("organization_id", "house_id", "work_list_id", "year"):
             value = self._shared_context.get(field)
             self.repository.set_setting(
                 f"ui.context.{field}",
                 None if value in (None, "") else str(value),
             )
+        self._update_context_summary()
+
+    @staticmethod
+    def _normalized_context(values: dict) -> dict[str, str]:
+        return {
+            field: str(values.get(field) or "")
+            for field in ("organization_id", "house_id", "work_list_id", "year")
+        }
+
+    def _observe_context_operation(self, page, worker) -> None:
+        """Record the context before asynchronous commands can emit UI changes."""
+        if page is not self.work_lists_page:
+            return
+        page._operation_shared_context = dict(self._shared_context)
+        page._operation_shared_revision = self._shared_context_revision
+        page._operation_source_context = self._context_values("work_lists")
+        page._context_operation_worker = worker
+        page._pending_context_selection = None
+        worker.finished.connect(
+            lambda: QTimer.singleShot(0, lambda: self._finish_registry_selection(page, worker))
+        )
+
+    def _explicit_registry_selection_changed(self) -> None:
+        """A created/explicitly selected list may arrive before its worker settles."""
+        if self._applying_shared_context or not self.settings_page.shared_context_enabled():
+            return
+        page = self.work_lists_page
+        if not self._page_is_busy(page):
+            self._capture_shared_context("work_lists", "work_list")
+            return
+        worker = getattr(page, "_context_operation_worker", None)
+        if worker is None:
+            return
+        page._pending_context_selection = {
+            "worker": worker,
+            "selected": self._context_values("work_lists"),
+            "baseline": dict(page._operation_shared_context),
+            "revision": page._operation_shared_revision,
+            "operation": dict(page._operation_source_context),
+        }
+
+    def _finish_registry_selection(self, page, worker) -> None:
+        if self._closing:
+            return
+        pending = getattr(page, "_pending_context_selection", None)
+        if pending is None or pending["worker"] is not worker:
+            return
+        if self._page_is_busy(page):
+            # A queued command owns this page now; it must keep its own context.
+            page._pending_context_selection = None
+            return
+        page._pending_context_selection = None
+        if not self.settings_page.shared_context_enabled():
+            return
+        current = self._normalized_context(self._shared_context)
+        baseline = self._normalized_context(pending["baseline"])
+        unchanged = (
+            current == baseline and self._shared_context_revision == pending["revision"]
+        )
+        still_same_operation = (
+            self.pages.currentWidget() is page
+            and current == self._normalized_context(pending["operation"])
+        )
+        if not unchanged and not still_same_operation:
+            return
+        if self._normalized_context(self._context_values("work_lists")) != self._normalized_context(
+            pending["selected"]
+        ):
+            return
+        self._capture_shared_context("work_lists", "work_list")
 
     def _capture_shared_context(self, source: str, kind: str) -> None:
         if (
             self._applying_shared_context
             or not self.settings_page.shared_context_enabled()
+            or self._page_is_busy(self._page_by_context_name(source))
         ):
             return
 
         values = self._context_values(source)
-        if kind == "organization":
+        if kind in ("organization", "house"):
+            object_changed = any(
+                self._shared_context.get(field) != values[field]
+                for field in ("organization_id", "house_id")
+            )
             self._shared_context["organization_id"] = values["organization_id"]
             self._shared_context["house_id"] = values["house_id"]
-            self._shared_context["work_list_id"] = None
-        elif kind == "house":
-            self._shared_context["organization_id"] = values["organization_id"]
-            self._shared_context["house_id"] = values["house_id"]
-            self._shared_context["work_list_id"] = None
+            if object_changed:
+                self._shared_context["work_list_id"] = None
         elif kind == "work_list":
             self._shared_context["organization_id"] = values["organization_id"]
             self._shared_context["house_id"] = values["house_id"]
@@ -250,6 +375,8 @@ class MainWindow(QMainWindow):
 
     def _shared_context_mode_changed(self, enabled: bool) -> None:
         if not enabled:
+            self._update_context_summary()
+            self._update_context_notices()
             return
         current_index = self.pages.currentIndex()
         if current_index not in range(5):
@@ -273,9 +400,9 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _set_combo_data(combo, value) -> bool:
         index = combo.findData(value)
-        combo.blockSignals(True)
+        blocked = combo.blockSignals(True)
         combo.setCurrentIndex(index if index >= 0 else -1)
-        combo.blockSignals(False)
+        combo.blockSignals(blocked)
         return index >= 0
 
     def _apply_shared_context(self, exclude: str | None = None) -> None:
@@ -292,9 +419,12 @@ class MainWindow(QMainWindow):
                 self._apply_shared_context_to_page(name)
         finally:
             self._applying_shared_context = False
+        self._update_context_notices()
 
     def _apply_shared_context_to_page(self, name: str) -> None:
         page = self._page_by_context_name(name)
+        if self._page_is_busy(page):
+            return
         organization_id = self._shared_context.get("organization_id")
         house_id = self._shared_context.get("house_id")
         work_list_id = self._shared_context.get("work_list_id")
@@ -303,11 +433,10 @@ class MainWindow(QMainWindow):
             year = int(year)
 
         if name == "houses":
-            if organization_id is not None:
-                changed = page.organization_combo.currentData() != organization_id
-                self._set_combo_data(page.organization_combo, organization_id)
-                if changed:
-                    page._organization_changed()
+            changed = page.organization_combo.currentData() != organization_id
+            self._set_combo_data(page.organization_combo, organization_id)
+            if changed:
+                page._organization_changed()
             if house_id is None:
                 if page.house_list.currentRow() >= 0:
                     page.house_list.blockSignals(True)
@@ -332,13 +461,10 @@ class MainWindow(QMainWindow):
             page._load_house(None)
             return
 
-        if organization_id is not None:
-            organization_changed = (
-                page.organization_combo.currentData() != organization_id
-            )
-            self._set_combo_data(page.organization_combo, organization_id)
-            if organization_changed:
-                page._organization_changed()
+        organization_changed = page.organization_combo.currentData() != organization_id
+        self._set_combo_data(page.organization_combo, organization_id)
+        if organization_changed:
+            page._organization_changed()
 
         if house_id is not None:
             house_changed = page.house_combo.currentData() != house_id
@@ -353,11 +479,6 @@ class MainWindow(QMainWindow):
                 page._house_changed()
 
         if name == "work_lists":
-            if year is not None and page.year_spin.value() != year:
-                page.year_spin.blockSignals(True)
-                page.year_spin.setValue(year)
-                page.year_spin.blockSignals(False)
-
             current = page.work_lists.currentItem()
             current_id = (
                 current.data(Qt.ItemDataRole.UserRole)
@@ -398,20 +519,141 @@ class MainWindow(QMainWindow):
             self._set_combo_data(page.year_combo, year)
             page._year_changed()
 
+    def _update_context_summary(self) -> None:
+        if not self.settings_page.shared_context_enabled():
+            self.context_mode_label.setText("Независимый выбор в разделах")
+            self.context_mode_label.setToolTip("Режим выбора можно изменить в настройках")
+            return
+        house_id = self._shared_context.get("house_id")
+        house = self.repository.get_house(str(house_id)) if house_id else None
+        year = self._shared_context.get("year")
+        title = "Общий выбор" + (f" • {year}" if year else "")
+        address = house.address if house else "Выберите дом"
+        brief_address = address if len(address) < 64 else address[:61] + "…"
+        self.context_mode_label.setText(f"{title}\n{brief_address}")
+        self.context_mode_label.setToolTip(f"{title}\n{address}")
+
+    def _update_context_notices(self) -> None:
+        enabled = self.settings_page.shared_context_enabled()
+        selected_list_id = self._shared_context.get("work_list_id")
+        selected_list = (
+            self.repository.get_work_list(str(selected_list_id)) if selected_list_id else None
+        )
+        selected_year = self._shared_context.get("year")
+        for name in ("houses", "work_lists", "planning", "fixation", "quality"):
+            page = self._page_by_context_name(name)
+            values = self._context_values(name)
+            message = ""
+            if enabled:
+                fields = ("organization_id", "house_id") if name == "houses" else tuple(values)
+                context_differs = any(
+                    str(self._shared_context.get(field) or "") != str(values[field] or "")
+                    for field in fields
+                )
+                if self._page_is_busy(page) and context_differs:
+                    message = (
+                        "В этом разделе выполняется операция для прежнего выбора. "
+                        "Дождитесь завершения, затем откройте раздел повторно: "
+                        "будет применён общий выбор. Контекст текущей операции сохранён."
+                    )
+                for field, label in (
+                    ("organization_id", "управляющая организация"), ("house_id", "дом"),
+                ):
+                    if message:
+                        break
+                    expected = self._shared_context.get(field)
+                    if expected and values[field] != expected:
+                        message = (
+                            f"Общий выбор сохранён, но выбранный {label} недоступен в этом разделе. "
+                            "Проверьте выбор в разделе «Дома»."
+                        )
+                        break
+                if not message and name != "houses" and selected_list_id:
+                    if values["work_list_id"] != selected_list_id:
+                        if selected_list and name != "work_lists":
+                            message = (
+                                f"Выбранный перечень {selected_list.period_label} недоступен "
+                                "для этого этапа. Получите размещённый перечень или завершите "
+                                "его размещение в разделе «Перечни». Общий выбор сохранён."
+                            )
+                        else:
+                            message = (
+                                "Выбранный перечень недоступен. Общий выбор сохранён; "
+                                "выберите доступный перечень в разделе «Перечни»."
+                            )
+                    elif selected_year and values["year"] is None and name != "work_lists":
+                        message = (
+                            f"Год {selected_year} вне периода выбранного перечня. "
+                            "Общий выбор сохранён; выберите доступный год в контексте."
+                        )
+            page.context_notice.setText(message)
+            page.context_notice.setVisible(bool(message))
+
+    def _theme_changed(self, theme: str) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, theme)
+        for row in range(self.navigation.count()):
+            item = self.navigation.item(row)
+            item.setIcon(icon(str(item.data(Qt.ItemDataRole.UserRole)), color("muted_text")))
+        for page in (
+            self.work_lists_page, self.planning_page, self.fixation_page, self.quality_page,
+        ):
+            worker = getattr(page, "_integration_worker", None)
+            if worker is not None and worker.isRunning():
+                worker.finished.connect(lambda page=page: self._reload_page_theme(page))
+            else:
+                self._reload_page_theme(page)
+        self._refresh_integration_status()
+
+    def _reload_page_theme(self, page) -> None:
+        if self._closing:
+            return
+        if self._page_is_busy(page):
+            return
+        previous_guard = self._applying_shared_context
+        self._applying_shared_context = True
+        try:
+            page.flush_pending_changes()
+            if page is self.work_lists_page:
+                if page._current_work_list_id:
+                    page._load_items(page._current_work_list_id)
+            else:
+                page._load_table()
+                if page is self.fixation_page:
+                    page._load_unplanned_table()
+        finally:
+            self._applying_shared_context = previous_guard
+
+    @staticmethod
+    def _page_is_busy(page) -> bool:
+        if any(
+            bool(getattr(page, name, False))
+            for name in ("_integration_busy", "_workflow_busy", "_queue_running")
+        ):
+            return True
+        if getattr(page, "_bulk_operation_name", None) is not None:
+            return True
+        bulk_running = getattr(page, "_bulk_worker_running", None)
+        if bulk_running is not None and bulk_running():
+            return True
+        worker = getattr(page, "_integration_worker", None)
+        return worker is not None and worker.isRunning()
+
     def _refresh_integration_status(self) -> None:
         status = self.integration_gateway.status()
         if not status.running:
             text = "Локальный шлюз не запущен"
             if status.error:
                 text += f"\n{status.error}"
-            color = "#b42318"
+            tone = "danger"
         elif not status.helper_connected:
             text = "ГИС ЖКХ помощник не подключен"
-            color = "#8a5b00"
+            tone = "warning"
         elif not status.gis_page_ready:
             version = status.helper_version or "?"
             text = f"ГИС ЖКХ помощник {version} подключен\nВкладка ГИС ЖКХ не открыта"
-            color = "#8a5b00"
+            tone = "warning"
         else:
             version = status.helper_version or "?"
             if not helper_supports_quality_assessment(status.helper_version):
@@ -419,21 +661,22 @@ class MainWindow(QMainWindow):
                     f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version} устарел\n"
                     "Требуется 0.1.20+"
                 )
-                color = "#8a5b00"
+                tone = "warning"
             else:
                 text = f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version}"
                 if status.session_keep_alive_error:
                     text += "\nСессия: ошибка продления"
-                    color = "#8a5b00"
+                    tone = "warning"
                 elif status.session_keep_alive_enabled:
                     text += "\nСессия: автопродление вкл."
-                    color = "#107c10"
+                    tone = "success"
                 else:
                     text += "\nСессия: активна"
-                    color = "#107c10"
+                    tone = "success"
 
         self.integration_status.setText(text)
-        self.integration_status.setStyleSheet(f"color: {color};")
+        self.integration_status.setStyleSheet(f"color: {color(tone)};")
+        self.settings_page.set_connection_status(text)
 
         self.work_lists_page._refresh_integration_status()
         self.planning_page._refresh_integration_status()
@@ -441,7 +684,13 @@ class MainWindow(QMainWindow):
         self.quality_page._refresh_integration_status()
 
     def _navigation_changed(self, index: int) -> None:
-        self.pages.setCurrentIndex(index)
+        if index < 0 or index >= self.pages.count():
+            return
+        previous_page = self.pages.currentWidget()
+        if previous_page is not self.pages.widget(index):
+            flush = getattr(previous_page, "flush_pending_changes", None)
+            if flush is not None:
+                flush()
         context_name = {
             0: "houses",
             1: "work_lists",
@@ -452,25 +701,50 @@ class MainWindow(QMainWindow):
         if context_name is not None:
             self._last_context_page_index = index
 
-        if index == 1:
-            self.work_lists_page.refresh_organizations()
-        elif index == 2:
-            self.planning_page.refresh_organizations()
-        elif index == 3:
-            self.fixation_page.refresh_organizations()
-        elif index == 4:
-            self.quality_page.refresh_organizations()
-
-        if (
-            context_name is not None
-            and self.settings_page.shared_context_enabled()
-            and not self._applying_shared_context
-        ):
-            self._applying_shared_context = True
-            try:
+        # Rebuilding dependent selectors emits transient selection signals. Guard
+        # the entire refresh, so those signals cannot replace the user's context
+        # with the first (or newest) available list and its default year.
+        previous_guard = self._applying_shared_context
+        self._applying_shared_context = True
+        try:
+            page_busy = context_name is not None and self._page_is_busy(
+                self._page_by_context_name(context_name)
+            )
+            if context_name is not None and index != 0 and not page_busy:
+                self._page_by_context_name(context_name).refresh_organizations()
+            if context_name is not None and self.settings_page.shared_context_enabled():
                 self._apply_shared_context_to_page(context_name)
-            finally:
-                self._applying_shared_context = False
+        finally:
+            self._applying_shared_context = previous_guard
+        self.pages.setCurrentIndex(index)
+        self._update_context_summary()
+        self._update_context_notices()
+
+    def _workflow_navigation_requested(self, source: str, index: int) -> None:
+        """Continue a monthly workflow with the same month and action scope."""
+        monthly_names = {3: "fixation", 4: "quality"}
+        source_page = self._page_by_context_name(source)
+        source_values = self._context_values(source)
+        month = getattr(source_page, "_current_month", None)
+        scope = getattr(source_page, "scope_switcher", None)
+        selected_scope = scope.scope() if scope is not None else None
+        self.navigation.setCurrentRow(index)
+        if source not in monthly_names.values() or index not in monthly_names:
+            return
+        target_name = monthly_names[index]
+        target_page = self._page_by_context_name(target_name)
+        target_values = self._context_values(target_name)
+        if not source_values["work_list_id"] or source_values["year"] is None:
+            return
+        if any(source_values[field] != target_values[field] for field in source_values):
+            return
+        if self._page_is_busy(target_page):
+            return
+        month_button = target_page.month_buttons.get(int(month)) if month is not None else None
+        if month_button is not None and month_button.isEnabled():
+            target_page._select_month(int(month))
+        if selected_scope is not None:
+            target_page.scope_switcher.set_scope(selected_scope)
 
     def resizeEvent(self, event) -> None:
         width = event.size().width()
@@ -487,13 +761,13 @@ class MainWindow(QMainWindow):
             self._view_mode = mode
 
             if mode == "normal":
-                self.sidebar.setFixedWidth(220)
+                self.sidebar.setFixedWidth(228)
                 self.setStyleSheet("")
             elif mode == "compact":
-                self.sidebar.setFixedWidth(180)
+                self.sidebar.setFixedWidth(196)
                 self.setStyleSheet(COMPACT_WINDOW_STYLESHEET)
             else:
-                self.sidebar.setFixedWidth(155)
+                self.sidebar.setFixedWidth(172)
                 self.setStyleSheet(NARROW_WINDOW_STYLESHEET)
 
             self.houses_page.set_compact_mode(mode != "normal")
@@ -505,6 +779,8 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._closing = True
+        self.integration_status_timer.stop()
         self.houses_page.flush_pending_changes()
         self.work_lists_page.flush_pending_changes()
         self.planning_page.flush_pending_changes()
@@ -513,17 +789,3 @@ class MainWindow(QMainWindow):
         self.integration_gateway.stop()
         self.repository.close()
         super().closeEvent(event)
-
-
-def _placeholder(title: str) -> QWidget:
-    widget = QWidget()
-    layout = QVBoxLayout(widget)
-    layout.setContentsMargins(24, 20, 24, 24)
-    heading = QLabel(title)
-    heading.setObjectName("Title")
-    layout.addWidget(heading)
-    text = QLabel("Раздел будет добавлен на следующих этапах разработки.")
-    text.setObjectName("Muted")
-    layout.addWidget(text)
-    layout.addStretch(1)
-    return widget

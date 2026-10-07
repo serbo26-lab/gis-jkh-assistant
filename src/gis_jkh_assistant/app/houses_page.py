@@ -52,7 +52,10 @@ from gis_jkh_assistant.work_lists.gis_sync import (
 
 from .dialogs import HouseDialog, HouseTariffDialog, OrganizationDialog
 from .gis_integration_worker import GisIntegrationWorker
-from .widgets import ActionToolbar, SafeSpinBox, StatusStrip
+from .registry_layouts import adapt_houses
+from .registry_workflow import refresh_houses
+from .widgets import ActionToolbar, SafeSpinBox
+from .workflow_widgets import OperationStatus
 
 
 class HousesPage(QWidget):
@@ -222,7 +225,7 @@ class HousesPage(QWidget):
         house_data_hint.setObjectName("Muted")
         root.addWidget(house_data_hint)
 
-        self.bulk_status_strip = StatusStrip("Готово к запуску массовой операции.")
+        self.bulk_status_strip = OperationStatus("Готово к запуску массовой операции.")
         self.bulk_operation_status = self.bulk_status_strip.label
         root.addWidget(self.bulk_status_strip)
 
@@ -275,6 +278,10 @@ class HousesPage(QWidget):
 
         self._build_house_card()
         self._set_card_enabled(False)
+        adapt_houses(self)
+
+    def _refresh_workflow(self) -> None:
+        refresh_houses(self)
 
     def _build_house_card(self) -> None:
         section = QLabel("Карточка дома")
@@ -311,9 +318,8 @@ class HousesPage(QWidget):
         self.card_layout.addWidget(management_title)
 
         management_hint = QLabel(
-            "Начало и окончание используются для проверки периода перечня. "
-            "Поле «Окончание управления» означает дату, с которой дом уже не "
-            "находится в управлении. Если оно пустое, управление считается действующим."
+            "Окончание — первый день, с которого дом уже не в управлении. "
+            "Пустое поле означает действующее управление."
         )
         management_hint.setWordWrap(True)
         management_hint.setObjectName("Muted")
@@ -545,8 +551,9 @@ class HousesPage(QWidget):
         houses = self.repository.list_houses(organization_id, self.search_edit.text())
         for house in houses:
             item = QListWidgetItem(
-                f"{house.address}\nЖилых: {house.residential_premises_count}   "
-                f"Нежилых: {house.non_residential_premises_count}"
+                f"{house.address}\n"
+                f"{'Связан с ГИС' if house.house_object_guid else 'Локальный'} • "
+                f"Помещений: {house.total_premises_count}"
             )
             item.setData(Qt.UserRole, house.id)
             self.house_list.addItem(item)
@@ -571,14 +578,20 @@ class HousesPage(QWidget):
 
     def _load_house(self, house_id: str | None) -> None:
         self._current_house_id = house_id
+        self.house_detail_title.setText("Выбранный дом: —")
         if not house_id:
             self.tariffs_table.setRowCount(0)
             self._set_card_enabled(False)
+            self._refresh_workflow()
             return
         house = self.repository.get_house(house_id)
         if not house:
             self._set_card_enabled(False)
+            self._refresh_workflow()
             return
+
+        self.house_detail_title.setText(house.address)
+        self.house_ids_toggle.setChecked(not bool(house.house_object_guid))
 
         self._loading_card = True
         try:
@@ -628,6 +641,7 @@ class HousesPage(QWidget):
             self._loading_card = False
         self._refresh_tariffs()
         self._set_save_status("Сохранено")
+        self._refresh_workflow()
 
     def _refresh_tariffs(self, select_id: str | None = None) -> None:
         self.tariffs_table.setRowCount(0)
@@ -820,6 +834,7 @@ class HousesPage(QWidget):
 
     def _set_bulk_status(self, text: str) -> None:
         self.bulk_operation_status.setText(text)
+        self.bulk_status_strip.show()
         QCoreApplication.processEvents()
 
     def _begin_bulk_operation(self, name: str, status_text: str) -> bool:
@@ -852,6 +867,7 @@ class HousesPage(QWidget):
         if self._current_house_id:
             self.sync_management_button.setEnabled(False)
         self._set_bulk_status(status_text)
+        self._refresh_workflow()
         return True
 
     def _finish_bulk_operation(self, status_text: str) -> None:
@@ -875,6 +891,7 @@ class HousesPage(QWidget):
         if self._current_house_id:
             self.sync_management_button.setEnabled(True)
         self._set_bulk_status(status_text)
+        self._refresh_workflow()
 
     @staticmethod
     def _gis_house_changed(house, item: dict) -> bool:
@@ -1741,7 +1758,8 @@ class HousesPage(QWidget):
         answer = QMessageBox.question(
             self,
             "Удалить дом?",
-            f"Удалить «{house.address}» из локальной базы?",
+            f"Удалить «{house.address}» из локальной базы?\n\n"
+            "Связанные перечни, планы, фиксация и оценки этого дома также будут удалены.",
         )
         if answer != QMessageBox.Yes:
             return

@@ -8,20 +8,14 @@ import json
 from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QCalendarWidget,
     QDialog,
     QDialogButtonBox,
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QListWidget,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -38,12 +32,13 @@ from gis_jkh_assistant.work_planning import (
     active_months_for_work_list,
     balanced_period_distribution,
     build_gis_work_plan_command_payload,
-    helper_supports_work_plans,
     integral_quantity,
 )
 
 from .gis_integration_worker import GisIntegrationWorker
-from .widgets import ActionToolbar, SafeComboBox, StatusStrip
+from .page_layouts import build_planning
+from .workflow_presenter import refresh_planning
+from .styles import color
 
 
 _MONTH_HEADERS = (
@@ -205,166 +200,7 @@ class PlanningPage(QWidget):
         self._refresh_integration_status()
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        self.page_scroll = QScrollArea()
-        self.page_scroll.setObjectName("PageScroll")
-        self.page_scroll.setWidgetResizable(True)
-        self.page_scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        content = QWidget()
-        content.setObjectName("PageContent")
-        self.page_scroll.setWidget(content)
-        outer.addWidget(self.page_scroll)
-
-        root = QVBoxLayout(content)
-        root.setContentsMargins(20, 18, 20, 20)
-        root.setSpacing(14)
-
-        title = QLabel("Планирование работ и услуг")
-        title.setObjectName("Title")
-        root.addWidget(title)
-
-        intro = QLabel(
-            "Раздел использует только перечни, уже размещенные в ГИС ЖКХ. "
-            "Для каждого месяца можно указать количество вручную. Конкретные даты "
-            "необязательны: двойной щелчок по месячной ячейке открывает календарь."
-        )
-        intro.setObjectName("Muted")
-        intro.setWordWrap(True)
-        root.addWidget(intro)
-
-        context = QFrame()
-        context.setObjectName("ContextBar")
-        context_layout = QGridLayout(context)
-        context_layout.setContentsMargins(14, 12, 14, 12)
-        context_layout.setHorizontalSpacing(10)
-        context_layout.setVerticalSpacing(8)
-
-        context_layout.addWidget(QLabel("Управляющая организация"), 0, 0)
-        self.organization_combo = SafeComboBox()
-        self.organization_combo.setMinimumWidth(300)
-        context_layout.addWidget(self.organization_combo, 0, 1, 1, 3)
-
-        context_layout.addWidget(QLabel("Дом"), 1, 0)
-        self.house_combo = SafeComboBox()
-        self.house_combo.setMinimumWidth(340)
-        context_layout.addWidget(self.house_combo, 1, 1, 1, 3)
-
-        context_layout.addWidget(QLabel("Размещенный перечень"), 2, 0)
-        self.work_list_combo = SafeComboBox()
-        self.work_list_combo.setMinimumWidth(340)
-        context_layout.addWidget(self.work_list_combo, 2, 1, 1, 3)
-
-        context_layout.addWidget(QLabel("Год плана"), 3, 0)
-        self.year_combo = SafeComboBox()
-        self.year_combo.setFixedWidth(150)
-        context_layout.addWidget(self.year_combo, 3, 1)
-
-        self.distribute_button = QPushButton("Автораспределить по месяцам")
-        self.distribute_button.setToolTip(
-            "Распределить количество из размещенного перечня по всему его периоду. "
-            "Для полного года и количества 12 получится по 1 в каждый месяц."
-        )
-        self.clear_button = QPushButton("Очистить план за выбранный год")
-        self.load_gis_button = QPushButton("Загрузить планирование из ГИС ЖКХ")
-        self.load_gis_button.setToolTip(
-            "Получить уже размещенный план выбранного перечня и года из ГИС ЖКХ."
-        )
-        self.publish_button = QPushButton("Разместить / обновить план в ГИС ЖКХ")
-        self.publish_button.setObjectName("PrimaryButton")
-        self.publish_button.setToolTip(
-            "Создать новый план в ГИС ЖКХ или полностью обновить уже существующий "
-            "план этого перечня и года локальными значениями."
-        )
-
-        context_layout.setColumnStretch(1, 2)
-        context_layout.setColumnStretch(3, 1)
-        root.addWidget(context)
-
-        actions = ActionToolbar()
-        actions.add_label("Локально")
-        actions.add_widget(self.distribute_button)
-        actions.add_widget(self.clear_button)
-        actions.add_separator()
-        actions.add_label("Из ГИС")
-        actions.add_widget(self.load_gis_button)
-        actions.add_separator()
-        actions.add_label("В ГИС")
-        actions.add_widget(self.publish_button)
-        actions.add_stretch()
-        root.addWidget(actions)
-
-        self.plan_status_strip = StatusStrip("План: —")
-        self.plan_status = self.plan_status_strip.label
-        root.addWidget(self.plan_status_strip)
-
-        self.empty_hint = QLabel(
-            "Для выбранного дома нет размещенных перечней. "
-            "Сначала разместите перечень в разделе «Перечни работ и услуг» "
-            "и при необходимости нажмите «Проверить статус в ГИС»."
-        )
-        self.empty_hint.setWordWrap(True)
-        self.empty_hint.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Minimum,
-        )
-        self.empty_hint.setStyleSheet("color: #1f1f1f; font-weight: 600;")
-        root.addWidget(self.empty_hint)
-
-        table_card = QFrame()
-        table_card.setObjectName("Card")
-        table_layout = QVBoxLayout(table_card)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-
-        table_hint = QLabel(
-            "«Количество в плане» считается автоматически как сумма месяцев. "
-            "Ячейки вне периода выбранного перечня недоступны. "
-            "Автораспределение заменяет месячные количества и очищает ранее "
-            "выбранные конкретные даты. Выделенные месячные ячейки можно очистить "
-            "клавишей Del — удалятся и количество, и выбранные даты."
-        )
-        table_hint.setObjectName("Muted")
-        table_hint.setWordWrap(True)
-        table_layout.addWidget(table_hint)
-
-        self.table = PlanningTable(0, 15)
-        self.table.setHorizontalHeaderLabels(
-            ["Работа / услуга", "В перечне", "В плане", *_MONTH_HEADERS]
-        )
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.setEditTriggers(
-            QAbstractItemView.EditTrigger.SelectedClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-            | QAbstractItemView.EditTrigger.AnyKeyPressed
-        )
-
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        for column in range(3, 15):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        table_layout.addWidget(self.table, 1)
-        root.addWidget(table_card, 1)
-
-        self.organization_combo.currentIndexChanged.connect(self._organization_changed)
-        self.house_combo.currentIndexChanged.connect(self._house_changed)
-        self.work_list_combo.currentIndexChanged.connect(self._work_list_changed)
-        self.year_combo.currentIndexChanged.connect(self._year_changed)
-        self.distribute_button.clicked.connect(self._distribute)
-        self.clear_button.clicked.connect(self._clear_year)
-        self.load_gis_button.clicked.connect(self._load_from_gis)
-        self.publish_button.clicked.connect(self._publish_to_gis)
-        self.table.itemChanged.connect(self._cell_changed)
-        self.table.cellDoubleClicked.connect(self._open_dates)
-        self.table.delete_requested.connect(self._clear_selected_cells)
-
-        self._set_plan_enabled(False)
+        build_planning(self, PlanningTable)
 
     def refresh_organizations(self) -> None:
         current = self.organization_combo.currentData()
@@ -528,7 +364,7 @@ class PlanningPage(QWidget):
 
                     if month not in active_months:
                         cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                        cell.setBackground(QBrush(QColor("#f0f1f3")))
+                        cell.setBackground(QBrush(QColor(color("readonly"))))
                         cell.setToolTip("Этот месяц не входит в период перечня.")
                     else:
                         self._apply_dates_decoration(cell, dates)
@@ -544,6 +380,7 @@ class PlanningPage(QWidget):
         finally:
             self.table.blockSignals(False)
             self._loading = False
+        self._update_plan_status()
 
     def _cell_changed(self, cell: QTableWidgetItem) -> None:
         if self._loading or cell.column() < 3:
@@ -593,6 +430,7 @@ class PlanningPage(QWidget):
         cell.setData(_ORIGINAL_COUNT_ROLE, count)
         cell.setText(str(count) if count else "")
         self._refresh_row_total(cell.row())
+        self._update_plan_status()
 
     def _restore_count(self, cell: QTableWidgetItem) -> None:
         value = int(cell.data(_ORIGINAL_COUNT_ROLE) or 0)
@@ -817,7 +655,7 @@ class PlanningPage(QWidget):
                 pretty.append(
                     parsed.toString("dd.MM.yyyy") if parsed.isValid() else value
                 )
-            cell.setBackground(QBrush(QColor("#e8f4e8")))
+            cell.setBackground(QBrush(QColor(color("success_surface"))))
             cell.setToolTip("Конкретные даты: " + ", ".join(pretty))
         else:
             cell.setBackground(QBrush())
@@ -834,10 +672,10 @@ class PlanningPage(QWidget):
     ) -> None:
         expected = integral_quantity(list_quantity)
         if expected is not None and total == expected:
-            cell.setBackground(QBrush(QColor("#e8f4e8")))
+            cell.setBackground(QBrush(QColor(color("success_surface"))))
             cell.setToolTip("Количество в плане совпадает с количеством в перечне.")
         elif expected is not None:
-            cell.setBackground(QBrush(QColor("#fff4d6")))
+            cell.setBackground(QBrush(QColor(color("warning_surface"))))
             cell.setToolTip(
                 f"В перечне: {expected}. В плане за этот год: {total}."
             )
@@ -855,28 +693,7 @@ class PlanningPage(QWidget):
         self._refresh_gis_action_button()
 
     def _update_plan_status(self, plan=None) -> None:
-        if plan is None and self._current_plan_id:
-            plan = self.repository.get_work_plan(self._current_plan_id)
-        if plan is None:
-            self.plan_status.setText("План: —")
-            return
-
-        if plan.gis_work_plan_guid:
-            text = f"План ГИС ЖКХ: {plan.gis_work_plan_guid}"
-            if plan.gis_status == "SAVED":
-                text += " • размещен / обновлен"
-            elif plan.gis_status:
-                text += f" • {plan.gis_status}"
-            if plan.gis_last_sync_at:
-                text += f" • синхронизировано {plan.gis_last_sync_at}"
-            if plan.gis_last_error:
-                text += f" • ошибка: {plan.gis_last_error}"
-            self.plan_status.setText(text)
-        else:
-            text = "План: локально, еще не размещен через приложение."
-            if plan.gis_last_error:
-                text += f" Последняя ошибка: {plan.gis_last_error}"
-            self.plan_status.setText(text)
+        refresh_planning(self)
 
     def _refresh_integration_status(self) -> None:
         """Refresh GIS-dependent actions; visible status lives in the sidebar."""
@@ -884,23 +701,7 @@ class PlanningPage(QWidget):
         self._refresh_gis_action_button()
 
     def _refresh_gis_action_button(self) -> None:
-        if not hasattr(self, "publish_button"):
-            return
-        status = self.integration_gateway.status()
-        ready = (
-            status.running
-            and status.helper_connected
-            and status.gis_page_ready
-            and helper_supports_work_plans(status.helper_version)
-        )
-        enabled = (
-            bool(self._current_plan_id)
-            and bool(self._current_work_list_id)
-            and ready
-            and not self._integration_busy
-        )
-        self.load_gis_button.setEnabled(enabled)
-        self.publish_button.setEnabled(enabled)
+        refresh_planning(self)
 
     def _set_integration_busy(self, busy: bool) -> None:
         self._integration_busy = busy
