@@ -1173,6 +1173,45 @@ async function runGisCommand(command) {
       return data?.workPlan || null;
     }
 
+    function gisDateToIso(value) {
+      const text = String(value || "").trim();
+      if (!text) return null;
+      const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+      if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+      const ru = /^(\d{2})\.(\d{2})\.(\d{4})/.exec(text);
+      if (ru) return ru[3] + "-" + ru[2] + "-" + ru[1];
+      return null;
+    }
+
+    function normalizeWorkPlanForImport(plan) {
+      if (!plan?.guid) return { found: false };
+      return {
+        found: true,
+        workPlanGuid: plan.guid,
+        workListGuid: plan.workListGuid || null,
+        year: Number(plan.year || 0),
+        gisStatus: "SAVED",
+        lastUpdateDate: plan.lastUpdateDate || null,
+        items: (Array.isArray(plan.workPlanItems) ? plan.workPlanItems : []).map(
+          (item, index) => ({
+            guid: item?.guid || null,
+            sortIndex: item?.sortIndex ?? index + 1,
+            workGuid: item?.work?.guid || null,
+            workCode: item?.work?.code || null,
+            monthlyWorks: (
+              Array.isArray(item?.monthlyWorks) ? item.monthlyWorks : []
+            ).map((month) => ({
+              month: Number(month?.monthYear?.month || 0),
+              count: Number(month?.count || 0),
+              dates: (Array.isArray(month?.dates) ? month.dates : [])
+                .map((row) => gisDateToIso(row?.date ?? row))
+                .filter(Boolean)
+            }))
+          })
+        )
+      };
+    }
+
     function planDateForGis(value) {
       const text = String(value || "").trim();
       const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
