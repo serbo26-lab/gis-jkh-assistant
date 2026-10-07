@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -52,7 +53,7 @@ from gis_jkh_assistant.work_lists.gis_sync import (
 
 from .dialogs import HouseDialog, HouseTariffDialog, OrganizationDialog
 from .gis_integration_worker import GisIntegrationWorker
-from .widgets import SafeSpinBox
+from .widgets import ActionToolbar, SafeSpinBox, StatusStrip
 
 
 class HousesPage(QWidget):
@@ -101,19 +102,17 @@ class HousesPage(QWidget):
         title_row.addWidget(self.save_status)
         root.addLayout(title_row)
 
-        toolbar = QFrame()
-        toolbar.setObjectName("Card")
-        toolbar_layout = QVBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(12, 10, 12, 10)
-        toolbar_layout.setSpacing(8)
-
-        organization_row = QHBoxLayout()
-        organization_row.addWidget(QLabel("Управляющая организация"))
+        context = QFrame()
+        context.setObjectName("ContextBar")
+        context_layout = QHBoxLayout(context)
+        context_layout.setContentsMargins(12, 9, 12, 9)
+        context_layout.setSpacing(8)
+        context_layout.addWidget(QLabel("Управляющая организация"))
         self.organization_combo = QComboBox()
-        self.organization_combo.setMinimumWidth(180)
+        self.organization_combo.setMinimumWidth(260)
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
-        organization_row.addWidget(self.organization_combo, 1)
-        toolbar_layout.addLayout(organization_row)
+        context_layout.addWidget(self.organization_combo, 1)
+        root.addWidget(context)
 
         self.add_org_button = QPushButton("Добавить УО")
         self.edit_org_button = QPushButton("Изменить УО")
@@ -125,11 +124,10 @@ class HousesPage(QWidget):
         self.sync_houses_button = QPushButton(
             "Загрузить сведения о МКД из ГИС ЖКХ"
         )
-        self.sync_houses_button.setObjectName("PrimaryButton")
         self.sync_houses_button.setToolTip(
             "Получить все дома текущей управляющей организации напрямую из ГИС ЖКХ."
         )
-        self.add_house_button = QPushButton("Добавить дом")
+        self.add_house_button = QPushButton("+ Добавить дом")
         self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
         self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
         self.sync_all_management_button = QPushButton(
@@ -146,8 +144,6 @@ class HousesPage(QWidget):
             "Получить перечни работ и услуг для всех домов выбранной "
             "управляющей организации."
         )
-        self.bulk_operation_status = QLabel("Готово к запуску массовой операции.")
-        self.bulk_operation_status.setObjectName("BulkStatusText")
 
         self.add_org_button.clicked.connect(self._add_organization)
         self.edit_org_button.clicked.connect(self._edit_organization)
@@ -164,59 +160,72 @@ class HousesPage(QWidget):
             self._sync_all_work_lists_from_gis
         )
 
-        actions_row = QHBoxLayout()
-        actions_row.setSpacing(8)
-        for button in (
-            self.add_org_button,
-            self.edit_org_button,
-            self.delete_org_button,
-            self.add_house_button,
-        ):
-            actions_row.addWidget(button)
-        actions_row.addStretch(1)
-        toolbar_layout.addLayout(actions_row)
+        actions = ActionToolbar()
 
-        house_data_row = QHBoxLayout()
-        house_data_row.setSpacing(8)
-        house_data_row.addWidget(self.export_house_data_button)
-        house_data_row.addWidget(self.import_house_data_button)
-        house_data_row.addWidget(self.import_button)
-        house_data_row.addStretch(1)
-        toolbar_layout.addLayout(house_data_row)
+        self.organization_actions_button = QPushButton("Действия с УО ▾")
+        organization_menu = QMenu(self.organization_actions_button)
+        self.organization_add_action = organization_menu.addAction("Добавить УО")
+        self.organization_edit_action = organization_menu.addAction("Изменить УО")
+        self.organization_delete_action = organization_menu.addAction("Удалить УО")
+        self.organization_add_action.triggered.connect(self.add_org_button.click)
+        self.organization_edit_action.triggered.connect(self.edit_org_button.click)
+        self.organization_delete_action.triggered.connect(self.delete_org_button.click)
+        self.organization_actions_button.setMenu(organization_menu)
+        actions.add_widget(self.organization_actions_button)
+
+        actions.add_widget(self.add_house_button)
+
+        self.files_actions_button = QPushButton("Импорт / Экспорт ▾")
+        files_menu = QMenu(self.files_actions_button)
+        files_menu.addAction(
+            "Шаблон площадей и тарифов…",
+            self.export_house_data_button.click,
+        )
+        files_menu.addAction(
+            "Импорт площадей и тарифов…",
+            self.import_house_data_button.click,
+        )
+        self.import_houses_action = files_menu.addAction(
+            "Импорт домов из XLSX…",
+            self.import_button.click,
+        )
+        self.files_actions_button.setMenu(files_menu)
+        actions.add_widget(self.files_actions_button)
+
+        actions.add_separator()
+
+        self.gis_actions_button = QPushButton("Синхронизация с ГИС ЖКХ ▾")
+        self.gis_actions_button.setObjectName("PrimaryButton")
+        gis_menu = QMenu(self.gis_actions_button)
+        self.sync_houses_action = gis_menu.addAction(
+            "Сведения о МКД",
+            self.sync_houses_button.click,
+        )
+        self.sync_management_action = gis_menu.addAction(
+            "Сведения об управлении МКД",
+            self.sync_all_management_button.click,
+        )
+        self.sync_work_lists_action = gis_menu.addAction(
+            "Перечни работ МКД",
+            self.sync_all_work_lists_button.click,
+        )
+        self.gis_actions_button.setMenu(gis_menu)
+        actions.add_widget(self.gis_actions_button)
+        actions.add_stretch()
+        root.addWidget(actions)
 
         house_data_hint = QLabel(
-            "Для площадей и тарифов приложение формирует свой простой XLSX-шаблон "
-            "по домам выбранной УО. На листе «Тарифы» один дом занимает одну строку, "
-            "а история идет вправо парами «Действует с / Тариф». Даты можно вводить "
-            "как 08.2025 (с 01.08.2025) или как точную дату 10.08.2025."
+            "XLSX-операции для домов, площадей и тарифов собраны в меню "
+            "«Импорт / Экспорт». Массовые операции с ГИС ЖКХ запускаются "
+            "последовательно и блокируют повторный запуск до завершения."
         )
         house_data_hint.setWordWrap(True)
         house_data_hint.setObjectName("Muted")
-        toolbar_layout.addWidget(house_data_hint)
+        root.addWidget(house_data_hint)
 
-        gis_houses_title = QLabel("Сведения о МКД (массовые действия)")
-        gis_houses_title.setObjectName("SectionTitle")
-        toolbar_layout.addWidget(gis_houses_title)
-
-        bulk_status_frame = QFrame()
-        bulk_status_frame.setObjectName("BulkStatusFrame")
-        bulk_status_layout = QHBoxLayout(bulk_status_frame)
-        bulk_status_layout.setContentsMargins(10, 6, 10, 6)
-        bulk_status_layout.addWidget(self.bulk_operation_status)
-        bulk_status_layout.addStretch(1)
-        toolbar_layout.addWidget(bulk_status_frame)
-
-        gis_houses_grid = QGridLayout()
-        gis_houses_grid.setHorizontalSpacing(8)
-        gis_houses_grid.setVerticalSpacing(6)
-        gis_houses_grid.addWidget(self.sync_houses_button, 0, 0)
-        gis_houses_grid.addWidget(self.sync_all_management_button, 0, 1)
-        gis_houses_grid.addWidget(self.sync_all_work_lists_button, 0, 2)
-        for column in range(3):
-            gis_houses_grid.setColumnStretch(column, 1)
-        toolbar_layout.addLayout(gis_houses_grid)
-
-        root.addWidget(toolbar)
+        self.bulk_status_strip = StatusStrip("Готово к запуску массовой операции.")
+        self.bulk_operation_status = self.bulk_status_strip.label
+        root.addWidget(self.bulk_status_strip)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
