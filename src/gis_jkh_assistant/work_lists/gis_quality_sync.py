@@ -76,7 +76,6 @@ def apply_remote_quality_assessment(
             (period.id,),
         )
 
-        local_by_id = {item.id: item for item in local_items}
         for index, (local, row) in enumerate(pairs, start=1):
             days_per_month = int(
                 row.get("daysPerMonth")
