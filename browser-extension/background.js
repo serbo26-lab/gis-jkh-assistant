@@ -3,7 +3,7 @@ const HELPER_HEADER = { "X-GIS-JKH-Helper": "desktop-helper" };
 const GIS_MATCH = "https://lk.dom.gosuslugi.ru/*";
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.25";
+const HELPER_CODE_VERSION = "0.1.26";
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -1137,10 +1137,10 @@ async function runGisCommand(command) {
       };
     }
 
-    async function getWorkListDetail(workListGuid) {
+    async function getWorkListDetailAny(workListGuid) {
       const guid = String(workListGuid || "").trim();
       if (!guid) {
-        throw new Error("Не передан GUID размещенного перечня ГИС ЖКХ.");
+        throw new Error("Не передан GUID перечня ГИС ЖКХ.");
       }
 
       const data = await request(
@@ -1150,14 +1150,150 @@ async function runGisCommand(command) {
         STATE_WORKPLANNING
       );
       if (!data?.guid) {
-        throw new Error("Размещенный перечень не найден в ГИС ЖКХ.");
+        throw new Error("Перечень не найден в ГИС ЖКХ.");
       }
+      return data;
+    }
+
+    async function getWorkListDetail(workListGuid) {
+      const data = await getWorkListDetailAny(workListGuid);
       if (data.status !== "APPROVED") {
         throw new Error(
           "Перечень больше не находится в статусе «Размещен» в ГИС ЖКХ."
         );
       }
       return data;
+    }
+
+    function nullableString(value) {
+      const text = String(value ?? "").trim();
+      return text ? text : null;
+    }
+
+    async function buildEditableWorkListPayload(localPayload, remote) {
+      const localItems = Array.isArray(localPayload?.items)
+        ? localPayload.items
+        : [];
+      if (!localItems.length) {
+        throw new Error(
+          "В перечне нет работ. Добавьте актуальные работы перед сохранением в ГИС ЖКХ."
+        );
+      }
+
+      const workListItems = [];
+      for (let index = 0; index < localItems.length; index += 1) {
+        const local = localItems[index] || {};
+        const work = await getOrganizationWork(local.workCode, local.workGuid);
+        if (String(work?.status || "").toUpperCase() !== "ACTIVE") {
+          throw new Error(
+            "Работа «" +
+              String(local.workName || local.workCode || "без названия") +
+              "» отсутствует в актуальном справочнике организации. " +
+              "Удалите её или замените актуальной работой."
+          );
+        }
+
+        const rawCount = nullableString(local.quantity);
+        const count = rawCount === null ? null : Number(rawCount);
+        if (
+          count !== null &&
+          (!Number.isFinite(count) || count < 0)
+        ) {
+          throw new Error(
+            "Некорректное количество у работы «" +
+              String(local.workName || local.workCode || "") +
+              "»."
+          );
+        }
+
+        workListItems.push({
+          work: compactReference(work),
+          count,
+          price: nullableString(local.price),
+          amount: nullableString(local.volume),
+          totalCost: nullableString(local.cost),
+          costPerMeter: null,
+          sortIndex: index + 1,
+          unit: "",
+          workType: compactReference(work?.serviceType),
+          okei: compactReference(
+            work?.dimensionsUnit?.dimensionsUnitOkei || null
+          ),
+          isPlannedWork: null
+        });
+      }
+
+      const period =
+        localPayload?.startYear && localPayload?.startMonth &&
+        localPayload?.endYear && localPayload?.endMonth
+          ? {
+              from: {
+                year: Number(localPayload.startYear),
+                month: Number(localPayload.startMonth)
+              },
+              to: {
+                year: Number(localPayload.endYear),
+                month: Number(localPayload.endMonth)
+              },
+              yearsCount: remote?.period?.yearsCount ?? 0
+            }
+          : remote.period;
+
+      return {
+        guid: remote.guid,
+        houseGuid: remote.houseGuid,
+        period,
+        attachmentList: Array.isArray(remote.attachmentList)
+          ? remote.attachmentList
+          : [],
+        lastUpdateDate: remote.lastUpdateDate || null,
+        createDate: remote.createDate || null,
+        workListItems
+      };
+    }
+
+    async function saveEditableWorkList(payload) {
+      const remote = await getWorkListDetailAny(payload.workListGuid);
+      if (!["CANCELLED", "DRAFT"].includes(String(remote.status || ""))) {
+        throw new Error(
+          "Изменять состав через программу можно только у отменённого перечня " +
+            "или проекта ГИС ЖКХ."
+        );
+      }
+
+      const workList = await buildEditableWorkListPayload(payload, remote);
+      await request(
+        "POST",
+        "/workplanning/api/rest/services/save/worklist",
+        { workList },
+        STATE_WORKPLANNING
+      );
+
+      await sleep(600);
+      const fresh = await getWorkListDetailAny(remote.guid);
+      return statusResult(fresh);
+    }
+
+    async function cancelWorkList(payload) {
+      const remote = await getWorkListDetailAny(payload.workListGuid);
+      if (String(remote.status || "") === "CANCELLED") {
+        return statusResult(remote);
+      }
+      if (String(remote.status || "") !== "APPROVED") {
+        throw new Error(
+          "Отменить можно только перечень в статусе «Размещен»."
+        );
+      }
+
+      await request(
+        "PUT",
+        "/workplanning/api/rest/services/cancel/worklist",
+        { workListGuid: remote.guid },
+        STATE_WORKPLANNING
+      );
+      await sleep(600);
+      const fresh = await getWorkListDetailAny(remote.guid);
+      return statusResult(fresh, { gisStatus: fresh.status || "CANCELLED" });
     }
 
     async function searchWorkPlan(workListGuid, year) {
@@ -2108,8 +2244,30 @@ async function runGisCommand(command) {
     }
 
     if (command.type === "sync_work_list") {
+      if (payload?.workListGuid) {
+        try {
+          const item = await getWorkListDetailAny(payload.workListGuid);
+          return { ok: true, result: statusResult(item) };
+        } catch (_) {
+          // Fall back to period search for legacy local rows without a valid GUID.
+        }
+      }
       const item = await searchExactWorkList(payload, null);
       return { ok: true, result: statusResult(item) };
+    }
+
+    if (command.type === "cancel_work_list") {
+      return {
+        ok: true,
+        result: await cancelWorkList(payload)
+      };
+    }
+
+    if (command.type === "save_editable_work_list") {
+      return {
+        ok: true,
+        result: await saveEditableWorkList(payload)
+      };
     }
 
     if (command.type === "upload_import_work_list") {

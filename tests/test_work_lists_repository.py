@@ -2,6 +2,8 @@ import sqlite3
 from dataclasses import dataclass
 
 from gis_jkh_assistant.database import Repository, TemplateSource
+from gis_jkh_assistant.database.models import WorkListStatus
+from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
 from gis_jkh_assistant.work_lists import AllocationResult
 
 
@@ -463,7 +465,7 @@ def test_create_work_list_can_use_validated_template_subset(tmp_path) -> None:
     repository.close()
 
 
-def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
+def test_placed_list_composition_cannot_be_changed(tmp_path) -> None:
     import pytest
 
     repository = Repository(tmp_path / "app.db")
@@ -476,10 +478,10 @@ def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
     repository.update_work_list_gis_state(
         work_list.id,
         gis_work_list_guid="gis-list",
-        gis_status="DRAFT",
+        gis_status="APPROVED",
     )
 
-    with pytest.raises(ValueError, match="локального перечня"):
+    with pytest.raises(ValueError, match="локального, отменённого"):
         repository.add_work_list_items(
             work_list.id,
             [
@@ -493,7 +495,7 @@ def test_loaded_or_placed_list_composition_cannot_be_changed(tmp_path) -> None:
         )
 
     item = repository.list_work_list_items(work_list.id)[0]
-    with pytest.raises(ValueError, match="локального перечня"):
+    with pytest.raises(ValueError, match="локального, отменённого"):
         repository.delete_work_list_items(work_list.id, [item.id])
     repository.close()
 
@@ -629,4 +631,88 @@ def test_import_gis_work_list_does_not_overwrite_local_same_period(tmp_path) -> 
 
     lists = repository.list_work_lists(house.id)
     assert [item.id for item in lists] == [local.id]
+    repository.close()
+
+
+def test_cancelled_work_list_can_be_rebuilt_and_downstream_cleared(tmp_path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    _org, house, template = _fixture(repository)
+    work_list = repository.create_work_list(
+        house_id=house.id,
+        base_year=2026,
+        template_id=template.id,
+    )
+    repository.update_work_list_gis_state(
+        work_list.id,
+        gis_work_list_guid="gis-list-guid",
+        gis_status="APPROVED",
+    )
+
+    plan = repository.get_or_create_work_plan(
+        work_list_id=work_list.id,
+        year=2026,
+    )
+    plan_item = repository.list_work_plan_items(plan.id)[0]
+    repository.update_work_plan_month(
+        plan_item.id,
+        month=1,
+        count=1,
+    )
+    fixation = repository.get_or_create_work_fixation_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+    quality_store = QualityAssessmentStore(repository)
+    quality = quality_store.get_or_create_period(
+        work_list_id=work_list.id,
+        year=2026,
+        month=1,
+    )
+
+    repository.update_work_list_gis_state(
+        work_list.id,
+        gis_status="CANCELLED",
+    )
+    cancelled = repository.get_work_list(work_list.id)
+    assert cancelled is not None
+    assert cancelled.status == WorkListStatus.CANCELLED
+    assert cancelled.gis_status == "CANCELLED"
+
+    repository.clear_work_list_downstream_data(work_list.id)
+    assert repository.get_work_plan_for_list_year(work_list.id, 2026) is None
+    assert (
+        repository.get_work_fixation_period_for_month(
+            work_list.id,
+            year=2026,
+            month=1,
+        )
+        is None
+    )
+    assert quality_store.get_period(quality.id) is None
+    assert repository.get_work_fixation_period(fixation.id) is None
+
+    old_items = repository.list_work_list_items(work_list.id)
+    assert repository.delete_work_list_items(
+        work_list.id,
+        [old_items[0].id],
+    ) == 1
+    added = repository.add_work_list_items(
+        work_list.id,
+        [
+            Item(
+                position=1,
+                work_code="99",
+                work_name="Актуальная работа",
+                work_guid="guid-99",
+                price="5",
+                volume="10",
+                quantity="2",
+                cost="100",
+            )
+        ],
+    )
+    assert added == 1
+    assert repository.list_work_list_items(work_list.id)[0].work_code == "99"
+
     repository.close()

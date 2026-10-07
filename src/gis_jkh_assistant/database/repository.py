@@ -1381,6 +1381,8 @@ class Repository:
             local_status = WorkListStatus.PLACED
         elif gis_status == "DRAFT":
             local_status = WorkListStatus.GIS_DRAFT
+        elif gis_status == "CANCELLED":
+            local_status = WorkListStatus.CANCELLED
         else:
             local_status = WorkListStatus.LOCAL
 
@@ -2977,10 +2979,15 @@ class Repository:
         work_list = self.get_work_list(work_list_id)
         if work_list is None:
             raise ValueError("Перечень не найден.")
-        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
             raise ValueError(
-                "Состав можно изменять только у локального перечня, "
-                "который ещё не загружен в ГИС ЖКХ."
+                "Состав можно изменять только у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ."
             )
 
         existing = self.list_work_list_items(work_list_id)
@@ -3054,10 +3061,15 @@ class Repository:
         work_list = self.get_work_list(work_list_id)
         if work_list is None:
             raise ValueError("Перечень не найден.")
-        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
             raise ValueError(
-                "Состав можно изменять только у локального перечня, "
-                "который ещё не загружен в ГИС ЖКХ."
+                "Состав можно изменять только у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ."
             )
 
         ids = [str(item_id) for item_id in dict.fromkeys(item_ids) if item_id]
@@ -3093,6 +3105,140 @@ class Repository:
                     (_now(), work_list_id),
                 )
         return int(cursor.rowcount or 0)
+
+    def clear_work_list_items(self, work_list_id: str) -> int:
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень не найден.")
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
+            raise ValueError(
+                "Полностью очистить состав можно только у локального, "
+                "отменённого перечня либо проекта ГИС ЖКХ."
+            )
+
+        with self.connection:
+            cursor = self.connection.execute(
+                "DELETE FROM work_list_items WHERE work_list_id = ?",
+                (work_list_id,),
+            )
+            self.connection.execute(
+                "UPDATE work_lists SET planned_total = NULL, updated_at = ? WHERE id = ?",
+                (_now(), work_list_id),
+            )
+        return int(cursor.rowcount or 0)
+
+    def clear_work_list_downstream_data(self, work_list_id: str) -> None:
+        """Drop local plan/fixation/quality rows after GIS cancellation."""
+
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM work_fixation_periods WHERE work_list_id = ?",
+                (work_list_id,),
+            )
+            self.connection.execute(
+                "DELETE FROM work_plans WHERE work_list_id = ?",
+                (work_list_id,),
+            )
+            quality_table = self.connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'quality_assessment_periods'
+                """
+            ).fetchone()
+            if quality_table is not None:
+                self.connection.execute(
+                    "DELETE FROM quality_assessment_periods WHERE work_list_id = ?",
+                    (work_list_id,),
+                )
+
+    def replace_work_list_items(
+        self,
+        work_list_id: str,
+        items: Iterable[object],
+        *,
+        template_id: str | None = None,
+    ) -> int:
+        """Replace the whole editable work-list composition atomically."""
+
+        work_list = self.get_work_list(work_list_id)
+        if work_list is None:
+            raise ValueError("Перечень не найден.")
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
+            raise ValueError(
+                "Заменить состав можно только у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ."
+            )
+
+        prepared = list(items)
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM work_list_items WHERE work_list_id = ?",
+                (work_list_id,),
+            )
+            seen_guids: set[str] = set()
+            seen_codes: set[str] = set()
+            added = 0
+            for position, item in enumerate(prepared, start=1):
+                guid = _clean(getattr(item, "work_guid", None))
+                code = _clean(getattr(item, "work_code", None))
+                name = _required_text(
+                    getattr(item, "work_name", None),
+                    "Наименование работы",
+                )
+                if (guid and guid in seen_guids) or (code and code in seen_codes):
+                    continue
+                self.connection.execute(
+                    """
+                    INSERT INTO work_list_items (
+                        id, work_list_id, position, work_code, work_name, work_guid,
+                        unit_name, price, volume, quantity, cost, allocation_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        work_list_id,
+                        position,
+                        code,
+                        name,
+                        guid,
+                        _clean(getattr(item, "unit_name", None)),
+                        _clean(getattr(item, "price", None)),
+                        _clean(getattr(item, "volume", None)),
+                        _clean(getattr(item, "quantity", None)),
+                        _clean(getattr(item, "cost", None)),
+                        _clean(getattr(item, "allocation_percent", None)),
+                    ),
+                )
+                if guid:
+                    seen_guids.add(guid)
+                if code:
+                    seen_codes.add(code)
+                added += 1
+
+            self.connection.execute(
+                """
+                UPDATE work_lists
+                SET template_id = ?, planned_total = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    _clean(template_id),
+                    _now(),
+                    work_list_id,
+                ),
+            )
+        return added
 
     def create_work_template_from_work_list(
         self,
@@ -3276,6 +3422,8 @@ class Repository:
                 updates["status"] = str(WorkListStatus.GIS_DRAFT)
             elif normalized == "APPROVED":
                 updates["status"] = str(WorkListStatus.PLACED)
+            elif normalized == "CANCELLED":
+                updates["status"] = str(WorkListStatus.CANCELLED)
             elif normalized == "NOT_FOUND":
                 updates["status"] = str(WorkListStatus.LOCAL)
                 updates["gis_work_list_guid"] = None

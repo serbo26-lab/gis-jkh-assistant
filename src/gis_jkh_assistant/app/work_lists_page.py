@@ -228,6 +228,16 @@ class WorkListsPage(QWidget):
         self.export_button = QPushButton("Сформировать XLSX из выбранного перечня")
         self.upload_to_gis_button = QPushButton("Загрузить в ГИС ЖКХ")
         self.sync_gis_button = QPushButton("Проверить статус в ГИС")
+        self.cancel_gis_button = QPushButton("Отменить перечень в ГИС ЖКХ")
+        self.cancel_gis_button.setObjectName("DangerButton")
+        self.cancel_gis_button.setToolTip(
+            "Отменить размещенный перечень. ГИС ЖКХ удалит связанные планирование, "
+            "фиксацию и оценку качества; после этого состав перечня можно изменить."
+        )
+        self.save_editable_gis_button = QPushButton("Сохранить изменения в ГИС ЖКХ")
+        self.save_editable_gis_button.setToolTip(
+            "Сохранить новый состав отмененного перечня или проекта напрямую в ГИС ЖКХ."
+        )
         self.approve_gis_button = QPushButton("Разместить информацию")
         self.approve_gis_button.setObjectName("PrimaryButton")
 
@@ -241,6 +251,8 @@ class WorkListsPage(QWidget):
         gis_actions.addWidget(self.export_button, 1, 0)
         gis_actions.addWidget(self.upload_to_gis_button, 1, 1)
         gis_actions.addWidget(self.sync_gis_button, 1, 2)
+        gis_actions.addWidget(self.cancel_gis_button, 2, 0)
+        gis_actions.addWidget(self.save_editable_gis_button, 2, 1)
         gis_actions.addWidget(self.approve_gis_button, 2, 2)
         gis_actions.setColumnStretch(1, 1)
         context_layout.addLayout(gis_actions, 8, 0, 1, 4)
@@ -359,6 +371,15 @@ class WorkListsPage(QWidget):
         self.remove_works_button.setToolTip(
             "Удалить выбранные строки из локального перечня."
         )
+        self.clear_works_button = QPushButton("Очистить состав")
+        self.clear_works_button.setToolTip(
+            "Удалить все работы и услуги из локального состава перечня."
+        )
+        self.replace_from_template_button = QPushButton("Заменить по шаблону")
+        self.replace_from_template_button.setToolTip(
+            "Полностью заменить состав перечня работами выбранного сверху шаблона, "
+            "сопоставленными с актуальным справочником ГИС ЖКХ."
+        )
         self.save_as_template_button = QPushButton("В шаблон…")
         self.save_as_template_button.setToolTip(
             "Сохранить текущий состав перечня как пользовательский шаблон."
@@ -412,12 +433,20 @@ class WorkListsPage(QWidget):
         self.export_button.clicked.connect(self._export_current_work_list)
         self.upload_to_gis_button.clicked.connect(self._upload_current_work_list_to_gis)
         self.sync_gis_button.clicked.connect(self._sync_current_work_list_from_gis)
+        self.cancel_gis_button.clicked.connect(self._cancel_current_work_list_in_gis)
+        self.save_editable_gis_button.clicked.connect(
+            self._save_editable_work_list_to_gis
+        )
         self.approve_gis_button.clicked.connect(self._approve_current_work_list_in_gis)
         self.create_button.clicked.connect(self._create_work_list)
         self.create_from_current_button.clicked.connect(self._clone_current_work_list)
         self.delete_button.clicked.connect(self._delete_work_list)
         self.add_works_button.clicked.connect(self._add_works_from_directory)
         self.remove_works_button.clicked.connect(self._remove_selected_works)
+        self.clear_works_button.clicked.connect(self._clear_all_works)
+        self.replace_from_template_button.clicked.connect(
+            self._replace_current_from_template
+        )
         self.save_as_template_button.clicked.connect(self._save_current_as_template)
         self.lazy_fill_button.clicked.connect(self._open_lazy_distribution)
         self.work_lists.currentItemChanged.connect(self._work_list_changed)
@@ -966,7 +995,7 @@ class WorkListsPage(QWidget):
             template_name = "Из ГИС ЖКХ"
         else:
             template_name = "Без шаблона"
-        status = "Локальный" if work_list.status.value == "local" else work_list.status.value
+        status = self._work_list_status_text(work_list)
 
         for row in range(self.work_lists.count()):
             item = self.work_lists.item(row)
@@ -1067,6 +1096,8 @@ class WorkListsPage(QWidget):
             return "Проект в ГИС ЖКХ"
         if value == "placed":
             return "Размещен в ГИС ЖКХ"
+        if value == "cancelled":
+            return "Отменён в ГИС ЖКХ"
         return value
 
     @staticmethod
@@ -1075,6 +1106,8 @@ class WorkListsPage(QWidget):
             text = "Проект"
         elif work_list.gis_status == "APPROVED":
             text = "Размещен"
+        elif work_list.gis_status == "CANCELLED":
+            text = "Отменён"
         elif work_list.gis_status == "IMPORT_SENT":
             text = "Файл отправлен на обработку"
         elif work_list.gis_status == "NOT_FOUND":
@@ -1124,6 +1157,10 @@ class WorkListsPage(QWidget):
         self.sync_gis_button.setEnabled(enabled)
         self.upload_to_gis_button.setEnabled(
             enabled and gis_status in {None, "", "NOT_FOUND"}
+        )
+        self.cancel_gis_button.setEnabled(enabled and gis_status == "APPROVED")
+        self.save_editable_gis_button.setEnabled(
+            enabled and gis_status in {"CANCELLED", "DRAFT"}
         )
         self.approve_gis_button.setEnabled(enabled and gis_status == "DRAFT")
 
@@ -1543,6 +1580,7 @@ class WorkListsPage(QWidget):
     def _gis_command_payload(work_list, house) -> dict:
         return {
             "houseGuid": house.house_object_guid,
+            "workListGuid": work_list.gis_work_list_guid,
             "startYear": work_list.start_year,
             "startMonth": work_list.start_month,
             "endYear": work_list.end_year,
@@ -1871,6 +1909,8 @@ class WorkListsPage(QWidget):
                 message = "Перечень найден в ГИС ЖКХ со статусом «Проект»."
             elif status == "APPROVED":
                 message = "Перечень размещен в ГИС ЖКХ."
+            elif status == "CANCELLED":
+                message = "Перечень найден в ГИС ЖКХ со статусом «Отменён»."
             else:
                 message = "Перечень с таким домом и периодом в ГИС ЖКХ не найден."
             QMessageBox.information(self, "Статус ГИС ЖКХ", message)
@@ -1921,6 +1961,290 @@ class WorkListsPage(QWidget):
             timeout=90.0,
         )
 
+    def _cancel_current_work_list_in_gis(self) -> None:
+        context = self._current_gis_context()
+        if not context:
+            return
+        work_list, house = context
+        if str(work_list.gis_status or "").upper() != "APPROVED":
+            QMessageBox.information(
+                self,
+                "Перечень не размещен",
+                "Отменить можно только перечень в статусе «Размещен».",
+            )
+            return
+        if not work_list.gis_work_list_guid:
+            return
+
+        message = QMessageBox(self)
+        message.setWindowTitle("Отменить перечень в ГИС ЖКХ?")
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setText(
+            f"Будет отменён перечень {work_list.period_label} для дома:\n"
+            f"{house.address}"
+        )
+        message.setInformativeText(
+            "ГИС ЖКХ удалит связанные с этим перечнем планирование, фиксацию "
+            "и оценку качества. После успешной отмены эти разделы будут очищены "
+            "и в локальной базе программы. Сам перечень и его текущий состав "
+            "останутся доступны для редактирования.\n\nПродолжить?"
+        )
+        cancel_button = message.addButton(
+            "Отменить перечень",
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        message.addButton("Назад", QMessageBox.ButtonRole.RejectRole)
+        message.exec()
+        if message.clickedButton() is not cancel_button:
+            return
+
+        payload = self._gis_command_payload(work_list, house)
+        payload["workListGuid"] = work_list.gis_work_list_guid
+
+        def on_success(work_list_id: str, result: dict) -> None:
+            self._apply_gis_result(work_list_id, result)
+            if str(result.get("gisStatus") or "").upper() == "CANCELLED":
+                self.repository.clear_work_list_downstream_data(work_list_id)
+            self.refresh_work_lists(select_id=work_list_id)
+            QMessageBox.information(
+                self,
+                "Перечень отменён",
+                "Перечень отменён в ГИС ЖКХ. Планирование, фиксация и оценка "
+                "для него очищены. Теперь можно удалить старые работы, добавить "
+                "актуальные и сохранить изменённый перечень как проект.",
+            )
+
+        self._run_integration_command(
+            work_list_id=work_list.id,
+            command_type="cancel_work_list",
+            payload=payload,
+            success_callback=on_success,
+            busy_text="Отмена перечня в ГИС ЖКХ…",
+            timeout=90.0,
+        )
+
+    def _save_editable_work_list_to_gis(self) -> None:
+        context = self._current_gis_context()
+        if not context:
+            return
+        work_list, house = context
+        status = str(work_list.gis_status or "").upper()
+        if status not in {"CANCELLED", "DRAFT"}:
+            QMessageBox.information(
+                self,
+                "Перечень недоступен для изменения",
+                "Прямое сохранение состава доступно для отменённого перечня "
+                "или проекта ГИС ЖКХ.",
+            )
+            return
+        if not work_list.gis_work_list_guid:
+            return
+
+        items = self.repository.list_work_list_items(work_list.id)
+        if not items:
+            QMessageBox.warning(
+                self,
+                "Пустой состав",
+                "Сначала добавьте актуальные работы и услуги. Пустой перечень "
+                "в ГИС ЖКХ не сохраняется.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Сохранить изменения в ГИС ЖКХ?",
+            f"В ГИС ЖКХ будет сохранён текущий состав перечня "
+            f"{work_list.period_label}.\n\n"
+            f"Работ и услуг: {len(items)}.\n"
+            "Каждая строка будет проверена по актуальному справочнику организации.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        payload = self._gis_command_payload(work_list, house)
+        payload["workListGuid"] = work_list.gis_work_list_guid
+        payload["items"] = [
+            {
+                "workGuid": item.work_guid,
+                "workCode": item.work_code,
+                "workName": item.work_name,
+                "price": item.price,
+                "volume": item.volume,
+                "quantity": item.quantity,
+                "cost": item.cost,
+            }
+            for item in items
+        ]
+
+        def on_success(work_list_id: str, result: dict) -> None:
+            self._apply_gis_result(work_list_id, result)
+            self.repository.clear_work_list_downstream_data(work_list_id)
+            self.refresh_work_lists(select_id=work_list_id)
+            QMessageBox.information(
+                self,
+                "Изменения сохранены",
+                "Новый состав сохранён в ГИС ЖКХ как проект. После проверки "
+                "значений его можно разместить кнопкой «Разместить информацию».",
+            )
+
+        self._run_integration_command(
+            work_list_id=work_list.id,
+            command_type="save_editable_work_list",
+            payload=payload,
+            success_callback=on_success,
+            busy_text="Сохранение изменённого перечня в ГИС ЖКХ…",
+            timeout=120.0,
+        )
+
+    def _clear_all_works(self) -> None:
+        self._save_period()
+        if not self._current_work_list_id:
+            return
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None:
+            return
+        items = self.repository.list_work_list_items(work_list.id)
+        if not items:
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            "Очистить состав перечня?",
+            f"Из локального перечня будут удалены все работы и услуги: "
+            f"{len(items)}.\n\n"
+            "Это удобно перед полной актуализацией старого перечня. "
+            "Изменения попадут в ГИС ЖКХ только после нажатия "
+            "«Сохранить изменения в ГИС ЖКХ».",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.repository.clear_work_list_downstream_data(work_list.id)
+            deleted = self.repository.clear_work_list_items(work_list.id)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Нельзя очистить состав", str(exc))
+            return
+        self._load_work_list(work_list.id)
+        self.save_status.setText(f"Удалено работ: {deleted}")
+
+    def _replace_current_from_template(self) -> None:
+        self._save_period()
+        if not self._current_work_list_id:
+            return
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None:
+            return
+
+        template_id = self.template_combo.currentData()
+        if not template_id:
+            QMessageBox.information(
+                self,
+                "Не выбран шаблон",
+                "В поле «Шаблон перечня» выберите шаблон, которым нужно "
+                "полностью заменить текущий состав.",
+            )
+            return
+
+        template = self.repository.get_work_template(template_id)
+        template_items = self.repository.list_work_template_items(template_id)
+        if template is None or not template_items:
+            QMessageBox.warning(
+                self,
+                "Пустой шаблон",
+                "В выбранном шаблоне нет работ и услуг.",
+            )
+            return
+
+        def replace_from_directory(options: list[dict]) -> None:
+            by_guid = {
+                str(option.get("guid") or ""): option
+                for option in options
+                if option.get("guid")
+            }
+            by_code = {
+                str(option.get("code") or ""): option
+                for option in options
+                if option.get("code")
+            }
+            matched = []
+            missing = []
+            for item in template_items:
+                option = (
+                    by_guid.get(str(item.work_guid or ""))
+                    or by_code.get(str(item.work_code or ""))
+                )
+                if option is None:
+                    missing.append(item)
+                    continue
+                matched.append(
+                    self._directory_option_item(
+                        option,
+                        position=len(matched) + 1,
+                        template_item=item,
+                    )
+                )
+
+            if not matched:
+                QMessageBox.warning(
+                    self,
+                    "Работы шаблона недоступны",
+                    "Ни одна работа выбранного шаблона не найдена в актуальном "
+                    "справочнике этой управляющей организации.",
+                )
+                return
+
+            details = (
+                f"Текущий состав будет полностью заменён шаблоном "
+                f"«{template.name}».\n"
+                f"Доступно актуальных работ: {len(matched)} из "
+                f"{len(template_items)}."
+            )
+            if missing:
+                names = "\n".join(
+                    f"• {item.work_name}" for item in missing[:8]
+                )
+                if len(missing) > 8:
+                    names += f"\n… ещё: {len(missing) - 8}"
+                details += (
+                    "\n\nРаботы, отсутствующие в актуальном справочнике, "
+                    "не будут перенесены:\n" + names
+                )
+
+            answer = QMessageBox.warning(
+                self,
+                "Заменить состав перечня?",
+                details + "\n\nПродолжить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                self.repository.clear_work_list_downstream_data(work_list.id)
+                added = self.repository.replace_work_list_items(
+                    work_list.id,
+                    matched,
+                    template_id=template_id,
+                )
+            except ValueError as exc:
+                QMessageBox.warning(
+                    self,
+                    "Не удалось заменить состав",
+                    str(exc),
+                )
+                return
+            self._load_work_list(work_list.id)
+            self.save_status.setText(f"Состав заменён: {added} работ")
+
+        self._load_organization_directory(
+            replace_from_directory,
+            busy_text="Сопоставление шаблона с актуальным справочником…",
+        )
+
     def _add_works_from_directory(self) -> None:
         self._save_period()
         if not self._current_work_list_id:
@@ -1928,12 +2252,17 @@ class WorkListsPage(QWidget):
         work_list = self.repository.get_work_list(self._current_work_list_id)
         if not work_list:
             return
-        if str(work_list.gis_status or "").upper() not in {"", "NOT_FOUND"}:
+        if str(work_list.gis_status or "").upper() not in {
+            "",
+            "NOT_FOUND",
+            "CANCELLED",
+            "DRAFT",
+        }:
             QMessageBox.information(
                 self,
-                "Состав уже передан в ГИС ЖКХ",
-                "Добавление и удаление работ доступно только у локального перечня, "
-                "который ещё не загружен в ГИС ЖКХ.",
+                "Состав сейчас недоступен для изменения",
+                "Добавление и удаление работ доступно у локального, отменённого "
+                "перечня либо проекта ГИС ЖКХ.",
             )
             return
 
@@ -2144,23 +2473,33 @@ class WorkListsPage(QWidget):
         )
         composition_editable = bool(
             work_list
-            and str(work_list.gis_status or "").upper() in {"", "NOT_FOUND"}
+            and str(work_list.gis_status or "").upper()
+            in {"", "NOT_FOUND", "CANCELLED", "DRAFT"}
         )
+        for widget in (
+            self.delete_button,
+            self.create_from_current_button,
+            self.export_button,
+            self.save_as_template_button,
+        ):
+            widget.setEnabled(enabled)
+
         for widget in (
             self.start_month,
             self.start_year,
             self.end_month,
             self.end_year,
             self.items_table,
-            self.delete_button,
-            self.create_from_current_button,
-            self.export_button,
             self.lazy_fill_button,
-            self.save_as_template_button,
         ):
-            widget.setEnabled(enabled)
+            widget.setEnabled(enabled and composition_editable)
+
         self.add_works_button.setEnabled(enabled and composition_editable)
         self.remove_works_button.setEnabled(enabled and composition_editable)
+        self.clear_works_button.setEnabled(enabled and composition_editable)
+        self.replace_from_template_button.setEnabled(
+            enabled and composition_editable
+        )
         self._refresh_gis_action_buttons()
 
     def set_view_mode(self, mode: str) -> None:
@@ -2196,13 +2535,17 @@ class WorkListsPage(QWidget):
             self.gis_actions.addWidget(self.export_button, 1, 0)
             self.gis_actions.addWidget(self.upload_to_gis_button, 1, 1)
             self.gis_actions.addWidget(self.sync_gis_button, 1, 2)
+            self.gis_actions.addWidget(self.cancel_gis_button, 2, 0)
+            self.gis_actions.addWidget(self.save_editable_gis_button, 2, 1)
             self.gis_actions.addWidget(self.approve_gis_button, 2, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
             self.items_actions.addWidget(self.add_works_button, 0, 0)
             self.items_actions.addWidget(self.remove_works_button, 0, 1)
-            self.items_actions.addWidget(self.save_as_template_button, 0, 2)
-            self.items_actions.addWidget(self.lazy_fill_button, 0, 3)
+            self.items_actions.addWidget(self.clear_works_button, 0, 2)
+            self.items_actions.addWidget(self.replace_from_template_button, 0, 3)
+            self.items_actions.addWidget(self.save_as_template_button, 1, 0, 1, 2)
+            self.items_actions.addWidget(self.lazy_fill_button, 1, 2, 1, 2)
             for column in range(4):
                 self.items_actions.setColumnStretch(column, 1)
             self.items_table.setMinimumHeight(440)
@@ -2228,13 +2571,17 @@ class WorkListsPage(QWidget):
             self.gis_actions.addWidget(self.export_button, 1, 0)
             self.gis_actions.addWidget(self.upload_to_gis_button, 1, 1)
             self.gis_actions.addWidget(self.sync_gis_button, 1, 2)
+            self.gis_actions.addWidget(self.cancel_gis_button, 2, 0)
+            self.gis_actions.addWidget(self.save_editable_gis_button, 2, 1)
             self.gis_actions.addWidget(self.approve_gis_button, 2, 2)
             self.gis_actions.setColumnStretch(1, 1)
 
             self.items_actions.addWidget(self.add_works_button, 0, 0)
             self.items_actions.addWidget(self.remove_works_button, 0, 1)
-            self.items_actions.addWidget(self.save_as_template_button, 1, 0)
-            self.items_actions.addWidget(self.lazy_fill_button, 1, 1)
+            self.items_actions.addWidget(self.clear_works_button, 1, 0)
+            self.items_actions.addWidget(self.replace_from_template_button, 1, 1)
+            self.items_actions.addWidget(self.save_as_template_button, 2, 0)
+            self.items_actions.addWidget(self.lazy_fill_button, 2, 1)
             self.items_actions.setColumnStretch(0, 1)
             self.items_actions.setColumnStretch(1, 1)
             self.items_table.setMinimumHeight(400)
@@ -2262,15 +2609,19 @@ class WorkListsPage(QWidget):
             self.gis_actions.addWidget(self.load_export_template_file_button, 2, 0, 1, 2)
             self.gis_actions.addWidget(self.export_button, 3, 0, 1, 2)
             self.gis_actions.addWidget(self.upload_to_gis_button, 4, 0, 1, 2)
-            self.gis_actions.addWidget(self.sync_gis_button, 5, 0)
-            self.gis_actions.addWidget(self.approve_gis_button, 5, 1)
+            self.gis_actions.addWidget(self.sync_gis_button, 5, 0, 1, 2)
+            self.gis_actions.addWidget(self.cancel_gis_button, 6, 0)
+            self.gis_actions.addWidget(self.save_editable_gis_button, 6, 1)
+            self.gis_actions.addWidget(self.approve_gis_button, 7, 0, 1, 2)
             self.gis_actions.setColumnStretch(0, 1)
             self.gis_actions.setColumnStretch(1, 1)
 
             self.items_actions.addWidget(self.add_works_button, 0, 0)
             self.items_actions.addWidget(self.remove_works_button, 0, 1)
-            self.items_actions.addWidget(self.save_as_template_button, 1, 0)
-            self.items_actions.addWidget(self.lazy_fill_button, 1, 1)
+            self.items_actions.addWidget(self.clear_works_button, 1, 0)
+            self.items_actions.addWidget(self.replace_from_template_button, 1, 1)
+            self.items_actions.addWidget(self.save_as_template_button, 2, 0)
+            self.items_actions.addWidget(self.lazy_fill_button, 2, 1)
             self.items_actions.setColumnStretch(0, 1)
             self.items_actions.setColumnStretch(1, 1)
             self.items_table.setMinimumHeight(360)

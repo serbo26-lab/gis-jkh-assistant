@@ -29,6 +29,7 @@ class WorkListStatus(StrEnum):
     LOCAL = "local"
     GIS_DRAFT = "gis_draft"
     PLACED = "placed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)
