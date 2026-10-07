@@ -1223,10 +1223,26 @@ async function runGisCommand(command) {
         });
       }
 
+      const period =
+        localPayload?.startYear && localPayload?.startMonth &&
+        localPayload?.endYear && localPayload?.endMonth
+          ? {
+              from: {
+                year: Number(localPayload.startYear),
+                month: Number(localPayload.startMonth)
+              },
+              to: {
+                year: Number(localPayload.endYear),
+                month: Number(localPayload.endMonth)
+              },
+              yearsCount: remote?.period?.yearsCount ?? 0
+            }
+          : remote.period;
+
       return {
         guid: remote.guid,
         houseGuid: remote.houseGuid,
-        period: remote.period,
+        period,
         attachmentList: Array.isArray(remote.attachmentList)
           ? remote.attachmentList
           : [],
