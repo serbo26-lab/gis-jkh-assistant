@@ -41,7 +41,7 @@ from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .fixation_dialogs import AddUnplannedWorkDialog, FixationPhotoDialog
 from .gis_integration_worker import GisIntegrationWorker
-from .widgets import SafeComboBox
+from .widgets import ActionToolbar, SafeComboBox, ScopeSwitcher, StatusStrip
 
 
 _MONTHS = (
@@ -123,7 +123,7 @@ class FixationPage(QWidget):
         root.addWidget(intro)
 
         context = QFrame()
-        context.setObjectName("Card")
+        context.setObjectName("ContextBar")
         grid = QGridLayout(context)
         grid.setContentsMargins(14, 12, 14, 12)
         grid.setHorizontalSpacing(10)
@@ -186,50 +186,52 @@ class FixationPage(QWidget):
         self.month_status.setWordWrap(True)
         month_layout.addWidget(self.month_status)
 
-        fill_actions = QHBoxLayout()
-        self.fill_month_button = QPushButton("Заполнить по плану этот месяц")
+        self.fill_month_button = QPushButton("Заполнить по плану")
         self.fill_year_button = QPushButton("Заполнить по плану весь год")
-        self.clear_month_button = QPushButton("Очистить факт плановых работ")
-        fill_actions.addWidget(self.fill_month_button)
-        fill_actions.addWidget(self.fill_year_button)
-        fill_actions.addWidget(self.clear_month_button)
-        fill_actions.addStretch(1)
-        month_layout.addLayout(fill_actions)
-
-        publish_actions = QHBoxLayout()
-        self.load_month_button = QPushButton("Загрузить фиксацию из ГИС ЖКХ")
+        self.fill_year_button.setVisible(False)
+        self.clear_month_button = QPushButton("Очистить факт")
+        self.load_month_button = QPushButton("Загрузить фиксацию")
         self.load_month_button.setToolTip(
-            "Получить фактические показатели выбранного месяца из ГИС ЖКХ."
+            "Получить фактические показатели из ГИС ЖКХ для выбранной области."
         )
         self.load_year_button = QPushButton(
             "Загрузить фиксацию за доступные месяцы года"
         )
-        self.load_year_button.setToolTip(
-            "Последовательно получить фиксацию из ГИС ЖКХ за весь доступный "
-            "период выбранного перечня в этом году."
-        )
-        self.publish_month_button = QPushButton("Разместить выбранный месяц")
+        self.load_year_button.setVisible(False)
+        self.publish_month_button = QPushButton("Разместить в ГИС ЖКХ")
+        self.publish_month_button.setObjectName("PrimaryButton")
         self.publish_year_button = QPushButton("Разместить заполненные месяцы года")
-        self.publish_year_button.setObjectName("PrimaryButton")
+        self.publish_year_button.setVisible(False)
         self.continue_queue_button = QPushButton("Продолжить очередь")
         self.continue_queue_button.setVisible(False)
-        publish_actions.addWidget(self.load_month_button)
-        publish_actions.addWidget(self.load_year_button)
-        publish_actions.addWidget(self.publish_month_button)
-        publish_actions.addWidget(self.publish_year_button)
-        publish_actions.addWidget(self.continue_queue_button)
-        publish_actions.addStretch(1)
-        month_layout.addLayout(publish_actions)
 
-        self.queue_progress = QProgressBar()
-        self.queue_progress.setVisible(False)
-        self.queue_progress.setTextVisible(True)
-        month_layout.addWidget(self.queue_progress)
+        actions = ActionToolbar()
+        self.scope_switcher = ScopeSwitcher(
+            "month",
+            "Выбранный месяц",
+            "period",
+            "Доступный период",
+        )
+        actions.add_widget(self.scope_switcher)
+        actions.add_separator()
+        actions.add_label("Локально")
+        actions.add_widget(self.fill_month_button)
+        actions.add_widget(self.clear_month_button)
+        actions.add_separator()
+        actions.add_label("Из ГИС")
+        actions.add_widget(self.load_month_button)
+        actions.add_separator()
+        actions.add_label("В ГИС")
+        actions.add_widget(self.publish_month_button)
+        actions.add_stretch()
+        month_layout.addWidget(actions)
 
-        self.queue_label = QLabel("")
-        self.queue_label.setObjectName("Muted")
-        self.queue_label.setWordWrap(True)
-        month_layout.addWidget(self.queue_label)
+        self.queue_status_strip = StatusStrip("")
+        self.queue_progress = self.queue_status_strip.progress
+        self.queue_label = self.queue_status_strip.label
+        self.queue_status_strip.add_action(self.continue_queue_button)
+        self.queue_status_strip.setVisible(False)
+        month_layout.addWidget(self.queue_status_strip)
 
         root.addWidget(month_card)
 
@@ -330,13 +332,10 @@ class FixationPage(QWidget):
         self.house_combo.currentIndexChanged.connect(self._house_changed)
         self.work_list_combo.currentIndexChanged.connect(self._work_list_changed)
         self.year_combo.currentIndexChanged.connect(self._year_changed)
-        self.fill_month_button.clicked.connect(self._fill_month_from_plan)
-        self.fill_year_button.clicked.connect(self._fill_year_from_plan)
-        self.clear_month_button.clicked.connect(self._clear_month)
-        self.load_month_button.clicked.connect(self._load_selected_month_from_gis)
-        self.load_year_button.clicked.connect(self._load_year_from_gis)
-        self.publish_month_button.clicked.connect(self._publish_selected_month)
-        self.publish_year_button.clicked.connect(self._publish_year)
+        self.fill_month_button.clicked.connect(self._fill_scope_from_plan)
+        self.clear_month_button.clicked.connect(self._clear_scope)
+        self.load_month_button.clicked.connect(self._load_scope_from_gis)
+        self.publish_month_button.clicked.connect(self._publish_scope)
         self.continue_queue_button.clicked.connect(self._continue_queue)
         self.table.itemChanged.connect(self._table_item_changed)
         self.unplanned_table.itemChanged.connect(self._unplanned_item_changed)
@@ -914,6 +913,70 @@ class FixationPage(QWidget):
         self._refresh_period_status()
         self._refresh_year_status()
 
+    def _scope_is_period(self) -> bool:
+        return self.scope_switcher.scope() == "period"
+
+    def _fill_scope_from_plan(self) -> None:
+        if self._scope_is_period():
+            self._fill_year_from_plan()
+        else:
+            self._fill_month_from_plan()
+
+    def _load_scope_from_gis(self) -> None:
+        if self._scope_is_period():
+            self._load_year_from_gis()
+        else:
+            self._load_selected_month_from_gis()
+
+    def _publish_scope(self) -> None:
+        if self._scope_is_period():
+            self._publish_year()
+        else:
+            self._publish_selected_month()
+
+    def _clear_scope(self) -> None:
+        if not self._scope_is_period():
+            self._clear_month()
+            return
+        if not self._current_work_list_id or self.year_combo.currentData() is None:
+            return
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None:
+            return
+        year = int(self.year_combo.currentData())
+        periods = {
+            period.month: period
+            for period in self.repository.list_work_fixation_periods(
+                self._current_work_list_id,
+                year=year,
+            )
+        }
+        targets = [
+            periods[month]
+            for month in active_months_for_work_list(work_list, year)
+            if month in periods and self._period_has_data(periods[month].id)
+        ]
+        if not targets:
+            QMessageBox.information(
+                self,
+                "Нет данных для очистки",
+                "В доступном периоде нет заполненных месяцев.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Очистить фактические показатели периода?",
+            f"Будут очищены фактические показатели плановых работ в "
+            f"{len(targets)} заполненных месяцах. Внеплановые работы и фотографии "
+            "останутся без изменений. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        for period in targets:
+            self.repository.clear_work_fixation_period(period.id)
+        self._month_changed()
+        self._refresh_year_status()
+
     def _fill_month_from_plan(self) -> None:
         if not self._current_period_id:
             return
@@ -1273,6 +1336,8 @@ class FixationPage(QWidget):
         self._queue_failed_period_id = None
         self._queue_mode = "load"
         self.continue_queue_button.setVisible(False)
+        self.queue_status_strip.setVisible(True)
+        self.queue_status_strip.setVisible(True)
         self.queue_progress.setVisible(True)
         self.queue_progress.setRange(0, len(self._queue_period_ids))
         self.queue_progress.setValue(0)
