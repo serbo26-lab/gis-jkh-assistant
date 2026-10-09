@@ -91,6 +91,7 @@ jobs:
           $sha = "${{ github.sha }}"
           $asset = "dist/GIS.JKH.Assistant-windows.zip"
           $title = "ГИС ЖКХ Ассистент — $version"
+          $helperVersion = (Get-Content browser-extension/manifest.json -Raw | ConvertFrom-Json).version
           $changelog = Get-Content CHANGELOG.md -Raw -Encoding utf8
           $section = [regex]::Match($changelog, "(?ms)^## " + [regex]::Escape($version) + " —.*?(?=^## |\z)").Value.Trim()
           if (-not $section) { throw "Missing CHANGELOG section for $version" }
@@ -104,7 +105,7 @@ jobs:
           Установка помощника: Настройки → Связь с ГИС ЖКХ → Установить браузерный помощник…
           Мастер готовит встроенные файлы и помогает добавить расширение в Chrome, Edge или Яндекс Браузер.
           Загрузку распакованного расширения нужно подтвердить в самом браузере.
-          Для обмена требуется помощник 0.1.30 или новее. При обновлении через мастер отключите старую копию и загрузите новую папку.
+          Используйте помощник $helperVersion или новее. При обновлении через мастер отключите старую копию и загрузите новую папку.
 
           Эта сборка предназначена для проверки текущей разработки.
 

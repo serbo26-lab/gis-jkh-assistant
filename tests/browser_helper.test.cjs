@@ -394,3 +394,227 @@ for (const data of ["<html>Sign in</html>", {}, { shortName: "Пример", ogr
     assert.equal(reply.result, undefined);
   });
 }
+
+// Exercise the real save dispatcher and its post-save reconciliation. Every
+// HTTP/file-store response is local; unexpected requests fail the test.
+function qualitySavePage(localActs, remoteActs, { existing = false, shared = false } = {}) {
+  const requests = [];
+  const uploads = [];
+  let saved = existing;
+  const rows = [{ guid: "quality-work", work: { guid: "work-a", code: "001" } }];
+  if (shared) rows.push({ guid: "quality-work-b", work: { guid: "work-b", code: "002" } });
+  const context = organizationPage(async config => {
+    requests.push(config);
+    const url = config.url;
+    if (url === "/ppa/api/rest/services/ppa/organizations/details") {
+      return { data: { guid: "org-version", registryOrganizationRootEntityGuid: "root-a",
+        ogrn: orgA.ogrn, shortName: "УО А" } };
+    }
+    if (url === "/workplanning/api/rest/services/find/house/by/fias?fiasHouseCode=house-fias") {
+      return { data: { guid: "house-a" } };
+    }
+    if (url === "/workplanning/api/rest/services/search/reportingperiods") {
+      assert.equal(config.data.houseGuid, "house-a");
+      return { data: { periods: [{ guid: "period-a", workListGuid: "list-a",
+        period: { year: 2026, month: 6 }, archived: false }] } };
+    }
+    if (url === "/homemanagement/api/rest/services/houses/1/house-object") {
+      return { data: { managementOrganization: { registryOrganizationRootEntityGuid: "root-a" } } };
+    }
+    if (url === "/workplanning/api/rest/services/search/estimations") {
+      assert.equal(config.data.workReportingPeriodGuid, "period-a");
+      return { data: { estimation: { guid: saved ? "estimation-a" : null, status: "DRAFT" },
+        estimationList: rows } };
+    }
+    if (url === "/workplanning/api/rest/services/search/worklist/list-a") {
+      return { data: { guid: "list-a", status: "APPROVED", workListItems: rows } };
+    }
+    if (url === "/workplanning/api/rest/services/checkunique/quality-act") {
+      assert.equal(config.data.houseGuid, "house-a");
+      assert.equal(config.data.orgRootGuid, "root-a");
+      return { data: {} };
+    }
+    if (url.startsWith("/filestore/api/rest/services/filestore/fileDetail?fileUid=")) {
+      return { data: { virusChecked: true, downloadAvailable: true, fileSize: 4 } };
+    }
+    if (url === "/workplanning/api/rest/services/search/quality-act") {
+      assert.equal(config.data.houseGuid, "house-a");
+      assert.equal(config.data.orgRootGuid, "root-a");
+      const act = remoteActs.find(act => act.guid === config.data.guid);
+      assert.ok(act, "exact GUID lookup must exist in the fixture");
+      return { data: act };
+    }
+    if (url === "/workplanning/api/rest/services/save/estimation") {
+      assert.equal(config.method, "POST");
+      assert.equal(config.data.orgRootGuid, "root-a");
+      saved = true;
+      return { data: {} };
+    }
+    if (url === "/workplanning/api/rest/services/search/quality-acts") {
+      assert.ok(rows.some(row => row.guid === config.data.estimationItemGuid));
+      return { data: { actList: remoteActs } };
+    }
+    throw new Error(`Unexpected mock request: ${config.method} ${url}`);
+  });
+  Object.assign(context, { atob, Blob, FormData });
+  context.fetch = async (url, options) => {
+    assert.equal(url, "/filestore/api/rest/services/filestore/uploadFile");
+    assert.equal(options.method, "POST");
+    uploads.push(options.body.get("fileName"));
+    return { ok: true, json: async () => ({ guid: `uploaded-${uploads.length}` }) };
+  };
+  context.command = { type: "save_quality_assessment", payload: {
+    organizationContext: orgA, fiasHouseCode: "house-fias", houseObjectGuid: "house-object",
+    workListGuid: "list-a", year: 2026, month: 6,
+    knownEstimationGuid: existing ? "estimation-a" : null,
+    items: rows.map((row, index) => ({
+      localItemId: `local-work-${index}`, workGuid: row.work.guid, workCode: row.work.code, workName: "Работа",
+      daysPerMonth: 30, acts: localActs
+    }))
+  } };
+  return { context, requests, uploads };
+}
+
+function localQualityAct(id, date = "15.07.2026", updates = {}) {
+  return { localActId: id, number: "7", actType: "ACCEPTANCE_ACT", regDate: date,
+    periodFrom: "01.06.2026", periodTo: "30.06.2026", fileBase64: "dGVzdA==",
+    fileName: `${id}.pdf`, contentType: "application/pdf", ...updates };
+}
+
+function remoteQualityAct(guid, date = "15.07.2026 00:00:00:000", updates = {}) {
+  return { guid, number: "7", actType: "ACCEPTANCE_ACT", regDate: date,
+    period: { from: "01.06.2026", to: "30.06.2026" },
+    attachment: { contentGuid: `file-${guid}` }, ...updates };
+}
+
+async function saveQualityFixture(localActs, remoteActs, options) {
+  const fixture = qualitySavePage(localActs, remoteActs, options);
+  const reply = await vm.runInContext("runGisCommand(command)", fixture.context);
+  assert.equal(reply.ok, true, reply.error);
+  assert.ok(fixture.requests.some(request => request.url.endsWith("/save/estimation")));
+  return { ...fixture, result: JSON.parse(JSON.stringify(reply.result)) };
+}
+
+for (const reversed of [false, true]) {
+  test(`matches equal act numbers by registration date after save (reversed=${reversed})`, async () => {
+    const remoteActs = [remoteQualityAct("earlier", "01.07.2026 00:00:00:000"),
+      remoteQualityAct("later", "15.07.2026 00:00:00:000")];
+    if (reversed) remoteActs.reverse();
+    const { result, uploads } = await saveQualityFixture([
+      localQualityAct("local-earlier", "01.07.2026"), localQualityAct("local-later")
+    ], remoteActs);
+    assert.deepEqual(result.acts, [
+      { localActId: "local-earlier", contentGuid: "file-earlier", guid: "earlier" },
+      { localActId: "local-later", contentGuid: "file-later", guid: "later" }
+    ]);
+    assert.equal(uploads.length, 2);
+  });
+}
+
+test("act reconciliation still distinguishes number, type and both period bounds", async () => {
+  const { result } = await saveQualityFixture([localQualityAct("local")], [
+    remoteQualityAct("wrong-number", undefined, { number: "8" }),
+    remoteQualityAct("wrong-type", undefined, { actType: "QUALITY_VIOLATION_ACT" }),
+    remoteQualityAct("wrong-start", undefined, { period: { from: "02.06.2026", to: "30.06.2026" } }),
+    remoteQualityAct("wrong-end", undefined, { period: { from: "01.06.2026", to: "29.06.2026" } }),
+    remoteQualityAct("correct")
+  ]);
+  assert.equal(result.acts[0].guid, "correct");
+});
+
+test("does not choose the first of several acts with identical metadata", async () => {
+  const { context, requests } = qualitySavePage([localQualityAct("local")], [
+    remoteQualityAct("duplicate-a"), remoteQualityAct("duplicate-b")
+  ]);
+  const reply = await vm.runInContext("runGisCommand(command)", context);
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /однозначно сопоставить акт № 7 от 15\.07\.2026/);
+  assert.equal(reply.result, undefined, "must not return an arbitrary GUID mapping");
+  assert.equal(requests.filter(request => request.url.endsWith("/save/estimation")).length, 1);
+});
+
+for (const date of ["", null, "01.07.2026", "31.02.2026"]) {
+  test(`does not assign an act with missing, invalid or different date (${date})`, async () => {
+    const { result } = await saveQualityFixture([localQualityAct("local")], [remoteQualityAct("wrong", date)]);
+    assert.deepEqual(result.acts, [{ localActId: "local", contentGuid: "uploaded-1", guid: null }]);
+  });
+}
+
+for (const date of ["15.07.2026", "15.07.2026 12:30:00:000", "2026-07-15T00:00:00Z"]) {
+  test(`compares calendar dates independently of API time representation (${date})`, async () => {
+    const { result } = await saveQualityFixture([localQualityAct("local")], [remoteQualityAct("correct", date)]);
+    assert.equal(result.acts[0].guid, "correct");
+  });
+}
+
+test("an exact act GUID takes priority over a shared attachment and changed metadata", async () => {
+  const { result, uploads } = await saveQualityFixture([
+    localQualityAct("local", "15.07.2026", { remoteActGuid: "exact", remoteContentGuid: "shared-file" })
+  ], [
+    remoteQualityAct("other", undefined, { attachment: { contentGuid: "shared-file" } }),
+    remoteQualityAct("exact", "01.07.2026", { number: "edited", attachment: { contentGuid: "shared-file" } })
+  ]);
+  assert.equal(result.acts[0].guid, "exact");
+  assert.equal(uploads.length, 0);
+});
+
+test("does not fall back to metadata when a previously known act GUID is absent", async () => {
+  const fixture = qualitySavePage([
+    localQualityAct("local", "15.07.2026", { remoteActGuid: "known" })
+  ], [remoteQualityAct("known"), remoteQualityAct("same-metadata")]);
+  const http = fixture.context.window.angular.element().injector().get("$http");
+  fixture.context.window.angular.element = () => ({ injector: () => ({ get: () => async config => {
+    if (config.url.endsWith("/search/quality-acts")) return { data: { actList: [remoteQualityAct("same-metadata")] } };
+    return http(config);
+  } }) });
+  const reply = await vm.runInContext("runGisCommand(command)", fixture.context);
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(reply.result.acts[0].guid, "known");
+});
+
+test("keeps the other uploaded file mapping when only one act can be identified", async () => {
+  const { result } = await saveQualityFixture([
+    localQualityAct("local-earlier", "01.07.2026"), localQualityAct("local-later")
+  ], [remoteQualityAct("earlier", "01.07.2026"), remoteQualityAct("missing-date", null)]);
+  assert.deepEqual(result.acts, [
+    { localActId: "local-earlier", contentGuid: "file-earlier", guid: "earlier" },
+    { localActId: "local-later", contentGuid: "uploaded-2", guid: null }
+  ]);
+});
+
+test("matches dates while updating an existing quality draft", async () => {
+  const { result } = await saveQualityFixture([localQualityAct("local")], [
+    remoteQualityAct("earlier", "01.07.2026"), remoteQualityAct("later")
+  ], { existing: true });
+  assert.equal(result.acts[0].guid, "later");
+});
+
+test("links one newly uploaded shared act to two works without using the older namesake", async () => {
+  const { result, uploads, requests } = await saveQualityFixture([localQualityAct("shared")], [
+    remoteQualityAct("earlier", "01.07.2026"), remoteQualityAct("correct")
+  ], { shared: true });
+  assert.equal(uploads.length, 1, "shared act must be uploaded only once");
+  assert.ok(result.acts.length > 0);
+  assert.ok(result.acts.every(act => act.localActId === "shared" && act.guid === "correct"));
+  const saves = requests.filter(request => request.url.endsWith("/save/estimation"));
+  assert.equal(saves.length, 2, "first save creates the act, second links it to the other work");
+  assert.equal(saves[0].data.estimationList.length, 2);
+  assert.equal(saves[0].data.estimationList[0].qualityAct.length, 1);
+  assert.equal(saves[0].data.estimationList[1].qualityAct.length, 0, "the draft may temporarily have a row without an act");
+  assert.equal(saves[1].data.estimationList.length, 2);
+  assert.ok(saves[1].data.estimationList.every(row => row.qualityAct.some(act => act.guid === "correct")));
+});
+
+for (const date of ["", "31.02.2026"]) {
+  test(`does not infer identity when both dates are absent or invalid (${date})`, async () => {
+    const { result } = await saveQualityFixture([localQualityAct("local", date)], [remoteQualityAct("wrong", date)]);
+    assert.deepEqual(result.acts, [{ localActId: "local", contentGuid: "uploaded-1", guid: null }]);
+  });
+}
+
+test("recognizes a valid leap day as the same calendar date", async () => {
+  const { result } = await saveQualityFixture([localQualityAct("local", "29.02.2024")], [
+    remoteQualityAct("correct", "2024-02-29T23:30:00-10:00")
+  ]);
+  assert.equal(result.acts[0].guid, "correct");
+});

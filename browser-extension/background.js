@@ -6,7 +6,7 @@ const GIS_MATCH = [
 ];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.30";
+const HELPER_CODE_VERSION = "0.1.31";
 const organizationTabs = new Map();
 
 let lastKeepAliveAttemptMs = 0;
@@ -2623,9 +2623,37 @@ async function runGisCommand(command) {
       const contentGuid = String(remoteAct?.attachment?.contentGuid || "");
       const localRemoteGuid = String(localAct?.remoteActGuid || "");
       const localContentGuid = String(localAct?.remoteContentGuid || "");
-      if (localRemoteGuid && remoteGuid === localRemoteGuid) return true;
+      // The act GUID identifies the document; a reused attachment must never
+      // redirect a known act to another document.
+      if (localRemoteGuid) return remoteGuid === localRemoteGuid;
       if (localContentGuid && contentGuid === localContentGuid) return true;
       return false;
+    }
+
+    function qualityActDateKey(value) {
+      const text = String(value || "").trim();
+      const russian = /^(\d{2})\.(\d{2})\.(\d{4})(?:$|[ T])/.exec(text);
+      const iso = /^(\d{4})-(\d{2})-(\d{2})(?:$|[ T])/.exec(text);
+      if (!russian && !iso) return null;
+      const [year, month, day] = russian
+        ? [Number(russian[3]), Number(russian[2]), Number(russian[1])]
+        : [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+      const date = new Date(0);
+      date.setUTCFullYear(year, month - 1, day);
+      if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 ||
+          date.getUTCDate() !== day) return null;
+      // Compare the written calendar date, without timezone conversion.
+      return [year, month, day].join("-");
+    }
+
+    function qualityActMetadataMatchesLocal(localAct, remoteAct) {
+      const localDate = qualityActDateKey(localAct?.regDate);
+      return Boolean(localDate) &&
+        qualityActDateKey(remoteAct?.regDate) === localDate &&
+        String(remoteAct?.number || "") === String(localAct?.number || "") &&
+        String(remoteAct?.actType || "") === String(localAct?.actType || "") &&
+        String(remoteAct?.period?.from || "") === String(localAct?.periodFrom || "") &&
+        String(remoteAct?.period?.to || "") === String(localAct?.periodTo || "");
     }
 
     async function uploadQualityActFile(act) {
@@ -3227,23 +3255,24 @@ async function runGisCommand(command) {
         if (!matchedItem?.guid) continue;
         const remoteActs = await searchQualityActs(matchedItem.guid);
         for (const localAct of localItem?.acts || []) {
-          let matchedAct = remoteActs.find((remoteAct) =>
+          let candidates = remoteActs.filter((remoteAct) =>
             remoteQualityActMatchesLocal(localAct, remoteAct)
           );
-          if (!matchedAct) {
-            matchedAct =
-              remoteActs.find(
-                (remoteAct) =>
-                  String(remoteAct?.number || "") ===
-                    String(localAct?.number || "") &&
-                  String(remoteAct?.actType || "") ===
-                    String(localAct?.actType || "") &&
-                  String(remoteAct?.period?.from || "") ===
-                    String(localAct?.periodFrom || "") &&
-                  String(remoteAct?.period?.to || "") ===
-                    String(localAct?.periodTo || "")
-              ) || null;
+          if (!candidates.length && !localAct?.remoteActGuid && !localAct?.remoteContentGuid) {
+            // Metadata is only a fallback for a newly created, unlinked act.
+            candidates = remoteActs.filter((remoteAct) =>
+              qualityActMetadataMatchesLocal(localAct, remoteAct)
+            );
           }
+          if (candidates.length > 1) {
+            throw new Error(
+              "Не удалось однозначно сопоставить акт № " + String(localAct?.number || "") +
+              " от " + String(localAct?.regDate || "") +
+              ": ГИС ЖКХ вернул несколько подходящих документов. " +
+              "Загрузите оценку из ГИС и проверьте акт перед повторной отправкой."
+            );
+          }
+          const matchedAct = candidates[0] || null;
           if (!matchedAct) continue;
           mappings.push({
             localActId: localAct?.localActId || null,
@@ -3252,7 +3281,17 @@ async function runGisCommand(command) {
           });
         }
       }
-      if (mappings.length) result.acts = mappings;
+      if (mappings.length) {
+        // Keep each uploaded file's safe fallback when the fresh response has
+        // not yet returned enough metadata to identify that particular act.
+        const byLocalId = new Map(
+          (fallbackMappings || []).map((mapping) => [String(mapping.localActId), mapping])
+        );
+        for (const mapping of mappings) {
+          byLocalId.set(String(mapping.localActId), mapping);
+        }
+        result.acts = Array.from(byLocalId.values());
+      }
       return result;
     }
 
