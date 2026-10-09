@@ -13,17 +13,18 @@ def test_version_is_initialized() -> None:
     assert __version__ == "0.1.0.dev57"
 
 
-def test_readme_versions_match_sources() -> None:
+def test_version_and_helper_metadata_are_separate_from_user_readme() -> None:
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     manifest = json.loads(
         (ROOT / "browser-extension" / "manifest.json").read_text(encoding="utf-8")
     )
-    helper_version = str(manifest["version"])
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert version == __version__
-    assert f"Текущая тестовая версия приложения: **{version}**." in readme
-    assert (
-        f"Текущая версия **ГИС ЖКХ помощника**: **{helper_version}**."
-        in readme
-    )
+    assert manifest["name"] == "ГИС ЖКХ помощник"
+    assert manifest["version"]
+    assert readme.startswith("# ГИС ЖКХ Ассистент\n")
+    assert "releases/tag/dev-latest" in readme
+    assert "Настройки → Связь с ГИС ЖКХ → Установить браузерный помощник" in readme
+    assert "Текущая тестовая версия" not in readme
+    assert "Текущая версия **ГИС ЖКХ помощника**" not in readme
