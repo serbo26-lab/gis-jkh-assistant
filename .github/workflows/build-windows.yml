@@ -70,10 +70,15 @@ jobs:
           Compress-Archive -Path dist/package/* -DestinationPath "dist/GIS.JKH.Assistant-windows.zip" -Force
 
       - name: Upload workflow artifact
+        # The rolling release is mandatory; a second Actions copy is optional.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: GIS JKH Assistant ${{ env.BUILD_VERSION }} windows
           path: "dist/GIS.JKH.Assistant-windows.zip"
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Publish rolling GitHub prerelease
         if: github.ref == 'refs/heads/main'
