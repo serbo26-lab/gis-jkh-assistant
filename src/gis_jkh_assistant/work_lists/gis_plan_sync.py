@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Any
 
 from gis_jkh_assistant.database.repository import Repository
@@ -39,6 +40,44 @@ def apply_remote_work_plan(
     if not remote.get("found"):
         raise ValueError("План работ в ГИС ЖКХ не найден.")
 
+    # Validate the whole response before creating a plan or removing any values.
+    normalized = []
+    for row in remote.get("items") or []:
+        if not isinstance(row, dict):
+            raise ValueError("ГИС ЖКХ вернул некорректную строку плана.")
+        months = []
+        seen = set()
+        for value in row.get("monthlyWorks") or []:
+            if not isinstance(value, dict):
+                raise ValueError("ГИС ЖКХ вернул некорректное значение месяца плана.")
+            number = int(value.get("month") or 0)
+            count = int(value.get("count") or 0)
+            if not 1 <= number <= 12 or number in seen:
+                raise ValueError("ГИС ЖКХ вернул некорректный месяц плана.")
+            if count < 0:
+                raise ValueError("Количество в плане не может быть отрицательным.")
+            seen.add(number)
+            dates = sorted({str(v).strip() for v in value.get("dates") or [] if str(v).strip()})
+            for text in dates:
+                try:
+                    parsed = date.fromisoformat(text)
+                except ValueError as exc:
+                    raise ValueError(f"Некорректная дата плана: {text}.") from exc
+                if parsed.year != int(year) or parsed.month != number:
+                    raise ValueError("Дата должна относиться к выбранному месяцу и году плана.")
+            if len(dates) > count:
+                raise ValueError("Количество в месяце не может быть меньше числа выбранных дат.")
+            months.append(dict(value, month=number, count=count, dates=dates))
+        normalized.append(dict(row, monthlyWorks=months))
+    with repository.connection.atomic():
+        return _apply_remote_work_plan(
+            repository, work_list_id=work_list_id, year=year,
+            remote=dict(remote, items=normalized),
+        )
+
+
+def _apply_remote_work_plan(repository, *, work_list_id, year, remote):
+
     plan = repository.get_or_create_work_plan(
         work_list_id=work_list_id,
         year=int(year),
@@ -52,12 +91,14 @@ def apply_remote_work_plan(
     connection = repository.connection
     item_pairs: list[tuple[str, dict[str, Any]]] = []
     matched_ids: set[str] = set()
+    preserved_historical = [item for item in local_items if item.work_list_item_id is None
+                            and all(local is None or local.id != item.id for local, _ in pairs)]
     historical = 0
 
     with connection:
         connection.execute(
             "DELETE FROM work_plan_months WHERE work_plan_item_id IN "
-            "(SELECT id FROM work_plan_items WHERE work_plan_id = ?)",
+            "(SELECT id FROM work_plan_items WHERE work_plan_id = ? AND work_list_item_id IS NOT NULL)",
             (plan.id,),
         )
 
@@ -86,6 +127,7 @@ def apply_remote_work_plan(
                 )
             else:
                 item_id = str(local.id)
+                connection.execute("DELETE FROM work_plan_months WHERE work_plan_item_id = ?", (item_id,))
                 connection.execute(
                     "UPDATE work_plan_items SET position = ?, "
                     "work_code = COALESCE(?, work_code), work_name = ?, "
@@ -95,10 +137,6 @@ def apply_remote_work_plan(
 
             matched_ids.add(item_id)
             item_pairs.append((item_id, row))
-
-        for item in repository.list_work_plan_items(plan.id):
-            if item.work_list_item_id is None and item.id not in matched_ids:
-                connection.execute("DELETE FROM work_plan_items WHERE id = ?", (item.id,))
 
     filled_months = 0
     for item_id, row in item_pairs:
@@ -117,10 +155,11 @@ def apply_remote_work_plan(
     repository.update_work_plan_gis_state(
         plan.id,
         gis_work_plan_guid=str(remote.get("workPlanGuid") or "").strip() or None,
-        gis_status=str(remote.get("gisStatus") or "").strip() or "SAVED",
+        gis_status="MODIFIED" if preserved_historical else str(remote.get("gisStatus") or "").strip() or "SAVED",
         gis_last_error=None,
     )
-    return {"items": len(remote_items), "months": filled_months, "historical": historical}
+    return {"items": len(remote_items), "months": filled_months, "historical": historical,
+            "preserved_local": len(preserved_historical)}
 
 def local_plan_has_data(repository: Repository, plan_id: str) -> bool:
     return bool(repository.list_work_plan_months(plan_id))

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
+import sqlite3
+
 import mimetypes
 
 from PySide6.QtCore import QTimer, Qt
@@ -30,10 +34,12 @@ from gis_jkh_assistant.work_fixation import (
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .fixation_dialogs import AddUnplannedWorkDialog, FixationPhotoDialog
-from .gis_integration_worker import GisIntegrationWorker
-from .page_layouts import build_monthly
+from .gis_integration_worker import GisIntegrationWorker, connect_result
+from .page_layouts import build_monthly, compact_monthly, resize_table_rows, TableHeightObserver
 from .workflow_presenter import refresh_monthly
 from .styles import color
+from .work_row_rules import WorkRowMode, infer_work_row_mode
+from .workflow_widgets import style_danger_button
 
 
 _MONTHS = (
@@ -51,6 +57,7 @@ _MONTHS = (
     "Декабрь",
 )
 _ITEM_ID_ROLE = Qt.ItemDataRole.UserRole
+_ROW_MODE_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class FixationPage(QWidget):
@@ -86,6 +93,8 @@ class FixationPage(QWidget):
 
     def _build_ui(self) -> None:
         build_monthly(self, "fixation")
+        self._height_observer = TableHeightObserver(self.table, self._resize_planned_table)
+        self._unplanned_height_observer = TableHeightObserver(self.unplanned_table, self._resize_unplanned_table)
 
     def refresh_organizations(self) -> None:
         current = self.organization_combo.currentData()
@@ -139,27 +148,14 @@ class FixationPage(QWidget):
         self._work_list_changed()
 
     def _work_list_changed(self) -> None:
-        value = self.work_list_combo.currentData()
-        self._current_work_list_id = str(value) if value else None
+        from .selection_memory import rebuild_years
+        rebuild_years(self, self.work_list_combo.currentData())
         self._current_period_id = None
-        self._current_month = None
-
-        self.year_combo.blockSignals(True)
-        self.year_combo.clear()
-        work_list = (
-            self.repository.get_work_list(self._current_work_list_id)
-            if self._current_work_list_id
-            else None
-        )
-        if work_list:
-            for year in range(work_list.start_year, work_list.end_year + 1):
-                self.year_combo.addItem(str(year), year)
-            index = self.year_combo.findData(work_list.base_year)
-            self.year_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.year_combo.blockSignals(False)
         self._year_changed()
 
     def _year_changed(self) -> None:
+        from .selection_memory import select_year
+        select_year(self)
         work_list = (
             self.repository.get_work_list(self._current_work_list_id)
             if self._current_work_list_id
@@ -223,7 +219,7 @@ class FixationPage(QWidget):
                 month=month,
             )
             self.repository.refresh_work_fixation_plan_snapshot(period.id)
-        except ValueError as exc:
+        except (sqlite3.DatabaseError, ValueError) as exc:
             self._current_period_id = None
             self.table.setRowCount(0)
             self.unplanned_table.setRowCount(0)
@@ -264,18 +260,7 @@ class FixationPage(QWidget):
         max_rows: int,
         minimum_rows: int = 1,
     ) -> None:
-        row_count = table.rowCount()
-        visible_rows = min(max(row_count, minimum_rows), max_rows)
-        row_height = max(24, table.verticalHeader().defaultSectionSize())
-        header_height = max(26, table.horizontalHeader().height())
-        frame = table.frameWidth() * 2
-        height = header_height + visible_rows * row_height + frame + 4
-        table.setFixedHeight(height)
-        table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-            if row_count > max_rows
-            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        resize_table_rows(table, max_rows)
 
     def _resize_planned_table(self) -> None:
         self._resize_table_to_rows(self.table, max_rows=15)
@@ -291,6 +276,10 @@ class FixationPage(QWidget):
             return
 
         items = self.repository.list_work_fixation_items(self._current_period_id)
+        list_items = {
+            item.id: item
+            for item in self.repository.list_work_list_items(self._current_work_list_id)
+        } if self._current_work_list_id else {}
         self._loading = True
         self.table.blockSignals(True)
         self.table.setRowCount(len(items))
@@ -298,24 +287,32 @@ class FixationPage(QWidget):
             for row, item in enumerate(items):
                 values = (
                     item.work_name,
-                    item.planned_price,
                     item.fact_price,
-                    item.planned_amount,
                     item.fact_amount,
-                    str(item.planned_count) if item.planned_count else "",
                     str(item.fact_count) if item.fact_count is not None else "",
-                    item.planned_total_cost,
                     item.fact_total_cost,
+                    item.planned_price,
+                    item.planned_amount,
+                    str(item.planned_count) if item.planned_count else "",
+                    item.planned_total_cost,
                     "заполнено" if item_has_fact(item) else "—",
                 )
                 for column, value in enumerate(values[:9]):
                     cell = QTableWidgetItem(value or "")
                     if column == 0:
+                        cell.setToolTip(item.work_name)
                         cell.setData(_ITEM_ID_ROLE, item.id)
-                    if column not in (2, 4, 6, 8):
+                        source = list_items.get(item.work_list_item_id)
+                        cell.setData(_ROW_MODE_ROLE, str(infer_work_row_mode(
+                            price=source.price if source else item.planned_price,
+                            volume=source.volume if source else item.planned_amount,
+                            cost=source.cost if source else item.planned_total_cost,
+                        )))
+                    if column not in (1, 2, 3, 4):
                         cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    if column in (1, 3, 5, 7):
+                    if column in (5, 6, 7, 8):
                         cell.setBackground(QBrush(QColor(color("readonly"))))
+                        cell.setToolTip("Плановый показатель для сравнения. Изменяется в перечне или планировании.")
                     self.table.setItem(row, column, cell)
 
                 photos = self.repository.list_work_fixation_photos(
@@ -334,10 +331,49 @@ class FixationPage(QWidget):
                 if item_has_fact(item):
                     status.setBackground(QBrush(QColor(color("success_surface"))))
                 self.table.setItem(row, 10, status)
+                self._apply_planned_row_mode(row)
         finally:
             self.table.blockSignals(False)
             self._loading = False
         self._resize_planned_table()
+
+    def _show_plan_reference(self, visible: bool) -> None:
+        for column in (5, 6, 7, 8):
+            self.table.setColumnHidden(column, not visible)
+        self.table.name_column_sizer.resize_name()
+
+    def _planned_row_mode(self, row: int) -> WorkRowMode:
+        name = self.table.item(row, 0)
+        source_mode = name.data(_ROW_MODE_ROLE) if name else None
+        if source_mode and source_mode != WorkRowMode.EMPTY:
+            return WorkRowMode(source_mode)
+        return infer_work_row_mode(
+            price=self.table.item(row, 1).text(),
+            volume=self.table.item(row, 2).text(),
+            cost=self.table.item(row, 4).text(),
+        )
+
+    def _apply_planned_row_mode(self, row: int) -> None:
+        """Keep the input scheme of the placed list; preserve existing saved values."""
+        mode = self._planned_row_mode(row)
+        editable_columns = ({1, 2, 3} if mode == WorkRowMode.COMPONENTS
+                            else {3, 4} if mode == WorkRowMode.TOTAL else {1, 2, 3, 4})
+        was_blocked = self.table.blockSignals(True)
+        try:
+            for column in (1, 2, 3, 4):
+                cell = self.table.item(row, column)
+                editable = column in editable_columns
+                flags = cell.flags()
+                cell.setFlags(flags | Qt.ItemFlag.ItemIsEditable if editable
+                              else flags & ~Qt.ItemFlag.ItemIsEditable)
+                cell.setBackground(QBrush() if editable else QBrush(QColor(color("readonly"))))
+                cell.setToolTip("" if editable else (
+                    "В перечне выбран вариант «Количество + Стоимость»: цена и объём не используются."
+                    if mode == WorkRowMode.TOTAL else
+                    "Стоимость рассчитывается автоматически: цена × объём × количество."
+                ))
+        finally:
+            self.table.blockSignals(was_blocked)
 
     def _load_unplanned_table(self) -> None:
         if not self._current_period_id:
@@ -382,6 +418,7 @@ class FixationPage(QWidget):
                 self.unplanned_table.setCellWidget(row, 8, photo_button)
 
                 remove_button = QPushButton("Удалить")
+                style_danger_button(remove_button)
                 remove_button.clicked.connect(
                     lambda _checked=False, item_id=item.id: self._delete_unplanned(item_id)
                 )
@@ -429,9 +466,12 @@ class FixationPage(QWidget):
             self.unplanned_table.blockSignals(was_blocked)
 
     def _open_planned_photos(self, item_id: str) -> None:
+        work_name = next((self.table.item(row, 0).text() for row in range(self.table.rowCount())
+                          if self.table.item(row, 0) and self.table.item(row, 0).data(_ITEM_ID_ROLE) == item_id), "")
         dialog = FixationPhotoDialog(
             self.repository,
             fixation_item_id=item_id,
+            work_name=work_name,
             parent=self,
         )
         dialog.exec()
@@ -440,9 +480,12 @@ class FixationPage(QWidget):
         self._refresh_year_status()
 
     def _open_unplanned_photos(self, item_id: str) -> None:
+        work_name = next((self.unplanned_table.item(row, 0).text() for row in range(self.unplanned_table.rowCount())
+                          if self.unplanned_table.item(row, 0) and self.unplanned_table.item(row, 0).data(_ITEM_ID_ROLE) == item_id), "")
         dialog = FixationPhotoDialog(
             self.repository,
             unplanned_item_id=item_id,
+            work_name=work_name,
             parent=self,
         )
         dialog.exec()
@@ -518,8 +561,8 @@ class FixationPage(QWidget):
                 fact_total_cost=cost,
                 comment=text_at(7),
             )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось сохранить", error_text(exc, context=context_text(self)))
             self._load_unplanned_table()
             return
 
@@ -592,34 +635,37 @@ class FixationPage(QWidget):
                         content=path.read_bytes(),
                     )
             except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, "Не удалось добавить работу", str(exc))
+                QMessageBox.warning(self, "Не удалось добавить работу", error_text(exc, context=context_text(self)))
                 return
             self._load_unplanned_table()
             self._refresh_period_status()
             self._refresh_year_status()
 
         def failed(message: str) -> None:
-            QMessageBox.critical(self, "Не удалось получить справочник работ", message)
+            QMessageBox.critical(self, "Не удалось получить справочник работ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
 
         def finished() -> None:
             self._integration_worker = None
             self._integration_busy = False
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
     def _table_item_changed(self, cell: QTableWidgetItem) -> None:
-        if self._loading or cell.column() not in (2, 4, 6, 8):
+        if self._loading or cell.column() not in (1, 2, 3, 4):
+            return
+        if not cell.flags() & Qt.ItemFlag.ItemIsEditable:
+            self._load_table()
             return
         name_cell = self.table.item(cell.row(), 0)
         item_id = name_cell.data(_ITEM_ID_ROLE) if name_cell else None
         if not item_id:
             return
 
-        count_text = self.table.item(cell.row(), 6).text().strip()
+        count_text = self.table.item(cell.row(), 3).text().strip()
         try:
             fact_count = int(count_text) if count_text else None
             if fact_count is not None and fact_count < 0:
@@ -637,23 +683,45 @@ class FixationPage(QWidget):
             value = self.table.item(cell.row(), column).text().strip()
             return value or None
 
+        cost = text_at(4)
+        price, amount = text_at(1), text_at(2)
+        mode = self._planned_row_mode(cell.row())
+        if mode == WorkRowMode.COMPONENTS:
+            cost = calculate_fact_total_cost(price, amount, fact_count)
+            was_blocked = self.table.blockSignals(True)
+            try:
+                self.table.item(cell.row(), 4).setText(cost or "")
+            finally:
+                self.table.blockSignals(was_blocked)
+        elif mode == WorkRowMode.TOTAL:
+            # A deliberate edit repairs incompatible values left by older UI.
+            # Opening the page still preserves every historical field.
+            price = amount = None
+            was_blocked = self.table.blockSignals(True)
+            try:
+                self.table.item(cell.row(), 1).setText("")
+                self.table.item(cell.row(), 2).setText("")
+            finally:
+                self.table.blockSignals(was_blocked)
         try:
             self.repository.update_work_fixation_item(
                 str(item_id),
-                fact_price=text_at(2),
-                fact_amount=text_at(4),
+                fact_price=price,
+                fact_amount=amount,
                 fact_count=fact_count,
-                fact_total_cost=text_at(8),
+                fact_total_cost=cost,
             )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось сохранить", error_text(exc, context=context_text(self)))
             self._load_table()
             return
 
         status = self.table.item(cell.row(), 10)
         if status:
-            status.setText("заполнено")
-            status.setBackground(QBrush(QColor(color("success_surface"))))
+            filled = any((text_at(1), text_at(2), fact_count is not None, cost))
+            status.setText("заполнено" if filled else "—")
+            status.setBackground(QBrush(QColor(color("success_surface"))) if filled else QBrush())
+        self._apply_planned_row_mode(cell.row())
         self._refresh_period_status()
         self._refresh_year_status()
 
@@ -685,6 +753,9 @@ class FixationPage(QWidget):
         if not self._scope_is_period():
             self._clear_month()
             return
+        self._clear_period()
+
+    def _clear_period(self) -> None:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return
         work_list = self.repository.get_work_list(self._current_work_list_id)
@@ -727,10 +798,32 @@ class FixationPage(QWidget):
     def _fill_month_from_plan(self) -> None:
         if not self._current_period_id:
             return
-        self.repository.fill_work_fixation_from_plan(self._current_period_id)
+        if any(item_has_fact(item) for item in
+               self.repository.list_work_fixation_items(self._current_period_id)):
+            answer = QMessageBox.question(
+                self, "Заменить фактические показатели месяца?",
+                "В этом месяце уже есть фактические показатели. "
+                "Они будут заменены значениями плана. "
+                "Внеплановые работы и фотографии останутся без изменений. Продолжить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._copy_plan_to_fact(self._current_period_id)
         self._load_table()
         self._refresh_period_status()
         self._refresh_year_status()
+
+    def _copy_plan_to_fact(self, period_id: str) -> None:
+        self.repository.fill_work_fixation_from_plan(period_id)
+        for item in self.repository.list_work_fixation_items(period_id):
+            if item.fact_price or item.fact_amount:
+                cost = calculate_fact_total_cost(item.fact_price, item.fact_amount, item.fact_count)
+                self.repository.update_work_fixation_item(
+                    item.id, fact_price=item.fact_price, fact_amount=item.fact_amount,
+                    fact_count=item.fact_count, fact_total_cost=cost,
+                )
 
     def _fill_year_from_plan(self) -> None:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
@@ -742,8 +835,8 @@ class FixationPage(QWidget):
 
         answer = QMessageBox.question(
             self,
-            "Заполнить весь год по плану?",
-            "Фактические показатели всех месяцев этого года будут заменены "
+            "Заполнить доступный период по плану?",
+            "Фактические показатели доступных месяцев в границах перечня будут заменены "
             "соответствующими плановыми показателями. Продолжить?",
         )
         if answer != QMessageBox.StandardButton.Yes:
@@ -756,7 +849,7 @@ class FixationPage(QWidget):
                 month=month,
             )
             self.repository.refresh_work_fixation_plan_snapshot(period.id)
-            self.repository.fill_work_fixation_from_plan(period.id)
+            self._copy_plan_to_fact(period.id)
 
         self._month_changed()
         self._refresh_year_status()
@@ -837,14 +930,19 @@ class FixationPage(QWidget):
     def _periods_with_data_for_year(self) -> list[WorkFixationPeriod]:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return []
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None:
+            return []
+        year = int(self.year_combo.currentData())
+        active_months = set(active_months_for_work_list(work_list, year))
         periods = self.repository.list_work_fixation_periods(
             self._current_work_list_id,
-            year=int(self.year_combo.currentData()),
+            year=year,
         )
         return [
             period
             for period in periods
-            if self._period_has_data(period.id)
+            if period.month in active_months and self._period_has_data(period.id)
         ]
 
     def _load_selected_month_from_gis(self) -> None:
@@ -892,6 +990,7 @@ class FixationPage(QWidget):
 
         def succeeded(result: dict) -> None:
             if not result.get("found"):
+                self.operation_status.outcome("Фиксация в ГИС не найдена. Локальные данные сохранены.")
                 QMessageBox.information(
                     self,
                     "Фиксация в ГИС ЖКХ не найдена",
@@ -936,6 +1035,7 @@ class FixationPage(QWidget):
                 question,
             )
             if answer != QMessageBox.StandardButton.Yes:
+                self.operation_status.outcome("Загрузка фиксации отменена. Локальные данные сохранены.")
                 return
 
             try:
@@ -946,11 +1046,12 @@ class FixationPage(QWidget):
                     month=period.month,
                     remote=result,
                 )
-            except ValueError as exc:
+            except (sqlite3.DatabaseError, ValueError) as exc:
+                self.operation_status.outcome("Не удалось применить фиксацию. Изменения импорта отменены; повторите загрузку после устранения ошибки.", tone="danger")
                 QMessageBox.critical(
                     self,
                     "Не удалось применить фиксацию",
-                    str(exc),
+                    error_text(exc, context=context_text(self)),
                 )
                 return
 
@@ -958,12 +1059,15 @@ class FixationPage(QWidget):
             self._load_unplanned_table()
             self._refresh_period_status()
             self._refresh_year_status()
+            self.operation_status.outcome(f"Фиксация загружена: плановых строк {applied['planned']}, внеплановых {applied['unplanned']}.", tone="success")
             QMessageBox.information(
                 self,
                 "Фиксация загружена",
                 f"Плановых строк: {applied['planned']}.\n"
                 f"Строк с фактом: {applied['filled']}.\n"
-                f"Внеплановых работ: {applied['unplanned']}.",
+                f"Внеплановых работ: {applied['unplanned']}."
+                + ("\nЛокальные работы, отсутствующие в ответе ГИС, сохранены. Месяц помечен изменённым."
+                   if applied.get("preserved_local") else ""),
             )
 
         def progressed(progress: dict) -> None:
@@ -976,7 +1080,7 @@ class FixationPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить фиксацию из ГИС ЖКХ",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
@@ -985,8 +1089,8 @@ class FixationPage(QWidget):
             self._refresh_period_status()
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
@@ -1120,6 +1224,10 @@ class FixationPage(QWidget):
         self._start_next_queue_item()
 
     def _start_next_queue_item(self) -> None:
+        if getattr(self.window(), "_close_requested", False):
+            self._queue_running = False
+            self.queue_label.setText(f"Очередь остановлена при закрытии. Обработано месяцев: {self._queue_successes}.")
+            return
         self._queue_running = True
         if self._queue_index >= len(self._queue_period_ids):
             self._queue_running = False
@@ -1210,7 +1318,7 @@ class FixationPage(QWidget):
                         month=period.month,
                         remote=result,
                     )
-                except ValueError as exc:
+                except (sqlite3.DatabaseError, ValueError) as exc:
                     command_succeeded["value"] = False
                     failed(str(exc))
                     return
@@ -1236,7 +1344,8 @@ class FixationPage(QWidget):
             self._queue_running = False
             self.queue_label.setText(
                 f"Очередь остановлена на {_MONTHS[period.month - 1]} "
-                f"{period.year}: {message}"
+                f"{period.year}: {message}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
+                "Успешные месяцы повторно не отправляются. Устраните причину и продолжите с проблемного месяца."
             )
             self.continue_queue_button.setText(
                 f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"
@@ -1253,8 +1362,8 @@ class FixationPage(QWidget):
             if command_succeeded["value"] and self._queue_failed_period_id is None:
                 QTimer.singleShot(250, self._start_next_queue_item)
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1299,7 +1408,7 @@ class FixationPage(QWidget):
                 photos_by_unplanned=photos_by_unplanned,
                 managed_unplanned_guids_json=period.managed_unplanned_guids_json,
             )
-        except ValueError as exc:
+        except (sqlite3.DatabaseError, ValueError) as exc:
             message = str(exc)
             self.repository.update_work_fixation_gis_state(
                 period_id,
@@ -1311,7 +1420,8 @@ class FixationPage(QWidget):
                 self._queue_running = False
                 self.queue_label.setText(
                     f"Очередь остановлена на периоде {_MONTHS[period.month - 1]} "
-                    f"{period.year}: {message}"
+                    f"{period.year}: {message}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
+                "Успешные месяцы повторно не отправляются. Устраните причину и продолжите с проблемного месяца."
                 )
                 self.continue_queue_button.setText(
                     f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"
@@ -1419,12 +1529,13 @@ class FixationPage(QWidget):
                     else "текущий месяц"
                 )
                 self.queue_label.setText(
-                    f"Очередь остановлена на периоде {label}: {message}"
+                    f"Очередь остановлена на периоде {label}: {message}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
+                    "Устраните причину и продолжите; успешные месяцы повторно не отправляются."
                 )
                 self.continue_queue_button.setText(f"Продолжить с {label}")
                 self.continue_queue_button.setVisible(True)
             else:
-                QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", message)
+                QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
 
         def finished() -> None:
             self._integration_worker = None
@@ -1432,7 +1543,8 @@ class FixationPage(QWidget):
             self._refresh_integration_status()
             if queue_mode and self._queue_failed_period_id is None:
                 QTimer.singleShot(250, self._start_next_queue_item)
-            elif not queue_mode and command_succeeded["value"]:
+            elif not queue_mode and command_succeeded["value"] and not getattr(worker, "result_apply_failed", False):
+                self.operation_status.outcome(f"Фиксация за {_MONTHS[period.month - 1]} {period.year} размещена в ГИС ЖКХ.", tone="success")
                 QMessageBox.information(
                     self,
                     "Фиксация размещена",
@@ -1440,8 +1552,8 @@ class FixationPage(QWidget):
                     "успешно сохранена в ГИС ЖКХ.",
                 )
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1467,6 +1579,7 @@ class FixationPage(QWidget):
         self._refresh_gis_buttons()
 
     def set_view_mode(self, mode: str) -> None:
+        compact_monthly(self, mode != "normal")
         """Adapt month navigation density to the available window size."""
 
         columns = 12 if mode == "normal" else 6

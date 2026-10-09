@@ -34,8 +34,11 @@ def refresh(page):
 def observe_worker(worker, page):
     if page is None:
         return
+    hook = getattr(page.window(), "_observe_context_operation", None)
     strip = getattr(page, "operation_status", None)
     if strip is None or not hasattr(strip, "bind_worker"):
+        if hook:
+            hook(page, worker)
         return
     page._workflow_busy = True
     title = TITLES.get(worker.command_type, "Обмен с ГИС ЖКХ")
@@ -45,20 +48,16 @@ def observe_worker(worker, page):
     ids = getattr(page, "_queue_period_ids", [])
     queue = (page._queue_index, len(ids)) if getattr(page, "_queue_running", False) and ids and page._queue_index < len(ids) and not page._queue_failed_period_id else None
     strip.bind_worker(worker, title, context=context, queue=queue)
+    selector = getattr(page, "year_combo", None)
+    strip._operation_owner = (getattr(page, "_current_work_list_id", None), selector.currentData() if selector is not None else None)
     refresh(page)
-    plan_id = getattr(page, "_current_plan_id", None)
-    succeeded = {"value": False}
-    worker.succeeded.connect(lambda _result: succeeded.update(value=True))
-
     def finished():
         def settled():
+            if getattr(page.window(), "_closing", False):
+                return
             page._workflow_busy = False
-            if succeeded["value"] and plan_id and worker.command_type in {"load_work_plan", "save_work_plan"}:
-                from .workflow_presenter import mark_plan_synced
-                mark_plan_synced(page, plan_id)
             refresh(page)
         QTimer.singleShot(0, settled)
     worker.finished.connect(finished)
-    hook = getattr(page.window(), "_observe_context_operation", None)
     if hook:
         hook(page, worker)

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QListWidgetItem,
     QMessageBox,
+    QPushButton,
     QTableWidgetItem,
     QWidget,
 )
@@ -38,7 +39,8 @@ from gis_jkh_assistant.work_lists.gis_sync import (
     prepare_gis_work_list_sync,
 )
 
-from .gis_integration_worker import GisIntegrationWorker
+from .gis_integration_worker import GisIntegrationWorker, connect_result
+from .error_messages import context_text, error_text
 from .lazy_distribution_dialog import LazyDistributionDialog
 from .registry_layouts import build_work_lists, mirror_registry
 from .registry_workflow import (
@@ -95,6 +97,9 @@ class WorkListsPage(QWidget):
         self._current_work_list_id: str | None = None
         self._loading = False
         self._period_dirty = False
+        self._pending_items: set[tuple[str, int]] = set()
+        self._save_failed = False
+        self._editor_context: tuple[str | None, str | None, str | None] = (None, None, None)
         self._loaded_period: tuple[int, int, int, int] | None = None
 
         self._period_timer = QTimer(self)
@@ -109,12 +114,17 @@ class WorkListsPage(QWidget):
 
     def _build_ui(self) -> None:
         build_work_lists(self)
+        self.retry_save_button = QPushButton("Повторить сохранение")
+        self.retry_save_button.clicked.connect(self.flush_pending_changes)
+        self.page_header.layout().addWidget(self.retry_save_button)
+        self.retry_save_button.hide()
 
     def _refresh_workflow(self) -> None:
         self._refresh_gis_action_buttons()
 
     def refresh_organizations(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         current = self.organization_combo.currentData()
         organizations = self.repository.list_organizations()
 
@@ -163,7 +173,8 @@ class WorkListsPage(QWidget):
         self._organization_changed()
 
     def _organization_changed(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         organization_id = self.organization_combo.currentData()
 
         current_house = self.house_combo.currentData()
@@ -204,7 +215,8 @@ class WorkListsPage(QWidget):
         self.template_combo.blockSignals(False)
 
     def _house_changed(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         selected_house_id = self.house_combo.currentData()
         current = (
             self.repository.get_work_list(self._current_work_list_id)
@@ -217,6 +229,12 @@ class WorkListsPage(QWidget):
 
     def refresh_work_lists(self, select_id: str | None = None) -> None:
         """Show every work list for the selected house, independent of creation year."""
+
+        if self.has_pending_save_error():
+            self._restore_editor_context()
+            return
+        if self._period_dirty and self.flush_pending_changes() is False:
+            return
 
         house_id = self.house_combo.currentData()
         selected_id = select_id or self._current_work_list_id
@@ -325,7 +343,8 @@ class WorkListsPage(QWidget):
             return
 
         self._integration_busy = True
-        self.save_status.setText(busy_text)
+        self.operation_status.set_text(busy_text)
+        self.operation_status.show()
         self._refresh_gis_action_buttons()
         worker = GisIntegrationWorker(
             self.integration_gateway,
@@ -344,22 +363,23 @@ class WorkListsPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось получить справочник",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
             self._integration_worker = None
             self._integration_busy = False
-            self.save_status.setText("Сохранено")
+            self._update_local_save_status()
             self._refresh_gis_action_buttons()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
     def _create_work_list(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         house_id = self.house_combo.currentData()
         if not house_id:
             QMessageBox.information(
@@ -378,7 +398,7 @@ class WorkListsPage(QWidget):
                     template_id=None,
                 )
             except ValueError as exc:
-                QMessageBox.warning(self, "Нельзя создать перечень", str(exc))
+                QMessageBox.warning(self, "Нельзя создать перечень", error_text(exc, context=context_text(self)))
                 return
             self.refresh_work_lists(select_id=work_list.id)
             return
@@ -469,7 +489,7 @@ class WorkListsPage(QWidget):
                     items=matched,
                 )
             except ValueError as exc:
-                QMessageBox.warning(self, "Нельзя создать перечень", str(exc))
+                QMessageBox.warning(self, "Нельзя создать перечень", error_text(exc, context=context_text(self)))
                 return
             self.refresh_work_lists(select_id=work_list.id)
 
@@ -479,7 +499,8 @@ class WorkListsPage(QWidget):
         )
 
     def _clone_current_work_list(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             QMessageBox.information(
                 self,
@@ -510,14 +531,15 @@ class WorkListsPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Нельзя создать перечень",
-                str(exc),
+                error_text(exc, context=context_text(self)),
             )
             return
         self.year_spin.setValue(target_year)
         self.refresh_work_lists(select_id=cloned.id)
 
     def _work_list_changed(self, current: QListWidgetItem | None, _previous=None) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         work_list_id = current.data(Qt.ItemDataRole.UserRole) if current else None
         mirror_registry(self)
         self._load_work_list(work_list_id)
@@ -538,7 +560,7 @@ class WorkListsPage(QWidget):
             self.planned_total_label.setText("—")
             self.gis_state_label.setText("—")
             self.selected_label.setText("Выбранный перечень: —")
-            self.save_status.setText("Сохранено")
+            self._update_local_save_status()
             self._refresh_gis_action_buttons()
             return
 
@@ -547,6 +569,8 @@ class WorkListsPage(QWidget):
             self._loaded_period = None
             self._set_editor_enabled(False)
             return
+        house = self.repository.get_house(work_list.house_id)
+        self._editor_context = (house.organization_id if house else None, work_list.house_id, work_list.id)
 
         if str(work_list.gis_status or "").upper() == "DRAFT":
             if (
@@ -585,7 +609,7 @@ class WorkListsPage(QWidget):
         finally:
             self._loading = False
 
-        self.save_status.setText("Сохранено")
+        self._update_local_save_status()
 
     def _load_items(self, work_list_id: str) -> None:
         items = self.repository.list_work_list_items(work_list_id)
@@ -631,8 +655,11 @@ class WorkListsPage(QWidget):
         period = self._current_period()
         if period == self._loaded_period:
             self._period_dirty = False
+            self._save_failed = False
             self._period_timer.stop()
-            self.save_status.setText("Сохранено")
+            self._update_local_save_status()
+            self.retry_save_button.setVisible(bool(self._pending_items))
+            self._refresh_gis_action_buttons()
             return
 
         self._period_dirty = True
@@ -640,15 +667,19 @@ class WorkListsPage(QWidget):
         self._period_timer.start()
         self._refresh_gis_action_buttons()
 
-    def _save_period(self) -> None:
+    def _save_period(self) -> bool:
         self._period_timer.stop()
         if self._loading or not self._current_work_list_id or not self._period_dirty:
-            return
+            return True
 
         start_year, start_month, end_year, end_month = self._current_period()
         if (start_year, start_month) > (end_year, end_month):
+            self._save_failed = True
+            self._restore_editor_context()
             self.save_status.setText("Некорректный период")
-            return
+            self.retry_save_button.show()
+            self._refresh_gis_action_buttons()
+            return False
 
         try:
             self.repository.update_work_list_period(
@@ -658,12 +689,16 @@ class WorkListsPage(QWidget):
                 end_year=end_year,
                 end_month=end_month,
             )
+        except sqlite3.DatabaseError as exc:
+            self._save_failed = True
+            self._show_save_error(exc, "Период перечня")
+            return False
         except ValueError as exc:
             self.save_status.setText("Период вне срока управления")
             QMessageBox.warning(
                 self,
                 "Проверьте период перечня",
-                str(exc),
+                error_text(exc, context=context_text(self)),
             )
             if self._loaded_period:
                 (
@@ -681,17 +716,19 @@ class WorkListsPage(QWidget):
                 finally:
                     self._loading = False
             self._period_dirty = False
-            return
+            return True
 
         self._loaded_period = (start_year, start_month, end_year, end_month)
         self._period_dirty = False
-        self.save_status.setText("Сохранено")
+        self._save_failed = False
+        self._update_local_save_status()
 
         work_list = self.repository.get_work_list(self._current_work_list_id)
         if work_list:
             self.selected_label.setText(f"Выбранный перечень: {work_list.period_label}")
             self._update_list_item_text(work_list.id)
             self._refresh_gis_action_buttons()
+        return True
 
     def _update_list_item_text(self, work_list_id: str) -> None:
         work_list = self.repository.get_work_list(work_list_id)
@@ -724,6 +761,13 @@ class WorkListsPage(QWidget):
         original = table_item.data(_ORIGINAL_VALUE_ROLE)
         current = table_item.text().strip()
         if (original or "") == current:
+            id_cell = self.items_table.item(table_item.row(), 0)
+            if id_cell:
+                self._pending_items.discard((str(id_cell.data(Qt.ItemDataRole.UserRole)), table_item.column()))
+                self.retry_save_button.setVisible(self.has_pending_save_error())
+                self._refresh_gis_action_buttons()
+                if not self.has_pending_save_error():
+                    self._update_local_save_status()
             return
 
         row = table_item.row()
@@ -746,10 +790,14 @@ class WorkListsPage(QWidget):
             return
 
         self.save_status.setText("Сохраняется…")
-        self.repository.update_work_list_item(
-            item_id,
-            **{field: current or None},
-        )
+        key = (str(item_id), table_item.column())
+        try:
+            self.repository.update_work_list_item(item_id, **{field: current or None})
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            self._pending_items.add(key)
+            self._show_save_error(exc, f"Строка {row + 1}, {self.items_table.horizontalHeaderItem(table_item.column()).text()}")
+            return
+        self._pending_items.discard(key)
         table_item.setData(_ORIGINAL_VALUE_ROLE, current)
 
         self.items_table.blockSignals(True)
@@ -758,8 +806,48 @@ class WorkListsPage(QWidget):
         finally:
             self.items_table.blockSignals(False)
 
-        self.save_status.setText("Сохранено")
+        self._update_local_save_status()
         self._refresh_gis_action_buttons()
+        self.retry_save_button.setVisible(self.has_pending_save_error())
+
+    def _update_local_save_status(self) -> None:
+        text = ("Локально: есть несохранённые изменения" if self._pending_items or self._period_dirty
+                else "Сохранено локально" if self._current_work_list_id else "Перечень не выбран")
+        self.save_status.setText(text)
+
+    def has_pending_save_error(self) -> bool:
+        return bool(self._pending_items or (self._period_dirty and self._save_failed))
+
+    def _show_save_error(self, exc, field: str) -> None:
+        self._restore_editor_context()
+        self.save_status.setText("Локально: есть несохранённые изменения")
+        self.retry_save_button.show()
+        self._refresh_gis_action_buttons()
+        QMessageBox.warning(self, "Изменение не сохранено", error_text(
+            exc, context=context_text(self) + " • " + field,
+            effect="Ввод сохранён в редакторе. Переход и закрытие заблокированы до успешного сохранения.",
+            recovery="Устраните причину и нажмите «Повторить сохранение». Можно исправить введённое значение.",
+        ))
+
+    def _restore_editor_context(self) -> None:
+        """The first failed flush may follow an already changed selector signal."""
+        organization_id, house_id, work_list_id = self._editor_context
+        controls = (self.organization_combo, self.house_combo, self.registry_combo, self.work_lists)
+        blocked = [control.blockSignals(True) for control in controls]
+        try:
+            for control, identity in ((self.organization_combo, organization_id),
+                                      (self.house_combo, house_id), (self.registry_combo, work_list_id)):
+                index = control.findData(identity)
+                if index >= 0:
+                    control.setCurrentIndex(index)
+            for row in range(self.work_lists.count()):
+                item = self.work_lists.item(row)
+                if item.data(Qt.ItemDataRole.UserRole) == work_list_id:
+                    self.work_lists.setCurrentItem(item)
+                    break
+        finally:
+            for control, previous in zip(controls, blocked):
+                control.blockSignals(previous)
 
     def _apply_row_input_mode(self, row: int) -> None:
         """Mirror the mutually exclusive input schemes used by ГИС ЖКХ."""
@@ -847,8 +935,8 @@ class WorkListsPage(QWidget):
         self._refresh_gis_action_buttons()
 
     def _refresh_gis_action_buttons(self) -> None:
-        status = self.integration_gateway.status()
-        ready = status.running and status.helper_connected and status.gis_page_ready
+        from .registry_workflow import _connection_reason
+        ready = not _connection_reason(self)
         selected = self._current_work_list_id is not None
         work_list = (
             self.repository.get_work_list(self._current_work_list_id)
@@ -1001,7 +1089,8 @@ class WorkListsPage(QWidget):
         QMessageBox.information(self, "Шаблон экспорта обновлен", text)
 
     def _download_export_template_from_gis(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
 
         house_id = self.house_combo.currentData()
         house = self.repository.get_house(house_id) if house_id else None
@@ -1124,7 +1213,7 @@ class WorkListsPage(QWidget):
         def progressed(progress: dict) -> None:
             phase = str(progress.get("phase") or "")
             if phase == "queued":
-                self.save_status.setText("Ожидание предыдущей операции с ГИС ЖКХ…")
+                self.operation_status.set_text("Ожидание предыдущей операции с ГИС ЖКХ…")
                 return
             if phase != "template_export":
                 return
@@ -1134,7 +1223,7 @@ class WorkListsPage(QWidget):
                 "processing": "ГИС ЖКХ формирует шаблон…",
                 "downloading": "Скачивание готового шаблона…",
             }
-            self.save_status.setText(labels.get(status, "Получение шаблона…"))
+            self.operation_status.set_text(labels.get(status, "Получение шаблона…"))
 
         def failed(message: str) -> None:
             QMessageBox.critical(
@@ -1149,8 +1238,8 @@ class WorkListsPage(QWidget):
             self._set_integration_busy(False)
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
@@ -1165,7 +1254,8 @@ class WorkListsPage(QWidget):
     def _export_current_work_list(self) -> None:
         """Build an XLSX from the currently selected local work list."""
 
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             QMessageBox.information(
                 self,
@@ -1231,7 +1321,8 @@ class WorkListsPage(QWidget):
             output_path = output_path.with_suffix(extension)
 
         items = self.repository.list_work_list_items(work_list.id)
-        self.save_status.setText("Формируется XLSX…")
+        self.operation_status.set_text("Формируется файл Excel…")
+        self.operation_status.show()
         try:
             result = export_work_list_xlsx(
                 source_template_path=source_path,
@@ -1244,11 +1335,11 @@ class WorkListsPage(QWidget):
                 items=items,
             )
         except (WorkListExportError, OSError, zipfile.BadZipFile) as exc:
-            self.save_status.setText("Ошибка формирования")
-            QMessageBox.critical(self, "Не удалось сформировать XLSX", str(exc))
+            self.operation_status.outcome("Файл Excel не сформирован. Локальные данные перечня сохранены.", tone="danger")
+            QMessageBox.critical(self, "Не удалось сформировать XLSX", error_text(exc, context=context_text(self)))
             return
 
-        self.save_status.setText("Сохранено")
+        self._update_local_save_status()
         QMessageBox.information(
             self,
             "XLSX сформирован",
@@ -1258,7 +1349,8 @@ class WorkListsPage(QWidget):
         )
 
     def _current_gis_context(self):
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             QMessageBox.information(
                 self,
@@ -1359,7 +1451,7 @@ class WorkListsPage(QWidget):
             encoded = base64.b64encode(temporary_path.read_bytes()).decode("ascii")
             return filename, encoded
         except (WorkListExportError, OSError, zipfile.BadZipFile) as exc:
-            QMessageBox.critical(self, "Не удалось подготовить XLSX", str(exc))
+            QMessageBox.critical(self, "Не удалось подготовить XLSX", error_text(exc, context=context_text(self)))
             return None
         finally:
             if temporary_path is not None:
@@ -1369,9 +1461,10 @@ class WorkListsPage(QWidget):
         self._integration_busy = busy
         self._refresh_gis_action_buttons()
         if busy and text:
-            self.save_status.setText(text)
+            self.operation_status.set_text(text)
+            self.operation_status.show()
         elif not busy:
-            self.save_status.setText("Сохранено")
+            self._update_local_save_status()
 
     def _run_integration_command(
         self,
@@ -1403,9 +1496,10 @@ class WorkListsPage(QWidget):
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
+            success_callback(work_list_id, result)
             if command_type in {"upload_import_work_list", "save_editable_work_list"}:
                 mark_work_list_saved(self, work_list_id, sent_fingerprint)
-            success_callback(work_list_id, result)
+                self._refresh_gis_action_buttons()
 
         def failed(message: str) -> None:
             self.repository.update_work_list_gis_state(
@@ -1414,15 +1508,15 @@ class WorkListsPage(QWidget):
             )
             if self._current_work_list_id == work_list_id:
                 self._load_work_list(work_list_id)
-            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", message)
+            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
 
         def finished() -> None:
             self._integration_worker = None
             self._set_integration_busy(False)
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1436,8 +1530,12 @@ class WorkListsPage(QWidget):
             gis_last_error=None,
         )
         self.refresh_work_lists(select_id=work_list_id)
+        status = self._work_list_status_text(self.repository.get_work_list(work_list_id))
+        self.operation_status.outcome("Результат обмена применён • " + status, tone="success")
 
     def _upload_current_work_list_to_gis(self) -> None:
+        if getattr(self.window(), "_close_requested", False) or getattr(self.window(), "_closing", False):
+            return
         context = self._current_gis_context()
         if not context:
             return
@@ -1488,7 +1586,8 @@ class WorkListsPage(QWidget):
         )
 
     def _load_house_work_lists_from_gis(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
 
         organization_id = self.organization_combo.currentData()
         house_id = self.house_combo.currentData()
@@ -1610,7 +1709,7 @@ class WorkListsPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Ошибка загрузки перечней выбранного МКД",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
@@ -1618,8 +1717,8 @@ class WorkListsPage(QWidget):
             self._set_integration_busy(False)
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1825,7 +1924,8 @@ class WorkListsPage(QWidget):
         )
 
     def _clear_all_works(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             return
         work_list = self.repository.get_work_list(self._current_work_list_id)
@@ -1853,13 +1953,14 @@ class WorkListsPage(QWidget):
             self.repository.clear_work_list_downstream_data(work_list.id)
             deleted = self.repository.clear_work_list_items(work_list.id)
         except ValueError as exc:
-            QMessageBox.warning(self, "Нельзя очистить состав", str(exc))
+            QMessageBox.warning(self, "Нельзя очистить состав", error_text(exc, context=context_text(self)))
             return
         self._load_work_list(work_list.id)
-        self.save_status.setText(f"Удалено работ: {deleted}")
+        self.operation_status.outcome(f"Удалено работ: {deleted}. Состав сохранён локально.", tone="success")
 
     def _replace_current_from_template(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             return
         work_list = self.repository.get_work_list(self._current_work_list_id)
@@ -1962,11 +2063,11 @@ class WorkListsPage(QWidget):
                 QMessageBox.warning(
                     self,
                     "Не удалось заменить состав",
-                    str(exc),
+                    error_text(exc, context=context_text(self)),
                 )
                 return
             self._load_work_list(work_list.id)
-            self.save_status.setText(f"Состав заменён: {added} работ")
+            self.operation_status.outcome(f"Состав заменён: {added} работ. Сохранено локально.", tone="success")
 
         self._load_organization_directory(
             replace_from_directory,
@@ -1974,7 +2075,8 @@ class WorkListsPage(QWidget):
         )
 
     def _add_works_from_directory(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             return
         work_list = self.repository.get_work_list(self._current_work_list_id)
@@ -2017,10 +2119,10 @@ class WorkListsPage(QWidget):
             try:
                 added = self.repository.add_work_list_items(work_list.id, rows)
             except ValueError as exc:
-                QMessageBox.warning(self, "Не удалось добавить работы", str(exc))
+                QMessageBox.warning(self, "Не удалось добавить работы", error_text(exc, context=context_text(self)))
                 return
             self._load_items(work_list.id)
-            self.save_status.setText(
+            self.operation_status.outcome(
                 f"Добавлено работ: {added}" if added else "Новых работ нет"
             )
 
@@ -2030,7 +2132,8 @@ class WorkListsPage(QWidget):
         )
 
     def _remove_selected_works(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             return
         selected_rows = sorted(
@@ -2068,13 +2171,14 @@ class WorkListsPage(QWidget):
                 item_ids,
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось удалить работы", str(exc))
+            QMessageBox.warning(self, "Не удалось удалить работы", error_text(exc, context=context_text(self)))
             return
         self._load_items(self._current_work_list_id)
-        self.save_status.setText("Сохранено")
+        self._update_local_save_status()
 
     def _save_current_as_template(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             return
         items = self.repository.list_work_list_items(self._current_work_list_id)
@@ -2113,7 +2217,7 @@ class WorkListsPage(QWidget):
             )
             return
         except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось сохранить шаблон", str(exc))
+            QMessageBox.warning(self, "Не удалось сохранить шаблон", error_text(exc, context=context_text(self)))
             return
 
         self._refresh_templates()
@@ -2127,7 +2231,8 @@ class WorkListsPage(QWidget):
         )
 
     def _open_lazy_distribution(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             return
 
@@ -2155,10 +2260,11 @@ class WorkListsPage(QWidget):
                 f"{refreshed.planned_total} руб." if refreshed.planned_total else "—"
             )
         self._load_items(work_list.id)
-        self.save_status.setText("Сохранено")
+        self._update_local_save_status()
 
     def _manage_templates(self) -> None:
-        self._save_period()
+        if self.flush_pending_changes() is False:
+            return
         organization_id = self.organization_combo.currentData()
         if not organization_id:
             QMessageBox.information(
@@ -2173,7 +2279,11 @@ class WorkListsPage(QWidget):
         self.refresh_work_lists(select_id=self._current_work_list_id)
 
     def _delete_work_list(self) -> None:
-        self._save_period()
+        guard = getattr(self.window(), "can_delete_local_data", None)
+        if guard is not None and not guard():
+            return
+        if self.flush_pending_changes() is False:
+            return
         if not self._current_work_list_id:
             return
 
@@ -2242,15 +2352,25 @@ class WorkListsPage(QWidget):
 
     def _apply_view_mode(self, mode: str) -> None:
         self._view_mode = mode
-        margins = (18, 14, 18, 18) if mode == "normal" else (12, 10, 12, 12)
-        self.page_layout.setContentsMargins(*margins)
-        self.page_layout.setSpacing(10 if mode == "normal" else 8)
-        self.items_table.setMinimumHeight(300 if mode == "normal" else 260)
+        self.page_layout.setContentsMargins(12, 10, 12, 10)
+        self.page_layout.setSpacing(6)
 
     def set_compact_mode(self, compact: bool) -> None:
         """Compatibility shim for older callers."""
 
         self.set_view_mode("compact" if compact else "normal")
 
-    def flush_pending_changes(self) -> None:
-        self._save_period()
+    def flush_pending_changes(self) -> bool:
+        if not self._save_period():
+            return False
+        for item_id, column in tuple(self._pending_items):
+            for row in range(self.items_table.rowCount()):
+                id_cell = self.items_table.item(row, 0)
+                if id_cell and str(id_cell.data(Qt.ItemDataRole.UserRole)) == item_id:
+                    self._item_changed(self.items_table.item(row, column))
+                    break
+            if (item_id, column) in self._pending_items:
+                return False
+        self.retry_save_button.hide()
+        self._refresh_gis_action_buttons()
+        return True

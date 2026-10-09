@@ -259,12 +259,6 @@ def generate_acceptance_act_for_period(
             missing_costs=0,
         )
 
-    # Replace only program-generated acceptance acts. Manual/imported acts remain
-    # untouched and their linked rows are excluded from the new generated act.
-    for act in store.list_period_acts(period_id):
-        if act.generated and act.act_type == "ACCEPTANCE_ACT":
-            store.delete_act(act.id)
-
     work_rows, missing_costs = _acceptance_work_rows(
         store,
         period_id,
@@ -285,6 +279,23 @@ def generate_acceptance_act_for_period(
         work_rows=work_rows,
     )
     file_name = f"Акт_выполненных_работ_{period.month:02d}_{period.year}.pdf"
+    with store.connection.atomic():
+        _replace_generated_act(store, period_id, target_ids, number, period_from,
+                               period_to, file_name, pdf)
+    return QualityActGenerationResult(
+        created=1,
+        linked_items=len(target_ids),
+        protected_items=len(protected),
+        missing_costs=missing_costs,
+    )
+
+
+def _replace_generated_act(store, period_id, target_ids, number, period_from,
+                           period_to, file_name, pdf):
+    # PDF is complete before this atomic swap; preserve manual/imported acts.
+    for previous in store.list_period_acts(period_id):
+        if previous.generated and previous.act_type == "ACCEPTANCE_ACT":
+            store.delete_act(previous.id)
     act = store.add_act(
         item_id=target_ids[0],
         act_type="ACCEPTANCE_ACT",
@@ -299,9 +310,3 @@ def generate_acceptance_act_for_period(
         generated=True,
     )
     store.set_act_links(act.id, target_ids)
-    return QualityActGenerationResult(
-        created=1,
-        linked_items=len(target_ids),
-        protected_items=len(protected),
-        missing_costs=missing_costs,
-    )

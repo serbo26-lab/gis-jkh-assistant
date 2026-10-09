@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import mimetypes
+import sqlite3
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -20,12 +21,17 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.work_fixation import calculate_fact_total_cost
+from .widgets import SafeComboBox
+from .workflow_widgets import style_danger_button
+from .error_messages import context_text, error_text
 
 
 _ALLOWED_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".bmp", ".gif"}
@@ -39,6 +45,7 @@ class FixationPhotoDialog(QDialog):
         *,
         fixation_item_id: str | None = None,
         unplanned_item_id: str | None = None,
+        work_name: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -49,6 +56,14 @@ class FixationPhotoDialog(QDialog):
         self.resize(640, 420)
 
         layout = QVBoxLayout(self)
+        details = [context_text(parent)] if parent is not None else []
+        if work_name:
+            details.append("Работа / услуга: " + work_name)
+        self.context_label = QLabel("\n".join(value for value in details if value))
+        self.context_label.setWordWrap(True)
+        self.context_label.setObjectName("Muted")
+        self.context_label.setVisible(bool(self.context_label.text()))
+        layout.addWidget(self.context_label)
         note = QLabel(
             "Допустимые форматы: jpg, jpeg, bmp, gif. Размер одного файла — до 50 МБ."
         )
@@ -61,7 +76,7 @@ class FixationPhotoDialog(QDialog):
 
         actions = QHBoxLayout()
         add_button = QPushButton("Добавить фото")
-        remove_button = QPushButton("Удалить выбранное")
+        remove_button = style_danger_button(QPushButton("Удалить выбранное фото"))
         actions.addWidget(add_button)
         actions.addWidget(remove_button)
         actions.addStretch(1)
@@ -110,16 +125,12 @@ class FixationPhotoDialog(QDialog):
                     f"{path.name}: допустимы только jpg, jpeg, bmp и gif.",
                 )
                 continue
-            size = path.stat().st_size
-            if size > _MAX_PHOTO_SIZE:
-                QMessageBox.warning(
-                    self,
-                    "Файл слишком большой",
-                    f"{path.name}: размер превышает 50 МБ.",
-                )
-                continue
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             try:
+                size = path.stat().st_size
+                if size > _MAX_PHOTO_SIZE:
+                    QMessageBox.warning(self, "Файл слишком большой", f"{path.name}: размер превышает 50 МБ. Выберите файл меньшего размера.")
+                    continue
                 self.repository.add_work_fixation_photo(
                     fixation_item_id=self.fixation_item_id,
                     unplanned_item_id=self.unplanned_item_id,
@@ -128,8 +139,10 @@ class FixationPhotoDialog(QDialog):
                     content_type=content_type,
                     content=path.read_bytes(),
                 )
-            except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, "Не удалось добавить фото", str(exc))
+            except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+                QMessageBox.warning(self, "Не удалось добавить фото", error_text(
+                    exc, context=path.name, effect="Это фото не добавлено. Ранее добавленные фотографии сохранены.",
+                ))
         self._reload()
 
     def _remove(self) -> None:
@@ -138,7 +151,23 @@ class FixationPhotoDialog(QDialog):
             return
         photo_id = item.data(Qt.ItemDataRole.UserRole)
         if photo_id:
-            self.repository.delete_work_fixation_photo(str(photo_id))
+            context = context_text(self.parentWidget()) if self.parentWidget() else ""
+            answer = QMessageBox.question(
+                self, "Удалить локальное фото?",
+                f"{item.text()}\n{context}\n\nУдаляется выбранное фото из локальной фиксации. "
+                "Сведения в ГИС ЖКХ этим действием не изменяются. Продолжить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                self.repository.delete_work_fixation_photo(str(photo_id))
+            except (sqlite3.DatabaseError, OSError, ValueError) as exc:
+                QMessageBox.warning(self, "Не удалось удалить фото", error_text(
+                    exc, context=item.text(), effect="Фото остаётся в списке. Проверьте локальные данные перед повтором.",
+                ))
+                return
             self._reload()
 
 
@@ -151,10 +180,19 @@ class AddUnplannedWorkDialog(QDialog):
         self.setWindowTitle("Добавление внеплановой работы")
         self.resize(700, 500)
 
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        self.form_scroll = QScrollArea()
+        self.form_scroll.setWidgetResizable(True)
+        self.form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.form_content = QWidget()
+        root = QVBoxLayout(self.form_content)
+        root.setContentsMargins(0, 0, 0, 0)
+        self.form_scroll.setWidget(self.form_content)
+        outer.addWidget(self.form_scroll, 1)
         form = QFormLayout()
 
-        self.work_combo = QComboBox()
+        self.work_combo = SafeComboBox()
         self.work_combo.setMinimumWidth(520)
         for option in options:
             label = option.get("name") or option.get("code") or "Без наименования"
@@ -184,7 +222,7 @@ class AddUnplannedWorkDialog(QDialog):
         photo_header = QHBoxLayout()
         photo_header.addWidget(QLabel("Фотографические изображения"))
         self.add_photo_button = QPushButton("Добавить фото")
-        self.remove_photo_button = QPushButton("Удалить выбранное")
+        self.remove_photo_button = style_danger_button(QPushButton("Удалить выбранное фото"))
         photo_header.addStretch(1)
         photo_header.addWidget(self.add_photo_button)
         photo_header.addWidget(self.remove_photo_button)
@@ -210,7 +248,7 @@ class AddUnplannedWorkDialog(QDialog):
         )
         buttons.button(QDialogButtonBox.StandardButton.Save).setText("Добавить")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
-        root.addWidget(buttons)
+        outer.addWidget(buttons)
 
         self.work_combo.currentIndexChanged.connect(self._update_work_type)
         self.price_edit.textChanged.connect(self._sync_fact_fields)
@@ -223,6 +261,18 @@ class AddUnplannedWorkDialog(QDialog):
         buttons.rejected.connect(self.reject)
         self._update_work_type()
         self._sync_fact_fields()
+        self.ensurePolished()
+        # Preserve the natural field spacing; scroll instead of compressing it.
+        self.form_content.setMinimumHeight(root.sizeHint().height())
+        margins = outer.contentsMargins()
+        self.setMinimumWidth(root.minimumSize().width() + margins.left() + margins.right()
+                             + self.form_scroll.verticalScrollBar().sizeHint().width())
+        preferred_height = self.form_content.minimumHeight() + buttons.sizeHint().height() + 34
+        screen = self.screen()
+        available_height = screen.availableGeometry().height() - 48 if screen else 720
+        if parent is not None:
+            available_height = min(available_height, parent.window().height() - 48)
+        self.resize(max(700, self.minimumWidth()), min(preferred_height, available_height))
 
     def _sync_fact_fields(self, *_args) -> None:
         if self._syncing_fact_fields:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -17,8 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database import ManagementOrganization, Repository
+from gis_jkh_assistant.gis_integration.organization_context import (
+    MIN_ORGANIZATION_ROUTING_HELPER_VERSION, helper_supports_organization_routing,
+)
 
-from .gis_integration_worker import GisIntegrationWorker
+from .gis_integration_worker import GisIntegrationWorker, connect_result
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,9 +107,9 @@ def organization_import_reason(page) -> str:
     if not status.gis_page_ready:
         return "Откройте личный кабинет ГИС ЖКХ и войдите под своей учётной записью."
     version = _text(getattr(status, "helper_version", None))
-    parsed = tuple(int(part) for part in version.split(".")) if re.fullmatch(r"\d+\.\d+\.\d+", version) else ()
-    if parsed < (0, 1, 29):
-        return "Обновите «ГИС ЖКХ помощник» до версии 0.1.29 и нажмите «Перезагрузить» в расширениях браузера."
+    if not helper_supports_organization_routing(version):
+        minimum = ".".join(map(str, MIN_ORGANIZATION_ROUTING_HELPER_VERSION))
+        return f"Обновите «ГИС ЖКХ помощник» до версии {minimum} и нажмите «Перезагрузить» в расширениях браузера."
     return ""
 
 
@@ -177,6 +182,8 @@ def load_organization_from_gis(page) -> None:
     state = {"processing": False, "finished": False, "cleaned": False, "selected_id": None}
 
     def select_saved_organization() -> None:
+        if getattr(page.window(), "_closing", False) or getattr(page.window(), "_close_requested", False):
+            return
         combo = getattr(page, "organization_combo", None)
         previous_id = combo.currentData() if combo is not None else None
         page.refresh_organizations(select_id=state["selected_id"])
@@ -215,7 +222,7 @@ def load_organization_from_gis(page) -> None:
             )
         except (ValueError, sqlite3.Error) as exc:
             page._set_bulk_status("Не удалось добавить управляющую организацию.")
-            QMessageBox.critical(page, "Не удалось добавить УО", str(exc))
+            QMessageBox.critical(page, "Не удалось добавить УО", error_text(exc, context=context_text(page)))
         finally:
             state["processing"] = False
             cleanup()
@@ -224,7 +231,11 @@ def load_organization_from_gis(page) -> None:
         state["processing"] = True
         try:
             page._set_bulk_status("Ошибка загрузки УО • " + message)
-            QMessageBox.critical(page, "Не удалось загрузить УО из ГИС ЖКХ", message)
+            QMessageBox.critical(page, "Не удалось загрузить УО из ГИС ЖКХ", error_text(
+                message, context=context_text(page),
+                effect="Загрузка организации не завершена. Проверьте локальный список перед повтором.",
+                recovery="Проверьте подключение помощника и авторизованную вкладку нужной УО, затем повторите загрузку.",
+            ))
         finally:
             state["processing"] = False
             cleanup()
@@ -233,7 +244,7 @@ def load_organization_from_gis(page) -> None:
         state["finished"] = True
         cleanup()
 
-    worker.succeeded.connect(succeeded)
-    worker.failed.connect(failed)
+    connect_result(worker, worker.succeeded, succeeded)
+    connect_result(worker, worker.failed, failed)
     worker.finished.connect(finished)
     worker.start()

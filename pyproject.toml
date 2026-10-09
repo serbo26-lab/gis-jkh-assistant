@@ -30,6 +30,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"gis_jkh_assistant.browser" = ["assets/browser-helper.zip"]
+
 [tool.setuptools.dynamic]
 version = {attr = "gis_jkh_assistant.__version__"}
 

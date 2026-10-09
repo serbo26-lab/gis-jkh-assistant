@@ -42,7 +42,7 @@ class FakeGateway:
             running=self.started,
             helper_connected=self.ready,
             gis_page_ready=self.ready,
-            helper_version="0.1.27",
+            helper_version="0.1.30",
         )
 
     def execute(self, *_args, **_kwargs):
@@ -235,10 +235,10 @@ def _add_acceptance_act(page, item):
 def test_quality_primary_follows_local_draft_acts_and_placed_states(desktop, monkeypatch):
     page = _select_page(desktop, 4)
     page._select_month(1)
-    assert page.workflow.primary.text() == "Сформировать оценку"
+    assert page.workflow.primary.text() == "Сформировать оценку месяца"
 
     period, item = _include_quality(page, 1)
-    assert page.workflow.primary.text() == "Сохранить проект"
+    assert page.workflow.primary.text() == "Сохранить проект месяца"
     assert page.workflow.primary.isEnabled()
     assert page.store.list_acts(item.id) == []
     assert page._validation_error(period.id, require_acts=False) is None
@@ -258,7 +258,7 @@ def test_quality_primary_follows_local_draft_acts_and_placed_states(desktop, mon
     page.store.set_gis_state(period.id, gis_status="DRAFT")
     page._month_changed()
     assert page._validation_error(period.id, require_acts=True) is None
-    assert page.workflow.primary.text() == "Разместить"
+    assert page.workflow.primary.text() == "Разместить месяц"
     assert page.workflow.primary.isEnabled()
     published = []
     monkeypatch.setattr(page, "_publish", lambda: published.append(period.id))
@@ -284,7 +284,7 @@ def test_period_recommendation_uses_all_months_not_just_selected_month(desktop, 
         _add_acceptance_act(page, completed_item)
         page.store.set_gis_state(completed.id, gis_status="APPROVED")
     page._select_month(1)
-    assert page.workflow.primary.text() == "Разместить"
+    assert page.workflow.primary.text() == "Разместить месяц"
     page.scope_switcher.buttons["period"].click()
     assert page.workflow.primary.text().startswith("Сохранить проект")
     saved = []
@@ -306,11 +306,93 @@ def test_period_publication_validates_only_months_that_will_be_sent(desktop):
     candidates = page._periods_with_quality_for_year("approve_quality_assessment")
     assert [period.id for period in candidates] == [february.id]
     assert all(page._validation_error(period.id, require_acts=True) is None for period in candidates)
-    assert page.publish_button.isEnabled()
-    assert page.workflow.primary.text() == "Разместить"
+    assert not page.publish_button.isEnabled(), "The month action still targets completed January"
+    assert page.publish_period_button.isEnabled()
+    assert page.workflow.primary.text() == "Разместить период"
     assert page.workflow.primary.isEnabled()
     page.scope_switcher.set_scope("month")
     assert not page.publish_button.isEnabled(), "Completed January is not a new publication candidate"
+
+
+@pytest.mark.parametrize("page_index,command", [
+    (3, None), (4, "save_quality_assessment"), (4, "approve_quality_assessment"),
+])
+@pytest.mark.parametrize("bounds,expected", [
+    ((2026, 7, 2026, 12), [7, 12]),
+    ((2025, 7, 2026, 7), [1, 6, 7]),
+    ((2027, 1, 2027, 12), []),
+])
+def test_period_queue_excludes_stored_months_outside_work_list(
+    desktop, monkeypatch, page_index, command, bounds, expected,
+):
+    page = _select_page(desktop, page_index)
+    for month in (1, 6, 7, 12):
+        if page_index == 4:
+            _period, item = _include_quality(page, month)
+            if month in expected:
+                _add_acceptance_act(page, item)
+        else:
+            period = desktop.repository.get_or_create_work_fixation_period(
+                work_list_id=desktop.work_list.id, year=2026, month=month,
+            )
+            desktop.repository.fill_work_fixation_from_plan(period.id)
+    desktop.repository.update_work_list_period(
+        desktop.work_list.id, start_year=bounds[0], start_month=bounds[1],
+        end_year=bounds[2], end_month=bounds[3],
+    )
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args, **_kwargs: QMessageBox.Yes)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args, **_kwargs: QMessageBox.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args, **_kwargs: QMessageBox.Ok)
+    monkeypatch.setattr(page, "_start_next_queue_item", lambda: None)
+    if page_index == 4:
+        # Obsolete rows may also lack acts; they must not block valid months.
+        candidates = page._periods_with_quality_for_year(command)
+        page._start_year_queue(command, title="test", confirmation="test")
+        all_periods = page.store.list_periods(desktop.work_list.id, year=2026)
+    else:
+        candidates = page._periods_with_data_for_year()
+        page._publish_year()
+        all_periods = desktop.repository.list_work_fixation_periods(
+            desktop.work_list.id, year=2026,
+        )
+    assert [period.month for period in candidates] == expected
+    by_id = {period.id: period for period in all_periods}
+    assert [by_id[id_].month for id_ in page._queue_period_ids] == expected
+    assert {1, 6, 7, 12} <= {period.month for period in all_periods}
+    page._queue_running = False
+
+
+@pytest.mark.parametrize("page_index", [1, 2, 3, 4])
+def test_repeated_theme_changes_during_operation_reload_page_once(
+    desktop, monkeypatch, page_index,
+):
+    page = _select_page(desktop, page_index)
+    worker = ControlledWorker(desktop.gateway, "test", {}, parent=page)
+    page._integration_worker = worker
+    worker.start()
+    reloads = []
+    monkeypatch.setattr(desktop.window, "_reload_page_theme", lambda target: reloads.append(target))
+    for theme in ("dark", "light", "dark", "light", "dark"):
+        desktop.window._theme_changed(theme)
+    assert page not in reloads
+    worker.finish()
+    _settle(desktop.app)
+    assert reloads.count(page) == 1
+    desktop.window._refresh_integration_status()
+    assert reloads.count(page) == 1
+    page._integration_worker = None
+
+
+def test_outdated_helper_hint_uses_quality_minimum(desktop, monkeypatch):
+    from gis_jkh_assistant.quality_assessment import MIN_QUALITY_HELPER_VERSION
+    monkeypatch.setattr(desktop.gateway, "status", lambda: IntegrationStatus(
+        True, True, True, helper_version="0.1.19",
+    ))
+    desktop.window._refresh_integration_status()
+    minimum = ".".join(map(str, MIN_QUALITY_HELPER_VERSION))
+    assert f"Требуется {minimum}+" in desktop.window.integration_status.toolTip()
+    assert "устарел" in desktop.window.integration_status.text()
+    assert f"Требуется {minimum}+" in desktop.window.settings_page.connection_status.text()
 
 
 def test_quality_next_month_returns_to_an_earlier_unfinished_month(desktop):
@@ -369,32 +451,42 @@ def test_quality_period_recommends_missing_month_without_reforming_approved_data
     assert page.store.get_period(january.id).gis_status == "APPROVED"
 
 
-@pytest.mark.parametrize("page_index,command_name,month_method,period_method", [
-    (3, "fill_month_button", "_fill_month_from_plan", "_fill_year_from_plan"),
-    (3, "load_month_button", "_load_selected_month_from_gis", "_load_year_from_gis"),
-    (3, "publish_month_button", "_publish_selected_month", "_publish_year"),
-    (4, "form_month_button", "_form_month_from_fixation", "_form_year_from_fixation"),
-    (4, "load_gis_button", "_load_from_gis", "_load_year_from_gis"),
-    (4, "save_button", "_save_project", "_save_year_projects"),
-    (4, "publish_button", "_publish", "_publish_year"),
+@pytest.mark.parametrize("page_index,command_name,period_button,month_method,period_method", [
+    (3, "fill_month_button", "fill_period_button", "_fill_month_from_plan", "_fill_year_from_plan"),
+    (3, "load_month_button", "load_period_button", "_load_selected_month_from_gis", "_load_year_from_gis"),
+    (3, "publish_month_button", "publish_period_button", "_publish_selected_month", "_publish_year"),
+    (4, "form_month_button", "form_period_button", "_form_month_from_fixation", "_form_year_from_fixation"),
+    (4, "load_gis_button", "load_period_button", "_load_from_gis", "_load_year_from_gis"),
+    (4, "save_button", "save_period_button", "_save_project", "_save_year_projects"),
+    (4, "publish_button", "publish_period_button", "_publish", "_publish_year"),
 ])
-def test_same_command_routes_to_selected_month_or_period(
-    desktop, monkeypatch, page_index, command_name, month_method, period_method
+def test_named_month_and_period_commands_keep_their_scope(
+    desktop, monkeypatch, page_index, command_name, period_button, month_method, period_method
 ):
     page = _select_page(desktop, page_index)
     calls = []
     monkeypatch.setattr(page, month_method, lambda: calls.append("month"))
     monkeypatch.setattr(page, period_method, lambda: calls.append("period"))
     button = getattr(page, command_name)
+    period_command = getattr(page, period_button)
     for scope in ("month", "period"):
         page.scope_switcher.buttons[scope].click()
         button.setEnabled(True)
-        button.click()
-    assert calls == ["month", "period"]
-    assert not any(
-        isinstance(value, QPushButton) and name.endswith("year_button")
-        for name, value in vars(page).items()
-    ), "The scope must replace legacy year-command widgets, including hidden duplicates"
+        period_command.setEnabled(True)
+        page.month_actions.sync()
+        page.period_actions.sync()
+        month_action = next(action for action, source, _when in page.month_actions.entries if source is button)
+        period_action = next(action for action, source, _when in page.period_actions.entries if source is period_command)
+        assert month_action.isVisible() and month_action.isEnabled()
+        assert period_action.isVisible() and period_action.isEnabled()
+        month_action.trigger()
+        period_action.trigger()
+    assert calls == ["month", "period", "month", "period"]
+    assert page.data_actions.isVisibleTo(page)
+    assert page.month_actions in page.data_actions.submenus
+    assert page.period_actions in page.data_actions.submenus
+    assert not button.isVisibleTo(page)
+    assert not period_command.isVisibleTo(page)
 
 
 def test_network_block_has_inline_explanation_and_local_actions_still_work(desktop):
@@ -733,8 +825,12 @@ def test_period_operation_keeps_month_progress_when_worker_reports_inner_data(qt
     assert status.progress.value() == 4
     worker.succeeded.emit({})
     assert status.progress.maximum() == 8
-    assert status.progress.value() == 5
-    assert "5 из 8" in status.label.text()
+    # A gateway answer is not a committed application result. The page's
+    # callback advances the queue only after validation and local persistence.
+    assert status.progress.value() == 4
+    assert "проверка результата" in status.label.text()
+    assert status.property("tone") != "success"
+    assert "4 из 8" in status.label.text()
     status.deleteLater()
     _settle(qt_app)
 

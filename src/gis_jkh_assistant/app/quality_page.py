@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
+import sqlite3
+
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QMessageBox,
@@ -13,6 +17,7 @@ from PySide6.QtWidgets import (
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
 from gis_jkh_assistant.gis_integration import IntegrationError, LocalIntegrationGateway
+from gis_jkh_assistant.gis_integration.organization_context import with_organization_context
 from gis_jkh_assistant.work_lists.gis_quality_sync import (
     apply_remote_quality_assessment,
     local_quality_has_data,
@@ -28,8 +33,8 @@ from gis_jkh_assistant.quality_assessment import (
 )
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
-from .gis_integration_worker import GisIntegrationWorker
-from .page_layouts import build_monthly
+from .gis_integration_worker import GisIntegrationWorker, connect_result
+from .page_layouts import build_monthly, compact_monthly, resize_table_rows, TableHeightObserver
 from .workflow_presenter import refresh_monthly
 from .quality_bulk_dialogs import QualityMonthActsDialog
 from .quality_dialogs import QualityActsDialog
@@ -73,6 +78,7 @@ class QualityAssessmentPage(QWidget):
 
     def _build_ui(self) -> None:
         build_monthly(self, "quality")
+        self._height_observer = TableHeightObserver(self.table, self._resize_table)
 
     def refresh_organizations(self) -> None:
         current = self.organization_combo.currentData()
@@ -125,26 +131,14 @@ class QualityAssessmentPage(QWidget):
         self._work_list_changed()
 
     def _work_list_changed(self) -> None:
-        value = self.work_list_combo.currentData()
-        self._current_work_list_id = str(value) if value else None
+        from .selection_memory import rebuild_years
+        rebuild_years(self, self.work_list_combo.currentData())
         self._current_period_id = None
-        self._current_month = None
-        self.year_combo.blockSignals(True)
-        self.year_combo.clear()
-        work_list = (
-            self.repository.get_work_list(self._current_work_list_id)
-            if self._current_work_list_id
-            else None
-        )
-        if work_list:
-            for year in range(work_list.start_year, work_list.end_year + 1):
-                self.year_combo.addItem(str(year), year)
-            index = self.year_combo.findData(work_list.base_year)
-            self.year_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.year_combo.blockSignals(False)
         self._year_changed()
 
     def _year_changed(self) -> None:
+        from .selection_memory import select_year
+        select_year(self)
         work_list = (
             self.repository.get_work_list(self._current_work_list_id)
             if self._current_work_list_id
@@ -191,7 +185,7 @@ class QualityAssessmentPage(QWidget):
                 year=int(self.year_combo.currentData()),
                 month=int(self._current_month),
             )
-        except ValueError as exc:
+        except (sqlite3.DatabaseError, ValueError) as exc:
             self._current_period_id = None
             self.table.setRowCount(0)
             self.month_status.setText(str(exc))
@@ -223,6 +217,7 @@ class QualityAssessmentPage(QWidget):
                 self.table.setItem(row, 0, include)
 
                 name = QTableWidgetItem(item.work_name)
+                name.setToolTip(item.work_name)
                 name.setFlags(name.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, 1, name)
 
@@ -294,8 +289,8 @@ class QualityAssessmentPage(QWidget):
                 days_count=days_count,
                 cost_reduction=reduction,
             )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Проверьте данные", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Проверьте данные", error_text(exc, context=context_text(self), effect="Правка не подтверждена сохранением. Таблица будет заново прочитана из локальной базы.", recovery="Проверьте значение в строке, устраните причину и повторите ввод."))
             self._load_table()
             return
         self._load_table()
@@ -512,11 +507,11 @@ class QualityAssessmentPage(QWidget):
         self._sync_work_units_for_act()
         try:
             result = self._auto_generate_act_for_period(self._current_period_id)
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (sqlite3.DatabaseError, OSError, RuntimeError, ValueError) as exc:
             QMessageBox.warning(
                 self,
                 "Не удалось сформировать акт",
-                str(exc),
+                error_text(exc, context=context_text(self)),
             )
             return
         self._load_table()
@@ -548,13 +543,19 @@ class QualityAssessmentPage(QWidget):
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return
         months = self._active_months()
+        resume = getattr(self, "_auto_act_resume", None)
+        resume_here = bool(resume and resume[:2] == (self._current_work_list_id, int(self.year_combo.currentData())))
+        if resume_here:
+            months = tuple(month for month in months if month >= resume[2])
         answer = QMessageBox.question(
             self,
             "Сформировать акты за доступные месяцы года?",
             f"Будут обработаны сформированные оценки в доступных месяцах "
             f"выбранного года ({len(months)} мес. в периоде перечня). "
             "Пользовательские и импортированные акты не изменяются. "
-            "Ранее сформированные программой акты будут заменены. Продолжить?",
+            "Ранее сформированные программой акты будут заменены. Продолжить?"
+            + (f"\nПродолжение с {_MONTHS[resume[2] - 1]}. Акты предыдущих успешно обработанных месяцев сохраняются."
+               if resume_here else ""),
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -562,6 +563,7 @@ class QualityAssessmentPage(QWidget):
         year = int(self.year_combo.currentData())
         created = linked = protected = missing = 0
         processed = 0
+        failure = None
         for month in months:
             period = self.store.get_period_for_month(
                 self._current_work_list_id,
@@ -574,12 +576,9 @@ class QualityAssessmentPage(QWidget):
                 continue
             try:
                 result = self._auto_generate_act_for_period(period.id)
-            except (OSError, RuntimeError, ValueError) as exc:
-                QMessageBox.warning(
-                    self,
-                    "Массовое формирование актов остановлено",
-                    f"{_MONTHS[month - 1]} {year}: {exc}",
-                )
+            except (sqlite3.DatabaseError, OSError, RuntimeError, ValueError) as exc:
+                failure = f"{_MONTHS[month - 1]} {year}: {exc}"
+                self._auto_act_resume = (self._current_work_list_id, year, month)
                 break
             processed += 1
             created += result.created
@@ -587,16 +586,21 @@ class QualityAssessmentPage(QWidget):
             protected += result.protected_items
             missing += result.missing_costs
 
+        if not failure:
+            self._auto_act_resume = None
+
         self._month_changed()
         self._refresh_year_status()
-        QMessageBox.information(
+        notify = QMessageBox.warning if failure else QMessageBox.information
+        notify(
             self,
-            "Акты за год сформированы",
+            "Акты сформированы частично" if failure else "Акты за год сформированы",
             f"Обработано месяцев: {processed}.\n"
             f"Сформировано актов: {created}.\n"
             f"Связей с работами: {linked}.\n"
             f"Защищено пользовательскими/импортированными актами: {protected}.\n"
-            f"Строк без фактической стоимости: {missing}.",
+            f"Строк без фактической стоимости: {missing}."
+            + (f"\n\nОстановлено: {failure}\nУспешно созданные акты сохранены." if failure else ""),
         )
 
     def _sync_work_units_for_act(self) -> None:
@@ -637,7 +641,9 @@ class QualityAssessmentPage(QWidget):
         try:
             result = self.integration_gateway.execute(
                 "resolve_planned_work_units",
-                payload,
+                with_organization_context(
+                    self.repository, self.organization_combo.currentData(), payload,
+                ),
                 timeout=45.0,
             )
         except IntegrationError:
@@ -653,7 +659,7 @@ class QualityAssessmentPage(QWidget):
             units,
         )
 
-    def _open_month_acts(self) -> None:
+    def _open_month_acts(self, *, start_upload: bool = False, start_generate: bool = False) -> None:
         if (
             not self._current_period_id
             or self._current_month is None
@@ -670,6 +676,10 @@ class QualityAssessmentPage(QWidget):
             month=int(self._current_month),
             parent=self,
         )
+        if start_upload:
+            QTimer.singleShot(0, dialog._add_ready)
+        elif start_generate:
+            QTimer.singleShot(0, dialog._generate)
         dialog.exec()
         self._load_table()
         self._refresh_act_summary()
@@ -796,7 +806,7 @@ class QualityAssessmentPage(QWidget):
             return None
         return self._payload_for_period(self._current_period_id)
 
-    def _apply_gis_result(self, period_id: str, result: dict) -> None:
+    def _apply_gis_result(self, period_id: str, result: dict, acknowledged_deletions=None) -> None:
         if result.get("cancelled"):
             self.store.mark_cancelled(period_id)
             return
@@ -821,6 +831,7 @@ class QualityAssessmentPage(QWidget):
             gis_status=result.get("gisStatus"),
             item_guids=item_guids,
             act_guids=act_guids,
+            acknowledged_deletions=acknowledged_deletions,
         )
 
     def _load_from_gis(self) -> None:
@@ -868,6 +879,7 @@ class QualityAssessmentPage(QWidget):
 
         def succeeded(result: dict) -> None:
             if not result.get("found"):
+                self.operation_status.outcome("Оценка качества в ГИС не найдена. Локальные данные сохранены.")
                 QMessageBox.information(
                     self,
                     "Оценка качества не найдена",
@@ -902,6 +914,7 @@ class QualityAssessmentPage(QWidget):
                 question,
             )
             if answer != QMessageBox.StandardButton.Yes:
+                self.operation_status.outcome("Загрузка оценки отменена. Локальные данные сохранены.")
                 return
 
             try:
@@ -912,11 +925,12 @@ class QualityAssessmentPage(QWidget):
                     month=period.month,
                     remote=result,
                 )
-            except ValueError as exc:
+            except (sqlite3.DatabaseError, ValueError) as exc:
+                self.operation_status.outcome("Не удалось применить оценку. Изменения импорта отменены; повторите загрузку после устранения ошибки.", tone="danger")
                 QMessageBox.critical(
                     self,
                     "Не удалось применить оценку качества",
-                    str(exc),
+                    error_text(exc, context=context_text(self)),
                 )
                 return
 
@@ -924,11 +938,14 @@ class QualityAssessmentPage(QWidget):
             self._refresh_act_summary()
             self._refresh_period_status()
             self._refresh_year_status()
+            self.operation_status.outcome(f"Оценка загружена: работ {applied['items']}, актов {applied['acts']}.", tone="success")
             QMessageBox.information(
                 self,
                 "Оценка качества загружена",
                 f"Загружено работ: {applied['items']}.\n"
-                f"Загружено актов: {applied['acts']}.",
+                f"Загружено актов: {applied['acts']}."
+                + ("\nЛокальные документы и связи сохранены. Оценка содержит локальные изменения."
+                   if applied.get("preserved_local") else ""),
             )
 
         def progressed(progress: dict) -> None:
@@ -941,7 +958,7 @@ class QualityAssessmentPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить оценку качества из ГИС ЖКХ",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
@@ -950,8 +967,8 @@ class QualityAssessmentPage(QWidget):
             self._refresh_period_status()
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
@@ -1039,11 +1056,17 @@ class QualityAssessmentPage(QWidget):
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return []
         year = int(self.year_combo.currentData())
+        work_list = self.repository.get_work_list(self._current_work_list_id)
+        if work_list is None:
+            return []
+        active_months = set(active_months_for_work_list(work_list, year))
         result = []
         for period in self.store.list_periods(
             self._current_work_list_id,
             year=year,
         ):
+            if period.month not in active_months:
+                continue
             if not any(item.included for item in self.store.list_items(period.id)):
                 continue
             status = str(period.gis_status or "LOCAL").upper()
@@ -1067,8 +1090,8 @@ class QualityAssessmentPage(QWidget):
             "save_quality_assessment",
             title="Сохранение проектов оценки качества",
             confirmation=(
-                "Сохранить проекты оценки качества для всех сформированных "
-                "месяцев выбранного года?"
+                "Сохранить проекты оценки качества для сформированных "
+                "месяцев доступного периода выбранного года?"
             ),
         )
 
@@ -1077,8 +1100,8 @@ class QualityAssessmentPage(QWidget):
             "approve_quality_assessment",
             title="Размещение оценки качества",
             confirmation=(
-                "Разместить оценку качества для всех сформированных месяцев "
-                "выбранного года? Месяцы будут обработаны последовательно."
+                "Разместить оценку качества для сформированных месяцев "
+                "доступного периода выбранного года? Месяцы будут обработаны последовательно."
             ),
         )
 
@@ -1167,6 +1190,11 @@ class QualityAssessmentPage(QWidget):
         self._start_next_queue_item()
 
     def _start_next_queue_item(self) -> None:
+        if getattr(self.window(), "_close_requested", False):
+            self._queue_running = False
+            self._integration_busy = False
+            self.queue_label.setText(f"Очередь остановлена при закрытии. Обработано месяцев: {self._queue_successes}.")
+            return
         if self._queue_index >= len(self._queue_period_ids):
             self._queue_running = False
             self._integration_busy = False
@@ -1259,6 +1287,7 @@ class QualityAssessmentPage(QWidget):
         self._refresh_gis_buttons()
         command_succeeded = {"value": False}
         timeout = 150.0 if self._queue_command == "load_quality_assessment" else 180.0
+        acknowledged_deletions = self.store.deletion_snapshot(payload)
         worker = GisIntegrationWorker(
             self.integration_gateway,
             self._queue_command,
@@ -1280,7 +1309,7 @@ class QualityAssessmentPage(QWidget):
                             month=period.month,
                             remote=result,
                         )
-                    except ValueError as exc:
+                    except (sqlite3.DatabaseError, ValueError) as exc:
                         command_succeeded["value"] = False
                         failed(str(exc))
                         return
@@ -1288,7 +1317,7 @@ class QualityAssessmentPage(QWidget):
                 else:
                     self._queue_skipped += 1
             else:
-                self._apply_gis_result(period_id, result)
+                self._apply_gis_result(period_id, result, acknowledged_deletions)
                 self._queue_successes += 1
 
             self._queue_index += 1
@@ -1305,7 +1334,8 @@ class QualityAssessmentPage(QWidget):
             self._queue_failed_period_id = period_id
             self.queue_label.setText(
                 f"Очередь остановлена на {_MONTHS[period.month - 1]} "
-                f"{period.year}: {message}"
+                f"{period.year}: {message}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
+                "Успешные месяцы повторно не отправляются. Устраните причину и продолжите с проблемного месяца."
             )
             self.continue_queue_button.setText(
                 f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"
@@ -1325,8 +1355,8 @@ class QualityAssessmentPage(QWidget):
                 self._integration_busy = False
                 self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1359,6 +1389,7 @@ class QualityAssessmentPage(QWidget):
         self._integration_busy = True
         self._refresh_gis_buttons()
         period_id = self._current_period_id
+        acknowledged_deletions = self.store.deletion_snapshot(payload)
         worker = GisIntegrationWorker(
             self.integration_gateway,
             command,
@@ -1369,26 +1400,27 @@ class QualityAssessmentPage(QWidget):
         self._integration_worker = worker
 
         def succeeded(result: dict) -> None:
-            self._apply_gis_result(period_id, result)
+            self._apply_gis_result(period_id, result, acknowledged_deletions)
             self._load_table()
             self._refresh_act_summary()
             self._refresh_period_status()
             self._refresh_year_status()
             QMessageBox.information(self, "ГИС ЖКХ", success_message)
+            self.operation_status.outcome(success_message, tone="success")
 
         def failed(message: str) -> None:
             self.store.set_error(period_id, message)
             self._refresh_period_status()
             self._refresh_year_status()
-            QMessageBox.critical(self, "Ошибка ГИС ЖКХ", message)
+            QMessageBox.critical(self, "Ошибка ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
 
         def finished() -> None:
             self._integration_worker = None
             self._integration_busy = False
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1450,20 +1482,10 @@ class QualityAssessmentPage(QWidget):
             self.month_buttons_layout.setColumnStretch(column, 1)
 
     def _resize_table(self) -> None:
-        row_count = self.table.rowCount()
-        visible = min(max(row_count, 1), 15)
-        row_height = max(24, self.table.verticalHeader().defaultSectionSize())
-        header_height = max(26, self.table.horizontalHeader().height())
-        self.table.setFixedHeight(
-            header_height + visible * row_height + self.table.frameWidth() * 2 + 4
-        )
-        self.table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-            if row_count > 15
-            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        resize_table_rows(self.table, 15)
 
     def set_view_mode(self, mode: str) -> None:
+        compact_monthly(self, mode != "normal")
         columns = 12 if mode == "normal" else 6
         if columns != self._month_button_columns:
             self._relayout_month_buttons(columns)

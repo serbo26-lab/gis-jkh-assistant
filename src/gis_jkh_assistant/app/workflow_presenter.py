@@ -4,6 +4,10 @@ from __future__ import annotations
 from dataclasses import asdict
 import hashlib
 import json
+from PySide6.QtCore import Qt
+from gis_jkh_assistant.gis_integration.organization_context import (
+    MIN_ORGANIZATION_ROUTING_HELPER_VERSION, helper_supports_organization_routing,
+)
 
 from gis_jkh_assistant.quality_assessment import helper_supports_quality_assessment
 from gis_jkh_assistant.work_fixation import helper_supports_fixations, item_has_fact
@@ -27,6 +31,9 @@ def connection_reason(page, supports) -> str:
         return "Откройте ГИС ЖКХ в браузере и войдите в систему."
     if not supports(status.helper_version):
         return "Обновите браузерный помощник для этого сценария."
+    if not helper_supports_organization_routing(status.helper_version):
+        minimum = ".".join(map(str, MIN_ORGANIZATION_ROUTING_HELPER_VERSION))
+        return f"Для безопасного выбора вкладки УО требуется браузерный помощник {minimum}+."
     return ""
 
 
@@ -52,9 +59,9 @@ def _target(page):
 
 def _scope_label(page, active, year):
     if page._scope_is_period():
-        return f"Действия: {year}, {len(active)} мес. • Таблица: {MONTHS[page._current_month - 1]}" if active and page._current_month else "Нет доступных месяцев"
+        return f"{active[0]:02d}–{active[-1]:02d}.{year} • Таблица: {MONTHS[page._current_month - 1]}" if active and page._current_month else "Нет доступных месяцев"
     month = page._current_month
-    return f"{MONTHS[month - 1]} {year}" if month and year else "Выберите месяц"
+    return "" if month and year else "Выберите месяц"
 
 
 def refresh_monthly(page, kind: str):
@@ -63,6 +70,14 @@ def refresh_monthly(page, kind: str):
     quality = kind == "quality"
     work_list, year, house = _target(page)
     active = active_months_for_work_list(work_list, year) if work_list and year else ()
+    owner = getattr(page.operation_status, "_operation_owner", None)
+    if owner is not None and owner != (page._current_work_list_id, year) and not busy(page):
+        page.operation_status.hide()
+    if hasattr(page, "data_actions"):
+        month_label = f"Открытый месяц — {MONTHS[page._current_month - 1]} {year}" if page._current_month and year else "Открытый месяц — не выбран"
+        period_label = f"Доступные месяцы {year} года — {active[0]:02d}–{active[-1]:02d} ({len(active)})" if active else "Доступных месяцев нет"
+        page.month_actions.menu_model.setTitle(month_label)
+        page.period_actions.menu_model.setTitle(period_label)
     locked = busy(page)
     context_lock(page, locked)
     has_context = bool(active and page._current_period_id)
@@ -71,6 +86,7 @@ def refresh_monthly(page, kind: str):
     if not quality:
         page.unplanned_table.setEnabled(local)
     page.scope_hint.setText(_scope_label(page, active, year))
+    page.scope_hint.setVisible(bool(page.scope_hint.text()))
     page.empty_hint.setVisible(not has_context)
     supported = helper_supports_quality_assessment if quality else helper_supports_fixations
     net_reason = connection_reason(page, supported)
@@ -79,9 +95,10 @@ def refresh_monthly(page, kind: str):
     load_reason = net_reason
     if work_list and (not house or not (house.fias_house_guid or house.gis_house_guid)):
         load_reason = "Получите идентификаторы дома в разделе «Дома»."
-    load.setEnabled(local and not load_reason)
-    load.setToolTip(load_reason or "Получить данные для выбранной области; локальные изменения будут проверены перед заменой.")
-    load.setText("Загрузить из ГИС")
+    for button in (load, page.load_period_button):
+        button.setEnabled(local and not load_reason)
+        button.setToolTip(load_reason or "Получить данные из ГИС; локальные изменения будут проверены перед заменой.")
+    page.load_period_button.setToolTip(load_reason or "Проверить все доступные месяцы в границах перечня; загрузить найденные в ГИС данные.")
     all_states = []
     periods = (page.store.list_periods(work_list.id, year=year) if quality
                else page.repository.list_work_fixation_periods(work_list.id, year=year)) if work_list and year else []
@@ -116,12 +133,22 @@ def refresh_monthly(page, kind: str):
         else:
             suffix, tone = ("локально" if has_data else "пусто"), ("accent" if has_data else "muted")
         button.setText(f"{MONTHS[month - 1]}\n{suffix}")
+        page.month_combo.setItemText(month - 1, MONTHS[month - 1])
+        from PySide6.QtCore import Qt
+        page.month_combo.setItemData(month - 1, f"{MONTHS[month - 1]}: {suffix}", Qt.ItemDataRole.ToolTipRole)
         button.setToolTip(error or (f"{MONTHS[month - 1]} {year}: {suffix}" if year else suffix))
         if button.property("tone") != tone:
             button.setProperty("tone", tone)
             repolish(button)
         if month in active:
             all_states.append(MonthState(month, status, has_data, validation, error))
+    # The compact picker shares the same selected month and real availability.
+    page.month_combo.blockSignals(True)
+    for index in range(page.month_combo.count()):
+        page.month_combo.model().item(index).setEnabled(index + 1 in active)
+    page.month_combo.setCurrentIndex(page.month_combo.findData(page._current_month))
+    page.month_combo.setEnabled(bool(active) and not locked)
+    page.month_combo.blockSignals(False)
     page._workflow_month_snapshot = (snapshot_key, cached_states)
     states = all_states if page._scope_is_period() else [s for s in all_states if s.month == page._current_month]
     failed_id = page._queue_failed_period_id
@@ -131,13 +158,16 @@ def refresh_monthly(page, kind: str):
     page.continue_queue_button.setEnabled(retry_here and not locked and not net_reason)
     if retry_here:
         page.continue_queue_button.setText(f"Продолжить с {MONTHS[failed_period.month - 1]} {year}")
-    for name in (("form_month_button", "auto_act_month_button", "clear_values_button", "include_all_button", "exclude_all_button", "month_acts_button")
-                 if quality else ("fill_month_button", "clear_month_button")):
+    for name in (("form_month_button", "form_period_button", "auto_act_month_button", "auto_act_period_button",
+                  "clear_values_button", "clear_period_values_button", "include_all_button", "exclude_all_button",
+                  "month_acts_button", "create_act_button", "upload_acts_button")
+                 if quality else ("fill_month_button", "fill_period_button", "clear_month_button", "clear_period_button")):
         getattr(page, name).setEnabled(local)
     fill_button = page.form_month_button if quality else page.fill_month_button
-    fill_button.setToolTip("Обновить данные всех доступных месяцев, включая ранее заполненные и размещённые. Для дозаполнения откройте нужный месяц." if page._scope_is_period() else "Заполнить данные выбранного месяца.")
+    fill_button.setToolTip("Заполнить данные выбранного месяца.")
+    period_fill = page.form_period_button if quality else page.fill_period_button
+    period_fill.setToolTip("Обновить данные всех доступных месяцев в границах перечня, включая ранее заполненные и размещённые. Перед заменой появится подтверждение.")
     filled = [s for s in states if s.has_data]
-    publish = page.publish_button if quality else page.publish_month_button
     ids_reason = ""
     if work_list and not work_list.gis_work_list_guid:
         ids_reason = "Сначала получите статус размещённого перечня."
@@ -145,35 +175,56 @@ def refresh_monthly(page, kind: str):
         ids_reason = "Для обмена нужны ФИАС GUID и GUID объекта дома. Получите их в разделе «Дома»."
     if not quality and work_list and (not house or not (house.fias_house_guid or house.gis_house_guid)):
         ids_reason = "Получите идентификаторы дома в разделе «Дома»."
-    eligible = filled
+    current = by_month.get(page._current_month)
+    month_filled = [s for s in all_states if s.month == page._current_month and s.has_data]
+    period_filled = [s for s in all_states if s.has_data]
+    eligible_by_scope = {"month": month_filled, "period": period_filled}
     if quality:
-        current = by_month.get(page._current_month)
-        if page._scope_is_period():
-            publish_ids = {p.id for p in page._periods_with_quality_for_year("approve_quality_assessment")}
-        else:
-            allowed = current and (not current.estimation_guid or str(current.gis_status or "LOCAL").upper() in {"DRAFT", "MODIFIED", "CANCELLED", "LOCAL"})
-            publish_ids = {current.id} if allowed else set()
-        eligible = [s for s in filled if by_month[s.month].id in publish_ids]
+        publish_ids = {p.id for p in page._periods_with_quality_for_year("approve_quality_assessment")}
+        eligible_by_scope["period"] = [s for s in period_filled if by_month[s.month].id in publish_ids]
+        allowed = current and (not current.estimation_guid or str(current.gis_status or "LOCAL").upper() in {"DRAFT", "MODIFIED", "CANCELLED", "LOCAL"})
+        eligible_by_scope["month"] = month_filled if allowed else []
+    publish_reasons = {}
+    for scope, button, targets in (
+        ("month", page.publish_button if quality else page.publish_month_button, month_filled),
+        ("period", page.publish_period_button, period_filled),
+    ):
+        candidates = eligible_by_scope[scope]
+        validation_error = next((s.publish_error for s in candidates if s.publish_error), "")
+        reason = net_reason or ids_reason or validation_error
+        if not reason and not targets:
+            reason = "Сначала заполните выбранный месяц." if scope == "month" else "В доступном периоде нет заполненных месяцев."
+        if not reason and not candidates:
+            reason = "Оценки уже размещены. Загрузите их из ГИС для проверки текущего состояния."
+        button.setEnabled(net_ready and bool(candidates) and not reason)
+        period_tip = f"Отправить {len(candidates)} заполненных мес. в границах перечня. " + (
+            "Пустые и уже размещённые оценки пропускаются." if quality else
+            "Ранее размещённые заполненные месяцы будут обновлены; пустые месяцы пропускаются."
+        )
+        button.setToolTip(reason or ("Отправить выбранный месяц." if scope == "month" else period_tip))
+        publish_reasons[scope] = reason
+    scope = "period" if page._scope_is_period() else "month"
+    eligible = eligible_by_scope[scope]
     validation = next((s.publish_error for s in eligible if s.publish_error), "")
-    publish_reason = net_reason or ids_reason or validation or ("Сначала заполните данные выбранной области." if not filled else "")
-    publish.setEnabled(net_ready and bool(eligible) and not publish_reason)
-    if filled and not eligible and not publish_reason:
-        publish_reason = "Оценка уже размещена. Загрузите её из ГИС для проверки текущего состояния."
-    publish.setToolTip(publish_reason)
+    publish_reason = publish_reasons[scope]
+    save_for_scope = None
     if quality:
-        period = by_month.get(page._current_month)
-        save_allowed = (bool(page._periods_with_quality_for_year("save_quality_assessment"))
-                        if page._scope_is_period() else bool(filled) and
-                        (not period.estimation_guid or period.gis_status in {"DRAFT", "MODIFIED", "LOCAL"}))
-        page.save_button.setEnabled(net_ready and save_allowed and not ids_reason)
-        page.save_button.setToolTip(net_reason or ids_reason or ("Включите работы в оценку." if not filled else "Проект можно сохранить без актов."))
-        page.save_button.setText("Сохранить проекты" if page._scope_is_period() else "Сохранить проект")
-        cancellable = bool(period and period.estimation_guid and period.gis_status in {"DRAFT", "APPROVED", "MODIFIED"} and not page._scope_is_period())
+        month_save_allowed = bool(month_filled) and bool(current) and (not current.estimation_guid or str(current.gis_status or "LOCAL").upper() in {"DRAFT", "MODIFIED", "LOCAL"})
+        period_save_allowed = bool(page._periods_with_quality_for_year("save_quality_assessment"))
+        for button, allowed, targets in ((page.save_button, month_save_allowed, month_filled),
+                                        (page.save_period_button, period_save_allowed, period_filled)):
+            button.setEnabled(net_ready and allowed and not ids_reason)
+            reason = net_reason or ids_reason
+            if not targets:
+                reason = reason or "Включите работы в оценку."
+            elif not allowed:
+                reason = reason or "Размещённую оценку нельзя сохранить как проект; для изменений используйте размещение новой версии."
+            button.setToolTip(reason or "Проект можно сохранить без актов.")
+        save_for_scope = page.save_period_button if page._scope_is_period() else page.save_button
+        cancellable = bool(current and current.estimation_guid and current.gis_status in {"DRAFT", "APPROVED", "MODIFIED"})
         page.cancel_button.setEnabled(net_ready and cancellable)
-        page.remote_danger.setVisible(cancellable)
     else:
         page.add_unplanned_button.setEnabled(net_ready and not ids_reason)
-    page.network_menu.sync()
     step = quality_step(states) if quality else fixation_step(states)
     key, title, action, detail, stage, done = step.key, step.title, step.action, step.detail, step.stage, step.done
     reason = ""
@@ -183,7 +234,7 @@ def refresh_monthly(page, kind: str):
     elif retry_here:
         key, title, action, detail = "resume", "Очередь остановлена", page.continue_queue_button.text(), failed_period.gis_last_error or "Проверьте причину в строке операции и повторите оставшиеся месяцы."
         reason = net_reason
-    elif quality and key == "save" and not page.save_button.isEnabled() and not net_reason and not ids_reason:
+    elif quality and key == "save" and not save_for_scope.isEnabled() and not net_reason and not ids_reason:
         # An annulled remote version cannot be edited as a project by the existing helper.
         key, stage, title, action = ("acts", 1, "Подготовьте акты для новой версии", "Подготовить акты") if validation else ("publish", 3, "Оценка готова к новой версии", "Разместить")
     if quality and key == "acts" and validation and "но не указано" in validation:
@@ -242,6 +293,17 @@ def refresh_monthly(page, kind: str):
         page.operation_status.setProperty("tone", "danger")
         page.operation_status.hide_progress()
         repolish(page.operation_status)
+    recommended_commands = {
+        "form": ("form_month_button", "form_period_button"),
+        "acts": ("auto_act_month_button", "auto_act_period_button"),
+        "save": ("save_button", "save_period_button"),
+        "publish": ("publish_button", "publish_period_button") if quality
+                   else ("publish_month_button", "publish_period_button"),
+        "fill": ("fill_month_button", "fill_period_button"),
+    }
+    if key in recommended_commands:
+        month_command, period_command = recommended_commands[key]
+        action = getattr(page, period_command if page._scope_is_period() else month_command).text()
     page.workflow.show_step(stage, title, detail, key, action, reason=reason, done=set(done))
 
 
@@ -252,8 +314,11 @@ def plan_fingerprint(page, plan_id: str) -> str:
     return hashlib.sha256(json.dumps(sorted(value), ensure_ascii=False).encode()).hexdigest()
 
 
-def mark_plan_synced(page, plan_id: str):
-    page.repository.set_setting(f"ui.plan.synced.{plan_id}", plan_fingerprint(page, plan_id))
+def mark_plan_synced(page, plan_id: str, fingerprint: str | None = None):
+    page.repository.set_setting(
+        f"ui.plan.synced.{plan_id}",
+        plan_fingerprint(page, plan_id) if fingerprint is None else fingerprint,
+    )
 
 
 def refresh_planning(page):
@@ -266,6 +331,8 @@ def refresh_planning(page):
     local = bool(plan) and not locked
     page.table.setEnabled(local)
     page.distribute_button.setEnabled(local)
+    cell = page.table.currentItem()
+    page.dates_button.setEnabled(bool(local and cell and cell.column() >= 3 and cell.flags() & Qt.ItemFlag.ItemIsEditable))
     page.clear_button.setEnabled(local)
     page.empty_hint.setVisible(not plan)
     net_reason = connection_reason(page, helper_supports_work_plans)
@@ -291,11 +358,8 @@ def refresh_planning(page):
             reason = str(exc)
     fingerprint = plan_fingerprint(page, plan.id)
     saved = page.repository.get_setting(f"ui.plan.synced.{plan.id}")
-    # Imported legacy plans have no UI snapshot. Establish it only when there is
-    # no later local edit, then compare values (also catches edits within a second).
-    if saved is None and plan.gis_work_plan_guid and plan.gis_last_sync_at and plan.updated_at and plan.updated_at <= plan.gis_last_sync_at:
-        mark_plan_synced(page, plan.id)
-        saved = fingerprint
+    # Legacy timestamps alone do not prove that current values match the server.
+    # Only a successfully applied load or the exact published snapshot is trusted.
     placed = bool(plan.gis_work_plan_guid and plan.gis_status == "SAVED" and saved == fingerprint and not plan.gis_last_error)
     page.publish_button.setEnabled(local and not net_reason and not reason)
     page.publish_button.setToolTip(net_reason or reason)

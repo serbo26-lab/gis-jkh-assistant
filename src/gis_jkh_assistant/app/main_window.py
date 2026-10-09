@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize, QTimer, Qt
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QMainWindow,
     QStackedWidget,
     QVBoxLayout,
@@ -18,7 +20,12 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
-from gis_jkh_assistant.quality_assessment import helper_supports_quality_assessment
+from gis_jkh_assistant.gis_integration.organization_context import (
+    MIN_ORGANIZATION_ROUTING_HELPER_VERSION, helper_supports_organization_routing,
+)
+from gis_jkh_assistant.quality_assessment import (
+    MIN_QUALITY_HELPER_VERSION, helper_supports_quality_assessment,
+)
 
 from .fixation_page import FixationPage
 from .houses_page import HousesPage
@@ -50,6 +57,12 @@ class MainWindow(QMainWindow):
         self._last_context_page_index = 0
         self._applying_shared_context = False
         self._closing = False
+        self._close_requested = False
+        self._active_workers = set()
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self.close)
+        self._pending_theme_pages = set()
         self._shared_context = {
             "organization_id": self.repository.get_setting("ui.context.organization_id"),
             "house_id": self.repository.get_setting("ui.context.house_id"),
@@ -84,12 +97,14 @@ class MainWindow(QMainWindow):
         self.navigation.setObjectName("Navigation")
         self.navigation.setFrameShape(QFrame.NoFrame)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.navigation.setWordWrap(True)
+        self.navigation.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.navigation.setIconSize(QSize(20, 20))
         for title, name, description in (
             ("Дома", "houses", "Управляющая организация и данные дома"),
-            ("Перечни", "lists", "Перечни работ и услуг: состав и размещение"),
+            ("Перечни работ и услуг", "lists", "Перечни работ и услуг: состав и размещение"),
             ("Планирование", "planning", "План работ по размещённому перечню"),
-            ("Фиксация", "fixation", "Фиксация выполненных работ и услуг по месяцам"),
+            ("Фиксация работ и услуг", "fixation", "Фиксация выполненных работ и услуг по месяцам"),
             ("Оценка качества", "quality", "Оценка качества, акты и размещение"),
             ("Настройки", "settings", "Рабочий контекст и оформление"),
         ):
@@ -99,10 +114,20 @@ class MainWindow(QMainWindow):
             self.navigation.addItem(item)
         sidebar_layout.addWidget(self.navigation, 1)
 
+        self.context_card = QFrame()
+        self.context_card.setObjectName("SidebarStatusCard")
+        self.context_layout = QVBoxLayout(self.context_card)
+        self.context_layout.setContentsMargins(10, 9, 10, 9)
+        self.context_layout.setSpacing(4)
+        context_title = QLabel("Рабочий контекст")
+        context_title.setObjectName("SidebarStatusTitle")
+        self.context_layout.addWidget(context_title)
+        context_title.hide()
         self.context_mode_label = QLabel()
-        self.context_mode_label.setObjectName("ContextCaption")
+        self.context_mode_label.setObjectName("SidebarStatusText")
         self.context_mode_label.setWordWrap(True)
-        sidebar_layout.addWidget(self.context_mode_label)
+        self.context_layout.addWidget(self.context_mode_label)
+        sidebar_layout.addWidget(self.context_card)
 
         self.integration_card = QFrame()
         self.integration_card.setObjectName("SidebarStatusCard")
@@ -114,6 +139,7 @@ class MainWindow(QMainWindow):
         integration_title = QLabel("Связь с ГИС ЖКХ")
         integration_title.setObjectName("SidebarStatusTitle")
         integration_layout.addWidget(integration_title)
+        integration_title.hide()
 
         self.integration_status = QLabel("Проверка подключения…")
         self.integration_status.setObjectName("SidebarStatusText")
@@ -144,6 +170,7 @@ class MainWindow(QMainWindow):
         )
         self.settings_page.themeChanged.connect(self._theme_changed)
         self.settings_page.scaleChanged.connect(self._scale_changed)
+        self.settings_page.helperSetupRequested.connect(self._open_helper_setup)
         for name in ("houses", "work_lists", "planning", "fixation", "quality"):
             page = self._page_by_context_name(name)
             page.context_notice = QLabel()
@@ -172,6 +199,28 @@ class MainWindow(QMainWindow):
         self.navigation.setCurrentRow(0)
         self._update_context_summary()
         self._update_display_layout(force=True)
+
+    def _open_helper_setup(self) -> None:
+        from .helper_setup_dialog import HelperSetupDialog
+
+        if (
+            self._active_workers or getattr(self, "_result_callbacks", 0)
+            or any(self._page_is_busy(page) for page in self._data_pages())
+        ):
+            QMessageBox.information(
+                self, "Выполняется операция",
+                "Дождитесь завершения обмена с ГИС перед установкой или обновлением помощника.",
+            )
+            return
+        dialog = getattr(self, "_helper_setup_dialog", None)
+        if dialog is None:
+            dialog = HelperSetupDialog(self.integration_gateway, self)
+            self._helper_setup_dialog = dialog
+        elif not dialog.isVisible():
+            dialog.reopen()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _connect_shared_context_sources(self) -> None:
         self.houses_page.organization_combo.currentIndexChanged.connect(
@@ -288,6 +337,15 @@ class MainWindow(QMainWindow):
 
     def _observe_context_operation(self, page, worker) -> None:
         """Record the context before asynchronous commands can emit UI changes."""
+        self._active_workers.add(worker)
+        def settled():
+            self._active_workers.discard(worker)
+            if self._close_requested:
+                self._close_timer.start(0)
+        worker.finished.connect(lambda: QTimer.singleShot(0, settled))
+        worker.finished.connect(
+            lambda: QTimer.singleShot(0, self._reload_pending_page_themes)
+        )
         if page is not self.work_lists_page:
             return
         page._operation_shared_context = dict(self._shared_context)
@@ -430,6 +488,8 @@ class MainWindow(QMainWindow):
         page = self._page_by_context_name(name)
         if self._page_is_busy(page):
             return
+        if getattr(page, "has_pending_save_error", lambda: False)():
+            return
         organization_id = self._shared_context.get("organization_id")
         house_id = self._shared_context.get("house_id")
         work_list_id = self._shared_context.get("work_list_id")
@@ -526,7 +586,7 @@ class MainWindow(QMainWindow):
 
     def _update_context_summary(self) -> None:
         if not self.settings_page.shared_context_enabled():
-            self.context_mode_label.setText("Независимый выбор в разделах")
+            self.context_mode_label.setText("Независимый выбор")
             self.context_mode_label.setToolTip("Режим выбора можно изменить в настройках")
             return
         house_id = self._shared_context.get("house_id")
@@ -534,8 +594,7 @@ class MainWindow(QMainWindow):
         year = self._shared_context.get("year")
         title = "Общий выбор" + (f" • {year}" if year else "")
         address = house.address if house else "Выберите дом"
-        brief_address = address if len(address) < 64 else address[:61] + "…"
-        self.context_mode_label.setText(f"{title}\n{brief_address}")
+        self.context_mode_label.setText(title)
         self.context_mode_label.setToolTip(f"{title}\n{address}")
 
     def _update_context_notices(self) -> None:
@@ -606,12 +665,20 @@ class MainWindow(QMainWindow):
         for page in (
             self.work_lists_page, self.planning_page, self.fixation_page, self.quality_page,
         ):
-            worker = getattr(page, "_integration_worker", None)
-            if worker is not None and worker.isRunning():
-                worker.finished.connect(lambda page=page: self._reload_page_theme(page))
+            if self._page_is_busy(page):
+                self._pending_theme_pages.add(page)
             else:
+                self._pending_theme_pages.discard(page)
                 self._reload_page_theme(page)
         self._refresh_integration_status()
+
+    def _reload_pending_page_themes(self) -> None:
+        if self._closing:
+            return
+        for page in tuple(self._pending_theme_pages):
+            if not self._page_is_busy(page):
+                self._pending_theme_pages.discard(page)
+                self._reload_page_theme(page)
 
     def _scale_changed(self, percent: int) -> None:
         """Only change presentation; keep edits, selected objects and queues intact."""
@@ -634,7 +701,8 @@ class MainWindow(QMainWindow):
         previous_guard = self._applying_shared_context
         self._applying_shared_context = True
         try:
-            page.flush_pending_changes()
+            if page.flush_pending_changes() is False:
+                return
             if page is self.work_lists_page:
                 if page._current_work_list_id:
                     page._load_items(page._current_work_list_id)
@@ -661,6 +729,7 @@ class MainWindow(QMainWindow):
         return worker is not None and worker.isRunning()
 
     def _refresh_integration_status(self) -> None:
+        self._reload_pending_page_themes()
         status = self.integration_gateway.status()
         if not status.running:
             text = "Локальный шлюз не запущен"
@@ -679,7 +748,14 @@ class MainWindow(QMainWindow):
             if not helper_supports_quality_assessment(status.helper_version):
                 text = (
                     f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version} устарел\n"
-                    "Требуется 0.1.20+"
+                    f"Требуется {'.'.join(map(str, MIN_QUALITY_HELPER_VERSION))}+"
+                )
+                tone = "warning"
+            elif not helper_supports_organization_routing(status.helper_version):
+                minimum = ".".join(map(str, MIN_ORGANIZATION_ROUTING_HELPER_VERSION))
+                text = (
+                    f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version}\n"
+                    f"Для выбора вкладки УО требуется {minimum}+"
                 )
                 tone = "warning"
             else:
@@ -694,7 +770,15 @@ class MainWindow(QMainWindow):
                     text += "\nСессия: активна"
                     tone = "success"
 
-        self.integration_status.setText(text)
+        brief = ("Локальный шлюз не запущен" if not status.running else
+                 "Помощник не подключён" if not status.helper_connected else
+                 "Откройте вкладку ГИС ЖКХ" if not status.gis_page_ready else
+                 "Помощник устарел" if "устарел" in text else
+                 "Обновите браузерный помощник" if "требуется" in text.lower() else
+                 "Ошибка продления сессии" if status.session_keep_alive_error else
+                 text.split("\n")[0])
+        self.integration_status.setText(brief)
+        self.integration_status.setToolTip(text)
         self.integration_status.setStyleSheet(f"color: {color(tone)};")
         self.settings_page.set_connection_status(text)
 
@@ -711,7 +795,11 @@ class MainWindow(QMainWindow):
         if previous_page is not self.pages.widget(index):
             flush = getattr(previous_page, "flush_pending_changes", None)
             if flush is not None:
-                flush()
+                if flush() is False:
+                    self.navigation.blockSignals(True)
+                    self.navigation.setCurrentRow(self.pages.currentIndex())
+                    self.navigation.blockSignals(False)
+                    return
         context_name = {
             0: "houses",
             1: "work_lists",
@@ -738,6 +826,17 @@ class MainWindow(QMainWindow):
         finally:
             self._applying_shared_context = previous_guard
         self.pages.setCurrentIndex(index)
+        target_page = self.pages.currentWidget()
+        if (self.settings_page.shared_context_enabled()
+                and previous_page in (self.fixation_page, self.quality_page)
+                and target_page in (self.fixation_page, self.quality_page)
+                and previous_page is not target_page and not self._page_is_busy(target_page)
+                and previous_page._current_work_list_id == target_page._current_work_list_id
+                and previous_page.year_combo.currentData() == target_page.year_combo.currentData()):
+            month = previous_page._current_month
+            if month is not None:
+                target_page._select_month(month)
+            target_page.scope_switcher.set_scope(previous_page.scope_switcher.scope())
         self._update_context_summary()
         self._update_context_notices()
 
@@ -783,25 +882,30 @@ class MainWindow(QMainWindow):
         if force or mode != self._view_mode:
             self._view_mode = mode
             # Density changes layout, never the user's chosen text size.
-            base_width = {"normal": 228, "compact": 196, "narrow": 172}[mode]
             self.navigation.ensurePolished()
             icon_size = scaled(20, self._ui_scale)
             self.navigation.setIconSize(QSize(icon_size, icon_size))
-            text_width = max(
-                self.navigation.fontMetrics().horizontalAdvance(self.navigation.item(i).text())
-                for i in range(self.navigation.count())
-            )
-            self.sidebar.setFixedWidth(max(
-                scaled(max(228, base_width), self._ui_scale),
-                text_width + icon_size + scaled(50, self._ui_scale),
-            ))
+            self.sidebar.setFixedWidth(min(272, round(228 + 88 * (self._ui_scale - 1))))
+            # Below this width the two-pane house form and context selectors
+            # cannot provide all controls. Never advertise an unusable size.
+            self.setMinimumWidth(round(1000 + 400 * (self._ui_scale - 1)))
             self.sidebar_layout.setContentsMargins(*(
-                scaled(value, self._ui_scale) for value in (12, 16, 12, 16)
+                scaled(value, self._ui_scale) for value in (8, 10, 8, 10)
             ))
+            metrics = self.navigation.fontMetrics()
+            text_width = self.sidebar.width() - scaled(54, self._ui_scale)
+            for index in range(self.navigation.count()):
+                item = self.navigation.item(index)
+                rect = metrics.boundingRect(0, 0, text_width, 1000, Qt.TextFlag.TextWordWrap, item.text())
+                item.setSizeHint(QSize(0, rect.height() + scaled(20, self._ui_scale)))
             self.integration_layout.setContentsMargins(*(
                 scaled(value, self._ui_scale) for value in (10, 9, 10, 9)
             ))
             self.integration_layout.setSpacing(scaled(4, self._ui_scale))
+            self.context_layout.setContentsMargins(*(
+                scaled(value, self._ui_scale) for value in (10, 9, 10, 9)
+            ))
+            self.context_layout.setSpacing(scaled(4, self._ui_scale))
             self.houses_page.set_compact_mode(mode != "normal")
             self.work_lists_page.set_view_mode(mode)
             self.planning_page.set_view_mode(mode)
@@ -811,6 +915,18 @@ class MainWindow(QMainWindow):
             self.houses_page.card_layout.setProperty("uiBaseMargins", None)
             self.houses_page.card_layout.setProperty("uiBaseSpacing", None)
             apply_layout_scale(self.pages, self._ui_scale)
+            QTimer.singleShot(0, self._refresh_navigation_metrics)
+
+    def _refresh_navigation_metrics(self) -> None:
+        """Measure after stylesheet/layout settles, including the selected font."""
+        font = QFont(self.navigation.font())
+        font.setBold(True)
+        metrics = QFontMetrics(font)
+        width = self.navigation.viewport().width() - self.navigation.iconSize().width() - scaled(26, self._ui_scale)
+        for index in range(self.navigation.count()):
+            item = self.navigation.item(index)
+            rect = metrics.boundingRect(0, 0, max(1, width), 1000, Qt.TextFlag.TextWordWrap, item.text())
+            item.setSizeHint(QSize(0, rect.height() + scaled(20, self._ui_scale)))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self._update_display_layout()
@@ -826,14 +942,38 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._apply_window_chrome)
         return result
 
+    def can_delete_local_data(self) -> bool:
+        if self._active_workers or getattr(self, "_result_callbacks", 0) or any(self._page_is_busy(page) for page in self._data_pages()):
+            QMessageBox.information(self, "Выполняется операция", "Дождитесь завершения обмена с ГИС перед удалением локальных данных.")
+            return False
+        return self.houses_page.flush_pending_changes() is not False
+
+    def _data_pages(self):
+        return (self.houses_page, self.work_lists_page, self.planning_page,
+                self.fixation_page, self.quality_page)
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._closing:
+            event.accept()
+            return
+        # Keep the Qt event loop and repository alive for queued success/failure
+        # callbacks. A running command completes; following queue items do not start.
+        if self._active_workers or getattr(self, "_result_callbacks", 0) or any(self._page_is_busy(page) for page in self._data_pages()):
+            self._close_requested = True
+            self.centralWidget().setEnabled(False)
+            self.statusBar().showMessage("Завершение текущих операций… Приложение закроется после сохранения результатов.")
+            self._close_timer.start(100)
+            event.ignore()
+            return
+        for page in self._data_pages():
+            if page.flush_pending_changes() is False:
+                self._close_requested = False
+                self.centralWidget().setEnabled(True)
+                self.statusBar().clearMessage()
+                event.ignore()
+                return
         self._closing = True
         self.integration_status_timer.stop()
-        self.houses_page.flush_pending_changes()
-        self.work_lists_page.flush_pending_changes()
-        self.planning_page.flush_pending_changes()
-        self.fixation_page.flush_pending_changes()
-        self.quality_page.flush_pending_changes()
         self.integration_gateway.stop()
         self.repository.close()
         super().closeEvent(event)

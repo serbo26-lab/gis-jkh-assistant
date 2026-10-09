@@ -15,11 +15,12 @@ const patterns = [
   "https://lk.dom.gosuslugi.ru/*"
 ];
 
-function helper(tabs) {
+function helper(tabs, focusedWindowId = null) {
   const queries = [];
   const executions = [];
   const context = vm.createContext({
     chrome: {
+      windows: { getLastFocused: async () => ({ id: focusedWindowId }) },
       tabs: { query: async ({ url }) => {
         queries.push(Array.from(url));
         return tabs.filter(tab => url.some(pattern =>
@@ -46,6 +47,14 @@ test("manifest grants only the two GIS hosts and the existing local gateway", ()
   ]);
   const { context } = helper([]);
   assert.equal(vm.runInContext("HELPER_CODE_VERSION", context), manifest.version);
+});
+
+test("identifies the helper version on the actual command polling request", async () => {
+  const { context } = helper([]);
+  const requests = [];
+  context.fetch = async (url, options) => { requests.push({ url, options }); return { ok: true }; };
+  await vm.runInContext('localFetch("/next")', context);
+  assert.equal(requests[0].options.headers["X-GIS-JKH-Helper-Version"], manifest.version);
 });
 
 for (const host of ["my.dom.gosuslugi.ru", "lk.dom.gosuslugi.ru"]) {
@@ -76,6 +85,121 @@ test("prefers the active GIS tab when both domains are open", async () => {
     { id: 2, active: true, url: "https://my.dom.gosuslugi.ru/workplanning" }
   ]);
   assert.equal((await vm.runInContext("findGisTab()", context)).id, 2);
+});
+
+test("prefers the active GIS tab in the last focused browser window", async () => {
+  const { context } = helper([
+    { id: 1, active: true, windowId: 10, url: "https://lk.dom.gosuslugi.ru/workplanning" },
+    { id: 2, active: true, windowId: 20, url: "https://my.dom.gosuslugi.ru/workplanning" }
+  ], 20);
+  assert.equal((await vm.runInContext("findGisTab()", context)).id, 2);
+  assert.equal((await vm.runInContext(
+    'findGisTab({type: "get_current_organization", payload: {}})', context
+  )).id, 2);
+});
+
+test("ambiguous organization import requires an active GIS tab in the focused window", async () => {
+  const tabs = [
+    { id: 1, active: true, windowId: 10, url: "https://lk.dom.gosuslugi.ru/workplanning" },
+    { id: 2, active: true, windowId: 20, url: "https://my.dom.gosuslugi.ru/workplanning" }
+  ];
+  for (const focused of [null, 30]) {
+    const { context, executions } = helper(tabs, focused);
+    await assert.rejects(vm.runInContext(
+      'executeInGisTab({type: "get_current_organization", payload: {}})', context
+    ), /Сделайте вкладку нужной УО активной/);
+    assert.equal(executions.length, 0);
+  }
+});
+
+function routedHelper(tabs, organizations, focused = 10) {
+  const state = helper(tabs, focused);
+  state.context.chrome.scripting.executeScript = async options => {
+    state.executions.push(options);
+    if (options.args[0].type === "get_current_organization") {
+      const organization = organizations.get(options.target.tabId);
+      return [{ result: organization
+        ? { ok: true, result: { organization } }
+        : { ok: false, error: "Session expired" } }];
+    }
+    return [{ result: { ok: true, result: { done: true } } }];
+  };
+  vm.runInContext("hello = async () => true", state.context);
+  return state;
+}
+
+const orgA = { ogrn: "1022600000000", organizationRootGuid: "root-a" };
+const orgB = { ogrn: "1022600000001", organizationRootGuid: "root-b" };
+const twoTabs = () => [
+  { id: 1, active: true, windowId: 10, url: "https://lk.dom.gosuslugi.ru/workplanning" },
+  { id: 2, active: true, windowId: 20, url: "https://my.dom.gosuslugi.ru/workplanning" }
+];
+
+test("routes successive commands for two organizations to their respective tabs", async () => {
+  const { context, executions } = routedHelper(twoTabs(), new Map([[1, orgA], [2, orgB]]));
+  for (const expected of [orgB, orgA, orgB]) {
+    context.command = { type: "save_work_fixation", payload: { organizationContext: expected } };
+    await vm.runInContext("executeInGisTab(command)", context);
+    assert.equal(executions.at(-1).target.tabId, expected === orgA ? 1 : 2);
+  }
+});
+
+test("keeps the confirmed organization tab when browser focus changes", async () => {
+  const { context, executions } = routedHelper(twoTabs(), new Map([[1, orgA], [2, orgA]]));
+  context.command = { type: "approve_work_list", payload: { organizationContext: orgA } };
+  await vm.runInContext("executeInGisTab(command)", context);
+  context.chrome.windows.getLastFocused = async () => ({ id: 20 });
+  await vm.runInContext("executeInGisTab(command)", context);
+  assert.equal(executions.at(-1).target.tabId, 1);
+});
+
+test("revalidates a pinned tab and finds another tab after switching its organization", async () => {
+  const organizations = new Map([[1, orgA], [2, orgA]]);
+  const { context, executions } = routedHelper(twoTabs(), organizations);
+  context.command = { type: "save_work_plan", payload: { organizationContext: orgA } };
+  await vm.runInContext("executeInGisTab(command)", context);
+  organizations.set(1, orgB);
+  await vm.runInContext("executeInGisTab(command)", context);
+  assert.equal(executions.at(-1).target.tabId, 2);
+});
+
+for (const actual of [orgB, { ...orgA, organizationRootGuid: "different-root" }, null]) {
+  test(`refuses to send to a missing or mismatched organization: ${JSON.stringify(actual)}`, async () => {
+    const { context, executions } = routedHelper(twoTabs(), new Map([[1, actual], [2, orgB]]));
+    context.command = { type: "approve_quality_assessment", payload: { organizationContext: orgA } };
+    await assert.rejects(vm.runInContext("executeInGisTab(command)", context), /Не найдена авторизованная вкладка/);
+    assert.ok(executions.every(options => options.args[0].type === "get_current_organization"));
+  });
+}
+
+test("rediscovers a confirmed organization's tab after it is closed", async () => {
+  const tabs = twoTabs();
+  const { context, executions } = routedHelper(tabs, new Map([[1, orgA], [2, orgA]]));
+  context.command = { type: "save_work_plan", payload: { organizationContext: orgA } };
+  await vm.runInContext("executeInGisTab(command)", context);
+  tabs.splice(0, 1);
+  await vm.runInContext("executeInGisTab(command)", context);
+  assert.equal(executions.at(-1).target.tabId, 2);
+});
+
+test("does not return data for local application after the tab switches organization", async () => {
+  const organizations = new Map([[1, orgA], [2, orgB]]);
+  const { context } = routedHelper(twoTabs(), organizations);
+  const execute = context.chrome.scripting.executeScript;
+  context.chrome.scripting.executeScript = async options => {
+    const result = await execute(options);
+    if (options.args[0].type === "load_work_plan") organizations.set(1, orgB);
+    return result;
+  };
+  context.command = { type: "load_work_plan", payload: { organizationContext: orgA } };
+  await assert.rejects(vm.runInContext("executeInGisTab(command)", context), /изменилась во время операции/);
+});
+
+test("renews both organization sessions instead of only the active window", async () => {
+  const { context, executions } = helper(twoTabs(), 10);
+  vm.runInContext("hello = async () => true", context);
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.deepEqual(executions.map(options => options.target.tabId), [1, 2]);
 });
 
 test("does not treat the public portal or unrelated hosts as a GIS session", async () => {
@@ -145,6 +269,66 @@ function organizationPage(http) {
   }) }) } };
   return context;
 }
+
+test("rechecks organization inside the page before dispatching a command", async () => {
+  const requests = [];
+  const context = organizationPage(async config => {
+    requests.push(config);
+    return { data: { guid: "version-b", registryOrganizationRootEntityGuid: "root-b",
+      shortName: "УО Б", ogrn: orgB.ogrn } };
+  });
+  context.command = { type: "cancel_work_list", payload: {
+    workListGuid: "list-a", organizationContext: orgA
+  } };
+  const reply = await vm.runInContext("runGisCommand(command)", context);
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /не совпадает с выбранной УО/);
+  assert.ok(requests.every(config => config.method === "GET" &&
+    config.url === "/ppa/api/rest/services/ppa/organizations/details"));
+});
+
+test("stops a write when the organization changes after dispatch starts", async () => {
+  const requests = [];
+  let identityChecks = 0;
+  const context = organizationPage(async config => {
+    requests.push(config);
+    if (config.url !== "/ppa/api/rest/services/ppa/organizations/details") {
+      return { data: { guid: "list-a", status: "APPROVED" } };
+    }
+    if (++identityChecks === 1) {
+      return { data: { guid: "version-a", registryOrganizationRootEntityGuid: "root-a",
+        shortName: "УО А", ogrn: orgA.ogrn } };
+    }
+    return { data: { guid: "version-b", registryOrganizationRootEntityGuid: "root-b",
+      shortName: "УО Б", ogrn: orgB.ogrn } };
+  });
+  context.command = { type: "cancel_work_list", payload: {
+    workListGuid: "list-a", organizationContext: orgA
+  } };
+  const reply = await vm.runInContext("runGisCommand(command)", context);
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /не совпадает с выбранной УО/);
+  assert.ok(requests.every(config => config.method === "GET"));
+  assert.equal(identityChecks, 2);
+});
+
+test("executes a request when the organization still matches the selected context", async () => {
+  const requests = [];
+  const context = organizationPage(async config => {
+    requests.push(config);
+    return { data: config.url === "/ppa/api/rest/services/ppa/organizations/details"
+      ? { guid: "version-a", registryOrganizationRootEntityGuid: "ROOT-A",
+          shortName: "УО А", ogrn: orgA.ogrn }
+      : { workPlan: null } };
+  });
+  context.command = { type: "load_work_plan", payload: {
+    workListGuid: "list-a", year: 2020, organizationContext: orgA
+  } };
+  const reply = await vm.runInContext("runGisCommand(command)", context);
+  assert.equal(reply.ok, true);
+  assert.equal(reply.result.found, false);
+  assert.equal(requests.filter(config => config.method === "POST").length, 1);
+});
 
 test("loads the authorized organization with a read-only GET and narrow result", async () => {
   const requests = [];

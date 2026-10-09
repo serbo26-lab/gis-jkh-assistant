@@ -224,7 +224,9 @@ def test_pages_fit_desktop_at_selected_ui_size(desktop, theme, percent, size):
                 )
         for row in range(window.navigation.count()):
             rect = window.navigation.visualItemRect(window.navigation.item(row))
-            text_width = window.navigation.fontMetrics().horizontalAdvance(
-                window.navigation.item(row).text(),
-            )
-            assert rect.width() >= text_width + window.navigation.iconSize().width()
+            text = window.navigation.item(row).text()
+            available = window.sidebar.width() - round(54 * percent / 100)
+            wrapped = window.navigation.fontMetrics().boundingRect(0, 0, available, 1000, Qt.TextFlag.TextWordWrap, text)
+            assert rect.height() >= wrapped.height()
+            assert window.navigation.viewport().rect().contains(rect)
+        assert window.navigation.verticalScrollBar().maximum() == 0

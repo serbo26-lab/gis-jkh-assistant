@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
 import mimetypes
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QDateEdit,
     QDialog,
     QDialogButtonBox,
@@ -24,6 +25,8 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
+from .widgets import SafeComboBox
+from .workflow_widgets import style_danger_button
 
 
 _ALLOWED_EXTENSIONS = {
@@ -52,7 +55,7 @@ class AddQualityActDialog(QDialog):
         root = QVBoxLayout(self)
         form = QFormLayout()
 
-        self.type_combo = QComboBox()
+        self.type_combo = SafeComboBox()
         self.type_combo.addItem("Акт выполненных работ", "ACCEPTANCE_ACT")
         self.type_combo.addItem("Акт нарушения качества", "QUALITY_VIOLATION_ACT")
         form.addRow("Тип акта *", self.type_combo)
@@ -117,6 +120,9 @@ class AddQualityActDialog(QDialog):
         choose.clicked.connect(self._choose_file)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
+        self.ensurePolished()
+        # QFormLayout's compressed minimum overlaps styled fields at 150%.
+        self.setMinimumSize(self.sizeHint())
 
     def _choose_file(self) -> None:
         raw, _ = QFileDialog.getOpenFileName(
@@ -134,7 +140,7 @@ class AddQualityActDialog(QDialog):
         try:
             size = path.stat().st_size
         except OSError as exc:
-            QMessageBox.warning(self, "Не удалось прочитать файл", str(exc))
+            QMessageBox.warning(self, "Не удалось прочитать файл", error_text(exc, context=context_text(self)))
             return
         if size <= 0:
             QMessageBox.warning(self, "Пустой файл", "Выбранный файл пуст.")
@@ -198,12 +204,16 @@ class QualityActsDialog(QDialog):
         self.resize(720, 430)
 
         root = QVBoxLayout(self)
+        context = QLabel(f"{self.month:02d}.{self.year} • {context_text(parent) if parent else ''}")
+        context.setWordWrap(True)
+        context.setObjectName("Muted")
+        root.addWidget(context)
         self.list = QListWidget()
         root.addWidget(self.list, 1)
 
         actions = QHBoxLayout()
         self.add_button = QPushButton("Добавить акт")
-        self.delete_button = QPushButton("Отвязать от работы")
+        self.delete_button = style_danger_button(QPushButton("Отвязать акт от работы"))
         self.add_button.setEnabled(self.editable)
         self.delete_button.setEnabled(self.editable)
         actions.addWidget(self.add_button)
@@ -213,8 +223,8 @@ class QualityActsDialog(QDialog):
 
         if not self.editable:
             note = QLabel(
-                "Оценка уже сохранена в ГИС ЖКХ. Изменение и удаление размещённых "
-                "актов включим после отдельной проверки сценария обновления."
+                "Связи актов этой оценки доступны только для просмотра. "
+                "Добавление и отвязка здесь недоступны; документы можно просмотреть в «Актах месяца»."
             )
             note.setObjectName("Muted")
             note.setWordWrap(True)
@@ -257,7 +267,7 @@ class QualityActsDialog(QDialog):
         try:
             self.store.add_act(item_id=self.item_id, **dialog.values())
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "Не удалось добавить акт", str(exc))
+            QMessageBox.warning(self, "Не удалось добавить акт", error_text(exc, context=context_text(self)))
             return
         self._reload()
 
@@ -273,6 +283,6 @@ class QualityActsDialog(QDialog):
         try:
             self.store.unlink_act(str(act_id), self.item_id)
         except ValueError as exc:
-            QMessageBox.warning(self, "Нельзя удалить акт", str(exc))
+            QMessageBox.warning(self, "Нельзя удалить акт", error_text(exc, context=context_text(self)))
             return
         self._reload()

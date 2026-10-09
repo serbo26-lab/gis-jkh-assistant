@@ -23,7 +23,7 @@ from gis_jkh_assistant.database import Repository  # noqa: E402
 
 
 class Gateway:
-    def __init__(self, version="0.1.29"):
+    def __init__(self, version="0.1.30"):
         self.version = version
 
     def status(self):
@@ -96,43 +96,44 @@ def menu_text(button):
 
 def test_all_organization_downloads_are_visible_commands_with_explicit_scope(pages):
     page = pages.houses
-    assert "вся управляющая организация" in " ".join(labels(page.organization_sync_card))
-    for button in (
-        page.load_organization_button, page.sync_houses_button,
-        page.sync_all_management_button, page.sync_all_work_lists_button,
-    ):
-        assert button.isVisibleTo(page)
-        assert button.parentWidget() is page.organization_sync_card
-        assert button.menu() is None
-        assert not button.icon().isNull()
+    assert page.sync_houses_button.isVisibleTo(page)
     assert "все дома" in page.sync_houses_button.text()
-    assert "всеми домами" in page.sync_all_management_button.text()
-    assert "всех домов" in page.sync_all_work_lists_button.text()
+    assert page.bulk_actions_button.isVisibleTo(page)
+    assert "все дома УО" in page.bulk_actions_button.text()
+    page.bulk_actions_button.sync()
+    assert menu_text(page.bulk_actions_button) == ["Загрузить управление всеми домами", "Загрузить перечни всех домов"]
+    assert all(action.isEnabled() == button.isEnabled() for action, button, _when in page.bulk_actions_button.entries)
+    assert "Добавить УО из ГИС" in menu_text(page.organization_actions_button)
     assert not page.gis_actions_button.isVisibleTo(page)
 
 
 def test_manual_organization_actions_and_local_files_are_separate_from_gis(pages):
     page = pages.houses
-    for button in (page.add_org_button, page.edit_org_button, page.add_house_button):
-        assert button.parentWidget() is page.manual_actions_card
-        assert button.isVisibleTo(page)
-    assert page.files_actions_button.parentWidget() is page.manual_actions_card
-    assert all("ГИС" not in text for text in menu_text(page.files_actions_button))
-    assert "▾" not in page.files_actions_button.text()
-    assert not page.organization_actions_button.isVisibleTo(page)
-    assert page.organization_danger.parentWidget() is page.manual_actions_card
-    assert page.delete_org_button not in page.organization_sync_card.findChildren(QPushButton)
+    assert page.organization_actions_button.isVisibleTo(page)
+    commands = menu_text(page.organization_actions_button)
+    assert "Добавить УО вручную" in commands
+    assert "Изменить реквизиты УО" in commands
+    assert "Удалить УО и её данные…" in commands
+    assert page.add_house_button.isVisibleTo(page)
+    assert page.files_actions_button.isVisibleTo(page)
+    assert all("ГИС" not in item for item in menu_text(page.files_actions_button))
+    assert not page.delete_org_button.isVisibleTo(page)
+    assert page.delete_org_button.parentWidget() is page.command_host
 
 
-@pytest.mark.parametrize("version,expected", [("0.1.29", "organization_load"), ("0.1.28", "organization")])
+@pytest.mark.parametrize("version,expected", [
+    ("0.1.30", "organization_load"), ("0.1.29", "organization"), ("0.1.28", "organization"),
+])
 def test_first_step_offers_import_from_supported_authorized_helper(app, tmp_path, version, expected, monkeypatch):
     repository = Repository(tmp_path / "empty.db")
     page = HousesPage(repository, Gateway(version))
     page.show()
     settle(app)
     assert page.workflow._key == expected
-    assert page.add_org_button.isVisibleTo(page)
-    assert page.load_organization_button.isVisibleTo(page)
+    assert page.organization_actions_button.isVisibleTo(page)
+    page.organization_actions_button.sync()
+    assert any(source is page.add_org_button for _action, source, _when in page.organization_actions_button.entries)
+    assert any(source is page.load_organization_button for _action, source, _when in page.organization_actions_button.entries)
     if expected == "organization_load":
         from gis_jkh_assistant.app import organization_sync
         called = []
@@ -141,26 +142,25 @@ def test_first_step_offers_import_from_supported_authorized_helper(app, tmp_path
         assert called == [page]
     else:
         assert not page.load_organization_button.isEnabled()
-        assert "0.1.29" in page.load_organization_button.toolTip()
+        assert "0.1.30" in page.load_organization_button.toolTip()
     page.deleteLater()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     repository.close()
 
 
-def test_work_list_files_and_network_fallback_do_not_share_a_menu(pages):
+def test_work_list_files_and_network_fallback_remain_explicit_and_reachable(pages):
     page = pages.lists
-    local = menu_text(page.files_actions_button)
-    remote = menu_text(page.xlsx_network_actions)
-    assert local == ["Выбрать XLSX вручную…", "Сформировать XLSX"]
-    assert remote == ["Получить официальный шаблон", "Отправить XLSX в ГИС"]
-    assert page.templates_button.isVisibleTo(page)
-    assert page.sync_gis_button.isVisibleTo(page)
-    assert page.load_gis_lists_button.isVisibleTo(page)
-    assert page.project_actions.text() == "Проект и размещение в ГИС"
-    assert "вручную" not in " ".join(menu_text(page.project_actions))
-    assert menu_text(page.remote_danger) == ["Отменить размещённый перечень"]
-    assert menu_text(page.local_list_danger) == ["Удалить локальный перечень"]
-    assert page.local_list_danger.parentWidget() is page.files_actions_button.parentWidget()
+    assert page.files_actions_button.isVisibleTo(page)
+    assert menu_text(page.files_actions_button) == ["Выбрать XLSX вручную…", "Сформировать XLSX", "Получить официальный шаблон", "Отправить XLSX в ГИС"]
+    assert any(action.isSeparator() for action in page.files_actions_button.menu().actions())
+    assert "Шаблоны пользователя…" in menu_text(page.composition_actions)
+    assert "Удалить локальный перечень" in menu_text(page.composition_actions)
+    page.gis_actions.sync()
+    assert "Загрузить перечни дома" in menu_text(page.gis_actions)
+    assert "Проверить статус" in menu_text(page.gis_actions)
+    for button in (page.cancel_gis_button, page.delete_button):
+        assert not button.isVisibleTo(page)
+        assert button.parentWidget() is page.command_host
 
 
 def test_disabled_house_download_explains_missing_gis_identity_inline(pages):
@@ -176,24 +176,32 @@ def test_disabled_house_download_explains_missing_gis_identity_inline(pages):
 
 def test_disclosures_say_what_will_open_and_use_svg_chevrons(pages):
     page = pages.lists
-    for toggle in (page.details_toggle, page.xlsx_toggle):
-        assert toggle.text().startswith("Показать ")
-        assert not toggle.icon().isNull()
-        toggle.setChecked(True)
-        assert toggle.text().startswith("Скрыть ")
-        toggle.setChecked(False)
+    assert not page.details_toggle.isChecked()
+    assert not page.details_card.isVisibleTo(page)
+    assert "Параметры" in page.details_toggle.text()
+    assert not page.details_toggle.icon().isNull()
+    page.details_toggle.click()
+    assert page.details_card.isVisibleTo(page)
+    assert page.details_toggle.text().startswith("Скрыть ")
+    page.details_toggle.click()
+    assert page.details_toggle.text().startswith("Показать ")
     assert page.context_status.isVisibleTo(page)
     assert "2026" in page.context_status.text()
     assert pages.houses.house_ids_toggle.text() == "Показать идентификаторы"
 
 
-def test_quality_local_preparation_is_visible_and_network_menu_is_named(pages):
+def test_quality_local_preparation_and_both_network_scopes_are_visible(pages):
     page = pages.quality
-    for button in (page.form_month_button, page.auto_act_month_button, page.month_acts_button):
-        assert button.isVisibleTo(page)
-    assert menu_text(page.preparation_menu) == ["Включить все", "Снять все"]
-    assert page.network_menu.text() == "Проект и размещение в ГИС"
-    assert menu_text(page.network_menu) == ["Сохранить проект", "Разместить"]
+    assert page.data_actions.isVisibleTo(page)
+    for menu in (page.month_actions, page.period_actions, page.acts_actions, page.selection_actions):
+        assert menu in page.data_actions.submenus or menu.isVisibleTo(page)
+        menu.sync()
+        assert all(action.isEnabled() == source.isEnabled() for action, source, _when in menu.entries)
+    assert page.month_acts_button.isVisibleTo(page)
+    assert "Сохранить проект месяца" in menu_text(page.month_actions)
+    assert "Сохранить проекты периода" in menu_text(page.period_actions)
+    assert "Сформировать оценку месяца" in menu_text(page.month_actions)
+    assert "Автоакт месяца" in menu_text(page.acts_actions)
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])

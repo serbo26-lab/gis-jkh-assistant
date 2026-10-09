@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -140,7 +141,44 @@ class SafeComboBox(QComboBox):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMaxVisibleItems(20)
+        self.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         ensure_combo_chevron(self)
+
+    def showPopup(self) -> None:  # noqa: N802 - Qt API
+        """Keep a scrollable native popup below its field and inside the window."""
+        view = self.view()
+        view.setMaximumHeight(16777215)
+        super().showPopup()
+        if not self.count():
+            return
+        popup = view.window()
+        bounds = self.window().rect().translated(
+            self.window().mapToGlobal(self.window().rect().topLeft())
+        )
+        screen = self.screen()
+        if screen:
+            bounds = bounds.intersected(screen.availableGeometry())
+        bounds.adjust(4, 4, -4, -4)
+        top = self.mapToGlobal(self.rect().topLeft()).y()
+        anchor = self.mapToGlobal(self.rect().bottomLeft())
+        below = max(1, bounds.bottom() - anchor.y())
+        above = max(1, top - bounds.top())
+        row_height = max(view.sizeHintForRow(max(0, self.currentIndex())),
+                         self.fontMetrics().height() + 8)
+        desired = min(self.maxVisibleItems(), self.count()) * row_height + 4
+        opens_below = below >= min(desired, 3 * row_height) or below >= above
+        height = min(desired, below if opens_below else above)
+        width = min(max(self.width(), popup.width()), bounds.width())
+        x = max(bounds.left(), min(anchor.x(), bounds.right() - width + 1))
+        y = anchor.y() + 1 if opens_below else top - height
+        popup.setMinimumSize(0, 0)
+        popup.setMaximumHeight(height)
+        popup.setGeometry(x, y, width, height)
+        view.setMaximumHeight(max(1, height - 2))
+        view.scrollTo(self.model().index(
+            max(0, self.currentIndex()), self.modelColumn(), self.rootModelIndex()
+        ))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         self.setFocus(Qt.FocusReason.MouseFocusReason)
@@ -242,7 +280,8 @@ class ScopeSwitcher(QFrame):
             font.setBold(True)
             metrics = QFontMetrics(font)
             button.setMinimumWidth(metrics.horizontalAdvance(button.text()) + 32)
-            button.setMinimumHeight(max(button.minimumSizeHint().height(), metrics.height() + 20))
+            button.setMinimumHeight(0)
+            button.setMinimumHeight(max(button.minimumSizeHint().height(), metrics.height() + 8))
 
     def changeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().changeEvent(event)
@@ -271,27 +310,30 @@ class StatusStrip(QFrame):
     def __init__(self, text: str = "", parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("StatusStrip")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 7, 10, 7)
-        layout.setSpacing(8)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 3, 8, 3)
+        layout.setSpacing(5)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        layout.addLayout(row)
 
         self.label = QLabel(text)
         self.label.setObjectName("StatusStripText")
         self.label.setWordWrap(True)
-        layout.addWidget(self.label, 1)
+        row.addWidget(self.label, 1)
 
         self.progress = QProgressBar()
         self.progress.setObjectName("StatusStripProgress")
-        self.progress.setTextVisible(True)
-        self.progress.setMinimumWidth(150)
-        self.progress.setMaximumWidth(260)
+        self.progress.setTextVisible(False)
+        self.progress.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
         self.actions = QHBoxLayout()
         self.actions.setContentsMargins(0, 0, 0, 0)
         self.actions.setSpacing(6)
-        layout.addLayout(self.actions)
+        row.addLayout(self.actions)
 
     def set_text(self, text: str) -> None:
         self.label.setText(text)

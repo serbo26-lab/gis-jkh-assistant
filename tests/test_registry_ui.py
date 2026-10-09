@@ -27,7 +27,7 @@ class Gateway:
         self.ready = ready
 
     def status(self):
-        return SimpleNamespace(running=True, helper_connected=self.ready, gis_page_ready=self.ready)
+        return SimpleNamespace(running=True, helper_connected=self.ready, gis_page_ready=self.ready, helper_version="0.1.30")
 
 
 @pytest.fixture(scope="module")
@@ -250,7 +250,7 @@ def test_houses_has_real_operation_status_and_contextual_next_action(tmp_path, a
     repository = Repository(tmp_path / "houses.db")
     page = HousesPage(repository, Gateway())
     assert isinstance(page.bulk_status_strip, OperationStatus)
-    assert page.workflow._key == "organization"
+    assert page.workflow._key == "organization_load"
     org = repository.create_organization(name="УК", ogrn="1022600000000")
     page.refresh_organizations(select_id=org.id)
     assert page.workflow._key == "load"

@@ -77,7 +77,7 @@ def test_apply_remote_work_plan(tmp_path) -> None:
     plan = repository.get_work_plan_for_list_year(work_list.id, 2026)
     assert plan is not None
     assert plan.gis_work_plan_guid == "plan-guid"
-    assert applied == {"items": 1, "months": 1, "historical": 0}
+    assert applied == {"items": 1, "months": 1, "historical": 0, "preserved_local": 0}
     months = repository.list_work_plan_months(plan.id)
     assert len(months) == 1
     assert months[0].month == 1
@@ -199,7 +199,7 @@ def test_apply_remote_quality_assessment_with_act_metadata(tmp_path) -> None:
     assert len(acts) == 1
     assert acts[0].remote_act_guid == "act-guid"
     assert acts[0].remote_content_guid == "content-guid"
-    assert applied == {"items": 1, "acts": 1}
+    assert applied == {"items": 1, "acts": 1, "preserved_local": 0}
     repository.close()
 
 

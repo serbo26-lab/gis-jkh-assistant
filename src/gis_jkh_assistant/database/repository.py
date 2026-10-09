@@ -12,6 +12,8 @@ from pathlib import Path
 
 from gis_jkh_assistant.work_fixation import proportional_month_cost
 
+from .transactions import AtomicConnection
+
 from .models import (
     House,
     HouseTariff,
@@ -54,7 +56,7 @@ class Repository:
     def __init__(self, database_path: str | Path) -> None:
         self.database_path = Path(database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.database_path)
+        self.connection = sqlite3.connect(self.database_path, factory=AtomicConnection)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")

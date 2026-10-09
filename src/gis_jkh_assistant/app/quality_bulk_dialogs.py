@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -325,6 +327,10 @@ class QualityMonthActsDialog(QDialog):
         self.resize(880, 560)
 
         root = QVBoxLayout(self)
+        context = QLabel(f"{organization_name} • {house_address} • {month:02d}.{year}")
+        context.setWordWrap(True)
+        context.setObjectName("Muted")
+        root.addWidget(context)
         note = QLabel(
             "Акт хранится в программе как один документ и может быть связан "
             "с несколькими работами. Это позволяет загрузить PDF один раз и "
@@ -336,13 +342,16 @@ class QualityMonthActsDialog(QDialog):
         self.list = QListWidget()
         root.addWidget(self.list, 1)
 
-        actions = QHBoxLayout()
+        from .action_layout import ActionFlowLayout
+        from .workflow_widgets import style_danger_button
+
+        actions = ActionFlowLayout()
         add = QPushButton("Добавить готовый акт")
-        generate = QPushButton("Сформировать PDF")
-        apply_to = QPushButton("Применить к…")
-        apply_all = QPushButton("Ко всем включённым")
+        generate = QPushButton("Сформировать PDF с проверкой данных")
+        apply_to = QPushButton("Связать с выбранными работами…")
+        apply_all = QPushButton("Связать со всеми включёнными")
         save_copy = QPushButton("Сохранить копию файла…")
-        delete = QPushButton("Удалить акт")
+        delete = style_danger_button(QPushButton("Удалить акт"))
         actions.addWidget(add)
         actions.addWidget(generate)
         actions.addWidget(apply_to)
@@ -425,7 +434,7 @@ class QualityMonthActsDialog(QDialog):
             act = self.store.add_act(item_id=links[0], **dialog.values())
             self.store.set_act_links(act.id, links)
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "Не удалось добавить акт", str(exc))
+            QMessageBox.warning(self, "Не удалось добавить акт", error_text(exc, context=context_text(self)))
             return
         self._reload(act.id)
 
@@ -596,7 +605,7 @@ class QualityMonthActsDialog(QDialog):
             )
             self.store.set_act_links(act.id, values["item_ids"])
         except (OSError, RuntimeError, ValueError) as exc:
-            QMessageBox.warning(self, "Не удалось сформировать акт", str(exc))
+            QMessageBox.warning(self, "Не удалось сформировать акт", error_text(exc, context=context_text(self)))
             return
         self._reload(act.id)
 
@@ -612,7 +621,7 @@ class QualityMonthActsDialog(QDialog):
         try:
             self.store.set_act_links(act.id, links)
         except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось применить акт", str(exc))
+            QMessageBox.warning(self, "Не удалось применить акт", error_text(exc, context=context_text(self)))
             return
         self._reload(act.id)
 
@@ -631,7 +640,7 @@ class QualityMonthActsDialog(QDialog):
         try:
             self.store.set_act_links(act.id, targets)
         except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось применить акт", str(exc))
+            QMessageBox.warning(self, "Не удалось применить акт", error_text(exc, context=context_text(self)))
             return
         self._reload(act.id)
 
@@ -656,7 +665,7 @@ class QualityMonthActsDialog(QDialog):
             with open(path, "wb") as target:
                 target.write(act.content)
         except OSError as exc:
-            QMessageBox.warning(self, "Не удалось сохранить файл", str(exc))
+            QMessageBox.warning(self, "Не удалось сохранить файл", error_text(exc, context=context_text(self)))
 
     def _delete(self) -> None:
         act = self._current_act()
@@ -673,6 +682,6 @@ class QualityMonthActsDialog(QDialog):
         try:
             self.store.delete_act(act.id)
         except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось удалить акт", str(exc))
+            QMessageBox.warning(self, "Не удалось удалить акт", error_text(exc, context=context_text(self)))
             return
         self._reload()

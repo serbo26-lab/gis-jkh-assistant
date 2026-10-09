@@ -77,6 +77,14 @@ def apply_remote_work_fixation(
     if not remote.get("found"):
         raise ValueError("Фиксация работ в ГИС ЖКХ не найдена.")
 
+    with repository.connection.atomic():
+        return _apply_remote_work_fixation(
+            repository, work_list_id=work_list_id, year=year, month=month, remote=remote,
+        )
+
+
+def _apply_remote_work_fixation(repository, *, work_list_id, year, month, remote):
+
     period = repository.get_or_create_work_fixation_period(
         work_list_id=work_list_id,
         year=int(year),
@@ -91,6 +99,11 @@ def apply_remote_work_fixation(
         if isinstance(row, dict)
     ]
     pairs = match_remote_rows_allow_missing(local_items, remote_items)
+    matched_planned_ids = {local.id for local, _ in pairs if local is not None}
+    preserved_planned = [item for item in local_items if item.work_list_item_id is None
+                         and item.id not in matched_planned_ids and any(
+                             getattr(item, key) not in (None, "")
+                             for key in ("fact_price", "fact_amount", "fact_count", "fact_total_cost"))]
 
     timestamp = _now()
     connection = repository.connection
@@ -103,7 +116,7 @@ def apply_remote_work_fixation(
                 fact_count = NULL,
                 fact_total_cost = NULL,
                 gis_fixed_work_guid = NULL
-            WHERE fixation_period_id = ?
+            WHERE fixation_period_id = ? AND work_list_item_id IS NOT NULL
             """,
             (period.id,),
         )
@@ -179,33 +192,19 @@ def apply_remote_work_fixation(
                 ),
             )
 
-        connection.execute(
-            """
-            DELETE FROM work_fixation_photos
-            WHERE unplanned_item_id IN (
-                SELECT id
-                FROM work_fixation_unplanned_items
-                WHERE fixation_period_id = ?
-            )
-            """,
-            (period.id,),
-        )
-        connection.execute(
-            """
-            DELETE FROM work_fixation_unplanned_items
-            WHERE fixation_period_id = ?
-            """,
-            (period.id,),
-        )
-
         remote_unplanned = [
             row
             for row in list(remote.get("unplannedItems") or [])
             if isinstance(row, dict)
         ]
+        local_unplanned = repository.list_work_fixation_unplanned_items(period.id)
+        used_local_ids: set[str] = set()
         managed_guids: list[str] = []
         for position, row in enumerate(remote_unplanned, start=1):
             guid = _clean(row.get("guid"))
+            local = _match_unplanned(local_unplanned, used_local_ids, row)
+            item_id = local.id if local is not None else str(uuid.uuid4())
+            used_local_ids.add(item_id)
             if guid:
                 managed_guids.append(guid)
             connection.execute(
@@ -217,9 +216,24 @@ def apply_remote_work_fixation(
                     fact_price, fact_amount, fact_count, fact_total_cost,
                     comment, gis_fixed_work_guid
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    position = excluded.position,
+                    work_code = excluded.work_code,
+                    work_name = excluded.work_name,
+                    work_guid = excluded.work_guid,
+                    work_type_code = COALESCE(excluded.work_type_code, work_type_code),
+                    work_type_guid = COALESCE(excluded.work_type_guid, work_type_guid),
+                    work_type_name = COALESCE(excluded.work_type_name, work_type_name),
+                    unit_name = COALESCE(excluded.unit_name, unit_name),
+                    fact_price = excluded.fact_price,
+                    fact_amount = excluded.fact_amount,
+                    fact_count = excluded.fact_count,
+                    fact_total_cost = excluded.fact_total_cost,
+                    comment = COALESCE(comment, excluded.comment),
+                    gis_fixed_work_guid = excluded.gis_fixed_work_guid
                 """,
                 (
-                    str(uuid.uuid4()),
+                    item_id,
                     period.id,
                     int(row.get("position") or position),
                     str(row.get("workCode") or ""),
@@ -253,7 +267,8 @@ def apply_remote_work_fixation(
             """,
             (
                 _clean(remote.get("reportingPeriodGuid")),
-                _clean(remote.get("gisStatus")) or "SAVED",
+                "MODIFIED" if preserved_planned or any(item.id not in used_local_ids for item in local_unplanned)
+                else _clean(remote.get("gisStatus")) or "SAVED",
                 timestamp,
                 json.dumps(managed_guids, ensure_ascii=False)
                 if managed_guids
@@ -275,7 +290,31 @@ def apply_remote_work_fixation(
         "planned": len(remote_items),
         "filled": filled,
         "unplanned": len(remote_unplanned),
+        "preserved_local": len(preserved_planned) + sum(item.id not in used_local_ids for item in local_unplanned),
     }
+
+
+def _match_unplanned(local_rows, used_ids, remote):
+    """Never attach local photos to another work merely by its row position."""
+    available = [row for row in local_rows if row.id not in used_ids]
+    candidates = []
+    for remote_key, local_key in (("guid", "gis_fixed_work_guid"), ("workGuid", "work_guid")):
+        value = _clean(remote.get(remote_key))
+        if value:
+            candidates = [row for row in available if _clean(getattr(row, local_key)) == value]
+            if candidates:
+                break
+    if not candidates and _clean(remote.get("workCode")):
+        candidates = [
+            row for row in available
+            if _clean(row.work_code) == _clean(remote.get("workCode"))
+            and not (row.work_guid and remote.get("workGuid")
+                     and row.work_guid != str(remote["workGuid"]))
+        ]
+    if len(candidates) > 1:
+        raise ValueError("Не удалось однозначно сопоставить внеплановую работу. "
+                         "Локальные работы и фотографии сохранены.")
+    return candidates[0] if candidates else None
 
 
 def local_fixation_has_data(repository: Repository, period_id: str) -> bool:

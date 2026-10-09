@@ -107,7 +107,7 @@ def test_organization_update_rejects_different_ogrn(repository):
 def gateway(**updates):
     status = SimpleNamespace(**{
         "running": True, "helper_connected": True, "gis_page_ready": True,
-        "helper_version": "0.1.29", **updates,
+        "helper_version": "0.1.30", **updates,
     })
     return SimpleNamespace(status=lambda: status)
 
@@ -116,8 +116,8 @@ def gateway(**updates):
     ({"running": False}, "Перезапустите"),
     ({"helper_connected": False}, "Включите"),
     ({"gis_page_ready": False}, "войдите"),
-    ({"helper_version": "0.1.28"}, "0.1.29"),
-    ({"helper_version": None}, "0.1.29"),
+    ({"helper_version": "0.1.28"}, "0.1.30"),
+    ({"helper_version": None}, "0.1.30"),
 ])
 def test_connection_prerequisites_are_explained(updates, fragment):
     page = SimpleNamespace(integration_gateway=gateway(**updates))
@@ -243,7 +243,12 @@ def test_auth_failure_never_saves_and_releases_busy_lock(page, monkeypatch):
     assert page.repository.list_organizations() == []
     assert page.selections == []
     assert page._bulk_operation_name is None
-    assert failures == ["Войдите в личный кабинет ГИС ЖКХ."]
+    assert len(failures) == 1
+    assert failures[0].startswith("Войдите в личный кабинет ГИС ЖКХ.")
+    assert "Загрузка организации не завершена" in failures[0]
+    assert "Проверьте локальный список" in failures[0]
+    assert "нужной УО" in failures[0]
+    assert "повторите загрузку" in failures[0]
 
 
 def test_invalid_helper_reply_does_not_open_preview_or_save(page, monkeypatch):
@@ -262,7 +267,7 @@ def test_old_helper_explains_upgrade_without_enqueuing(page):
     page.integration_gateway = gateway(helper_version="0.1.28")
     sync.load_organization_from_gis(page)
     assert Worker.created == []
-    assert "0.1.29" in page.operation_status.text()
+    assert "0.1.30" in page.operation_status.text()
 
 
 @pytest.mark.parametrize("existing_org", [True, False])
@@ -282,7 +287,7 @@ def test_real_window_import_adopts_new_org_and_preserves_existing_house_and_list
 
         def status(self):
             return IntegrationStatus(
-                running=True, helper_connected=True, gis_page_ready=True, helper_version="0.1.29"
+                running=True, helper_connected=True, gis_page_ready=True, helper_version="0.1.30"
             )
 
     class ObservedWorker(Worker):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
 import shutil
 import sqlite3
 from pathlib import Path
@@ -10,7 +12,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QListWidget,
@@ -24,6 +25,8 @@ from gis_jkh_assistant.database.models import TemplateSource
 from gis_jkh_assistant.database.paths import template_files_dir
 from gis_jkh_assistant.database.repository import Repository
 from gis_jkh_assistant.gis_files.work_lists import WorkTemplateImportError, parse_work_template
+from .action_layout import ActionFlowLayout
+from .workflow_widgets import style_danger_button
 
 
 class WorkTemplatesDialog(QDialog):
@@ -54,11 +57,11 @@ class WorkTemplatesDialog(QDialog):
         self.list_widget.setWordWrap(True)
         layout.addWidget(self.list_widget, 1)
 
-        buttons = QHBoxLayout()
+        buttons = ActionFlowLayout()
         self.import_button = QPushButton("Импортировать состав из Excel")
         self.import_button.setObjectName("PrimaryButton")
         self.rename_button = QPushButton("Переименовать")
-        self.delete_button = QPushButton("Удалить")
+        self.delete_button = style_danger_button(QPushButton("Удалить шаблон"))
         self.close_button = QPushButton("Закрыть")
 
         self.import_button.clicked.connect(self._import_excel)
@@ -72,7 +75,6 @@ class WorkTemplatesDialog(QDialog):
             self.delete_button,
         ):
             buttons.addWidget(button)
-        buttons.addStretch(1)
         buttons.addWidget(self.close_button)
         layout.addLayout(buttons)
 
@@ -118,7 +120,7 @@ class WorkTemplatesDialog(QDialog):
         try:
             imported = parse_work_template(Path(filename))
         except (WorkTemplateImportError, OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Не удалось импортировать шаблон", str(exc))
+            QMessageBox.critical(self, "Не удалось импортировать шаблон", error_text(exc, context=context_text(self)))
             return
 
         default_name = Path(filename).stem
@@ -160,7 +162,7 @@ class WorkTemplatesDialog(QDialog):
             QMessageBox.critical(
                 self,
                 "Не удалось сохранить исходный шаблон",
-                str(exc),
+                error_text(exc, context=context_text(self)),
             )
             return
 

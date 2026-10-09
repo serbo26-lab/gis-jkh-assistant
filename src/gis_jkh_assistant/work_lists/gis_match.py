@@ -5,6 +5,15 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 
+def identities_compatible(local, remote):
+    for attribute, key in (("work_guid", "workGuid"), ("work_code", "workCode")):
+        left = str(getattr(local, attribute, None) or "").strip()
+        right = str(remote.get(key) or "").strip()
+        if left and right and left != right:
+            return False
+    return True
+
+
 def match_remote_rows(
     local_rows: Iterable[Any],
     remote_rows: list[dict[str, Any]],
@@ -34,6 +43,7 @@ def match_remote_rows(
                 for index, row in enumerate(remote_rows)
                 if index not in used
                 and str(row.get("workCode") or "").strip() == local_code
+                and identities_compatible(local, row)
             ]
         if len(candidates) > 1 and local_position:
             by_position = [
@@ -51,6 +61,7 @@ def match_remote_rows(
                 if index not in used
                 and int(row.get("sortIndex") or row.get("position") or 0)
                 == local_position
+                and identities_compatible(local, row)
             ]
 
         if len(candidates) != 1:
@@ -100,6 +111,7 @@ def match_remote_rows_allow_missing(
                 for index, row in enumerate(locals_list)
                 if index not in used
                 and str(getattr(row, "work_code", None) or "").strip() == remote_code
+                and identities_compatible(row, remote)
             ]
         if len(candidates) > 1 and remote_position:
             by_position = [
@@ -115,6 +127,7 @@ def match_remote_rows_allow_missing(
                 for index, row in enumerate(locals_list)
                 if index not in used
                 and int(getattr(row, "position", 0) or 0) == remote_position
+                and identities_compatible(row, remote)
             ]
 
         if len(candidates) > 1:

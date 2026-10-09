@@ -6,10 +6,13 @@ import hashlib
 import json
 from datetime import date, datetime, timezone
 
-from PySide6.QtWidgets import QInputDialog
+from PySide6.QtWidgets import QDialog, QInputDialog
 
 from gis_jkh_assistant.gis_files.work_lists import WorkListExportError
 from gis_jkh_assistant.gis_files.work_lists.exporter import _prepare_items
+from gis_jkh_assistant.gis_integration.organization_context import (
+    MIN_ORGANIZATION_ROUTING_HELPER_VERSION, helper_supports_organization_routing,
+)
 
 
 def work_list_fingerprint(page, work_list_id: str) -> str:
@@ -69,9 +72,9 @@ def can_initialize_draft_baseline(page, work_list) -> bool:
 
 def check_work_list(page) -> None:
     """Use the exporter's established row checks for the explicit local review step."""
-    page._save_period()
-    if page._period_dirty:
-        page._composition_review_error = "Начало периода не может быть позже окончания."
+    if page.flush_pending_changes() is False:
+        period = page._current_period()
+        page._composition_review_error = "Начало периода не может быть позже окончания." if period[:2] > period[2:] else "Сначала сохраните исправленный период и состав перечня."
         page.operation_status.set_text("Проверьте период • " + page._composition_review_error)
         page.operation_status.show()
         refresh_work_lists(page)
@@ -124,14 +127,19 @@ def replace_from_template(page) -> None:
     if not labels:
         page._manage_templates()
         return
-    label, accepted = QInputDialog.getItem(
-        page,
-        "Заменить состав по шаблону",
-        "Шаблон состава:",
-        labels,
-        0,
-        False,
-    )
+    dialog = QInputDialog(page)
+    dialog.setWindowTitle("Заменить состав по шаблону")
+    dialog.setLabelText("Шаблон состава:")
+    dialog.setComboBoxItems(labels)
+    dialog.setComboBoxEditable(False)
+    dialog.setOption(QInputDialog.InputDialogOption.UseListViewForComboBoxItems, True)
+    dialog.setOkButtonText("Выбрать шаблон")
+    dialog.setCancelButtonText("Отмена")
+    dialog.resize(min(600, page.window().width() - 40),
+                  min(480, page.window().height() - 80))
+    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    label = dialog.textValue()
+    dialog.deleteLater()
     if accepted:
         page.template_combo.setCurrentIndex(labels.index(label) + 1)
         page._replace_current_from_template()
@@ -148,6 +156,9 @@ def _connection_reason(page) -> str:
         return "Подключите браузерный помощник в личном кабинете ГИС ЖКХ."
     if not status.gis_page_ready:
         return "Откройте личный кабинет ГИС ЖКХ в подключённом браузере."
+    if not helper_supports_organization_routing(getattr(status, "helper_version", None)):
+        minimum = ".".join(map(str, MIN_ORGANIZATION_ROUTING_HELPER_VERSION))
+        return f"Для безопасного выбора вкладки УО требуется браузерный помощник {minimum}+."
     return ""
 
 
@@ -158,7 +169,8 @@ def refresh_work_lists(page) -> None:
     work_list = page.repository.get_work_list(selected) if selected else None
     house_id = page.house_combo.currentData()
     house = page.repository.get_house(house_id) if house_id else None
-    busy = bool(page._integration_busy or getattr(page, "_workflow_busy", False))
+    pending = bool(getattr(page, "has_pending_save_error", lambda: False)())
+    busy = bool(page._integration_busy or getattr(page, "_workflow_busy", False) or pending)
     for widget in (
         page.organization_combo,
         page.house_combo,
@@ -168,7 +180,7 @@ def refresh_work_lists(page) -> None:
     ):
         widget.setEnabled(not busy)
     connection = _connection_reason(page)
-    remote_reason = "Дождитесь завершения текущей операции." if busy else connection
+    remote_reason = "Сначала повторите локальное сохранение." if pending else "Дождитесь завершения текущей операции." if busy else connection
     if not remote_reason and (not house or not house.house_object_guid):
         remote_reason = "Загрузите сведения о доме в разделе «Дома»: нужен идентификатор ГИС."
     page.network_hint.setText(remote_reason)
@@ -197,20 +209,21 @@ def refresh_work_lists(page) -> None:
         page.lazy_fill_button,
     ):
         widget.setEnabled(editable and not busy)
+    if pending and editable:
+        # Retained input can still be corrected; replacing its owner is blocked.
+        for widget in (page.items_table, page.start_month, page.start_year, page.end_month, page.end_year):
+            widget.setEnabled(True)
     for widget in (page.add_works_button, page.replace_from_template_button):
         widget.setEnabled(editable and not busy and not connection)
         widget.setToolTip(
             connection or "Работы проверяются по актуальному справочнику УО в ГИС ЖКХ."
         )
-    page.remote_danger.sync()
-    page.remote_danger.setEnabled(page.cancel_gis_button.isEnabled() and not busy)
-    page.remote_danger.setVisible(page.cancel_gis_button.isEnabled())
-    page.local_list_danger.sync()
-    page.local_list_danger.setEnabled(bool(work_list) and not busy)
-    page.composition_menu.sync()
-    page.composition_danger.sync()
-    page.composition_menu.setEnabled(bool(work_list) and not busy)
-    page.composition_danger.setEnabled(editable and not busy)
+    page.cancel_gis_button.setVisible(status == "APPROVED")
+    page.cancel_gis_button.setEnabled(page.cancel_gis_button.isEnabled() and not busy)
+    page.cancel_gis_button.setToolTip(
+        remote_reason or "Отменить размещение выбранного перечня в ГИС ЖКХ. "
+        "Перед отменой потребуется подтверждение."
+    )
     page.project_actions.setEnabled(bool(work_list) and not busy)
     page.project_actions.sync()
     page.xlsx_network_actions.sync()
@@ -221,7 +234,7 @@ def refresh_work_lists(page) -> None:
         "либо количество и стоимость."
         if editable
         else "Состав доступен для просмотра. Чтобы изменить размещённый перечень, сначала "
-        "отмените его в меню «Опасные действия»; связанные данные будут удалены."
+        "нажмите «Отменить размещённый перечень»; связанные данные будут удалены."
         if work_list
         else "Выберите существующий перечень или создайте новый."
     )
@@ -363,8 +376,6 @@ def refresh_houses(page) -> None:
     page.add_org_button.setEnabled(not busy)
     page.edit_org_button.setEnabled(bool(organization_id) and not busy)
     page.delete_org_button.setEnabled(bool(organization_id) and not busy)
-    page.organization_danger.setEnabled(bool(organization_id) and not busy)
-    page.organization_danger.sync()
     page.organization_add_action.setEnabled(not busy)
     page.organization_edit_action.setEnabled(bool(organization_id) and not busy)
     page.organization_delete_action.setEnabled(bool(organization_id) and not busy)

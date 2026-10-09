@@ -645,6 +645,7 @@ class QualityAssessmentStore:
         gis_last_error: str | None = None,
         item_guids: dict[str, str] | None = None,
         act_guids: dict[str, tuple[str | None, str | None]] | None = None,
+        acknowledged_deletions: dict | None = None,
     ) -> None:
         updates = {
             "gis_last_sync_at": _now(),
@@ -679,45 +680,41 @@ class QualityAssessmentStore:
                 self.connection.execute(
                     """
                     UPDATE quality_assessment_acts
-                    SET remote_content_guid = ?, remote_act_guid = ?, deleted = 0
+                    SET remote_content_guid = ?, remote_act_guid = ?
                     WHERE id = ?
                     """,
                     (_clean(content_guid), _clean(act_guid), act_id),
                 )
 
-            self.connection.execute(
-                """
-                DELETE FROM quality_assessment_act_links
-                WHERE deleted = 1
-                  AND quality_item_id IN (
-                      SELECT id
-                      FROM quality_assessment_items
-                      WHERE quality_period_id = ?
-                  )
-                """,
-                (period_id,),
-            )
-            self.connection.execute(
-                """
-                DELETE FROM quality_assessment_acts
-                WHERE id NOT IN (
-                    SELECT DISTINCT act_id
-                    FROM quality_assessment_act_links
+            # Only discard deletion intent that was covered by this successful
+            # request. Excluded rows and later edits retain their local BLOBs.
+            for (act_id, item_id), remote_ids in (acknowledged_deletions or {}).items():
+                self.connection.execute(
+                    "DELETE FROM quality_assessment_act_links WHERE act_id = ? "
+                    "AND quality_item_id = ? AND deleted = 1 "
+                    "AND quality_item_id IN (SELECT id FROM quality_assessment_items WHERE quality_period_id = ?) "
+                    "AND act_id IN (SELECT id FROM quality_assessment_acts "
+                    "WHERE remote_content_guid IS ? AND remote_act_guid IS ?)",
+                    (act_id, item_id, period_id, *remote_ids),
                 )
-                """
-            )
-            self.connection.execute(
-                """
-                DELETE FROM quality_assessment_acts
-                WHERE deleted = 1
-                  AND quality_item_id IN (
-                      SELECT id
-                      FROM quality_assessment_items
-                      WHERE quality_period_id = ?
-                  )
-                """,
-                (period_id,),
-            )
+                self.connection.execute(
+                    "DELETE FROM quality_assessment_acts WHERE id = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM quality_assessment_act_links WHERE act_id = ?)",
+                    (act_id, act_id),
+                )
+
+    def deletion_snapshot(self, payload: dict) -> dict:
+        covered = {}
+        for row in payload.get("items") or []:
+            item_id = row.get("localItemId")
+            removed_acts = set(row.get("removedRemoteActGuids") or [])
+            removed_files = set(row.get("removedRemoteContentGuids") or [])
+            for act in self.list_acts(item_id, include_deleted=True):
+                if (act.deleted or act.link_deleted) and (
+                    act.remote_act_guid in removed_acts or act.remote_content_guid in removed_files
+                ):
+                    covered[(act.id, item_id)] = (act.remote_content_guid, act.remote_act_guid)
+        return covered
 
     def mark_cancelled(self, period_id: str) -> None:
         with self.connection:

@@ -6,23 +6,80 @@ const GIS_MATCH = [
 ];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.29";
+const HELPER_CODE_VERSION = "0.1.30";
+const organizationTabs = new Map();
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
 let keepAliveError = null;
 
 async function localFetch(path, options = {}) {
-  const headers = Object.assign({}, HELPER_HEADER, options.headers || {});
+  const headers = Object.assign({}, HELPER_HEADER, {
+    "X-GIS-JKH-Helper-Version": HELPER_CODE_VERSION
+  }, options.headers || {});
   return fetch(LOCAL_BASE + path, Object.assign({}, options, { headers }));
 }
 
-async function findGisTab() {
+function organizationMatches(expected, actual) {
+  const text = value => String(value || "").trim().toLowerCase();
+  return Boolean(expected?.ogrn && actual?.ogrn) &&
+    text(expected.ogrn) === text(actual.ogrn) &&
+    (!expected.organizationRootGuid ||
+      text(expected.organizationRootGuid) === text(actual.organizationRootGuid));
+}
+
+async function findGisTab(command = null) {
   const tabs = await chrome.tabs.query({ url: GIS_MATCH });
   if (!tabs.length) return null;
 
-  const active = tabs.find((tab) => tab.active);
-  return active || tabs[0];
+  let focusedWindowId = null;
+  try {
+    focusedWindowId = (await chrome.windows.getLastFocused()).id;
+  } catch (_) {
+    // An unavailable window API never chooses between ambiguous import tabs.
+  }
+  const focusedActive = tabs.find(tab => tab.active && tab.windowId === focusedWindowId);
+  tabs.sort((a, b) => Number(b === focusedActive) - Number(a === focusedActive) ||
+    Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0) ||
+    a.id - b.id);
+
+  const expected = command?.payload?.organizationContext;
+  if (expected) {
+    if (!/^\d{13}(\d{2})?$/.test(String(expected.ogrn || ""))) {
+      throw new Error("Команда не содержит корректный ОГРН выбранной управляющей организации.");
+    }
+    const key = `${expected.ogrn}:${expected.organizationRootGuid || ""}`;
+    const pinnedId = organizationTabs.get(key);
+    const candidates = [...tabs].sort((a, b) => Number(b.id === pinnedId) - Number(a.id === pinnedId));
+    for (const tab of candidates) {
+      try {
+        const execution = await chrome.scripting.executeScript({
+          target: { tabId: tab.id }, world: "MAIN", func: runGisCommand,
+          args: [{ type: "get_current_organization", payload: {} }]
+        });
+        const reply = execution?.[0]?.result;
+        if (reply?.ok && organizationMatches(expected, reply.result?.organization)) {
+          organizationTabs.set(key, tab.id);
+          return tab;
+        }
+      } catch (_) {
+        // Closed and unauthorized tabs cannot be used for this organization.
+      }
+    }
+    organizationTabs.delete(key);
+    throw new Error(
+      `Не найдена авторизованная вкладка ГИС ЖКХ для УО с ОГРН ${expected.ogrn}. ` +
+      "Откройте её кабинет в браузере и повторите операцию."
+    );
+  }
+
+  if (command?.type === "get_current_organization" && tabs.length > 1) {
+    const active = tabs.filter(tab => tab.active);
+    if (focusedActive) return focusedActive;
+    if (focusedWindowId === null && active.length === 1) return active[0];
+    throw new Error("Сделайте вкладку нужной УО активной в браузере и повторите добавление УО.");
+  }
+  return tabs[0];
 }
 
 async function hello() {
@@ -80,23 +137,26 @@ async function maybeKeepSessionAlive() {
     return;
   }
 
-  const tab = await findGisTab();
-  if (!tab?.id) {
+  const tabs = await chrome.tabs.query({ url: GIS_MATCH });
+  if (!tabs.length) {
     return;
   }
 
   lastKeepAliveAttemptMs = now;
-  try {
-    await executeInGisTab({ type: "keep_alive", payload: {} });
-    lastKeepAliveSuccessMs = Date.now();
-    keepAliveError = null;
-  } catch (error) {
-    keepAliveError = String(error?.message || error);
+  const errors = [];
+  for (const tab of tabs) {
+    try {
+      await executeInGisTab({ type: "keep_alive", payload: {} }, tab);
+      lastKeepAliveSuccessMs = Date.now();
+    } catch (error) {
+      errors.push(String(error?.message || error));
+    }
   }
+  keepAliveError = errors.length ? errors.join("; ") : null;
 }
 
-async function executeInGisTab(command) {
-  const tab = await findGisTab();
+async function executeInGisTab(command, selectedTab = null) {
+  const tab = selectedTab || await findGisTab(command);
   if (!tab?.id) {
     throw new Error("Не найдена открытая вкладка личного кабинета ГИС ЖКХ.");
   }
@@ -148,6 +208,20 @@ async function executeInGisTab(command) {
     const result = execution[0].result;
     if (!result || result.ok !== true) {
       throw new Error(result?.error || "ГИС ЖКХ вернул неизвестную ошибку.");
+    }
+    const expected = command.payload?.organizationContext;
+    if (expected) {
+      const check = await chrome.scripting.executeScript({
+        target: { tabId: tab.id }, world: "MAIN", func: runGisCommand,
+        args: [{ type: "get_current_organization", payload: {} }]
+      });
+      const reply = check?.[0]?.result;
+      if (!reply?.ok || !organizationMatches(expected, reply.result?.organization)) {
+        throw new Error(
+          "Организация во вкладке ГИС ЖКХ изменилась во время операции. " +
+          "Результат не применён локально. Проверьте состояние операции в кабинете выбранной УО."
+        );
+      }
     }
     return result.result || {};
   } finally {
@@ -295,7 +369,23 @@ async function runGisCommand(command) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    async function assertOrganization() {
+      const expected = command.payload?.organizationContext;
+      if (!expected) return;
+      const actual = (await getCurrentOrganization()).organization;
+      const text = value => String(value || "").trim().toLowerCase();
+      if (!expected.ogrn || text(expected.ogrn) !== text(actual.ogrn) ||
+          (expected.organizationRootGuid &&
+           text(expected.organizationRootGuid) !== text(actual.organizationRootGuid))) {
+        throw new Error(
+          "Организация во вкладке ГИС ЖКХ изменилась или не совпадает с выбранной УО. " +
+          "Выберите нужный кабинет и повторите операцию."
+        );
+      }
+    }
+
     async function request(method, url, data = undefined, stateGuid = STATE_WORKPLANNING) {
+      if (method !== "GET") await assertOrganization();
       const config = {
         method,
         url,
@@ -313,6 +403,7 @@ async function runGisCommand(command) {
     }
 
     async function requestBinary(method, url, stateGuid = null) {
+      if (method !== "GET") await assertOrganization();
       const config = {
         method,
         url,
@@ -1091,6 +1182,7 @@ async function runGisCommand(command) {
       }
       form.append("file", blob, filename);
 
+      await assertOrganization();
       const response = await fetch(
         "/filestore/api/rest/services/filestore/uploadFile",
         {
@@ -1813,6 +1905,7 @@ async function runGisCommand(command) {
       for (const [key, value] of Object.entries(values)) form.append(key, value);
       form.append("file", blob, fileName);
 
+      await assertOrganization();
       const response = await fetch(
         "/filestore/api/rest/services/filestore/uploadFile",
         { method: "POST", body: form, credentials: "include" }
@@ -2258,6 +2351,10 @@ async function runGisCommand(command) {
       return { ok: true, result: await getCurrentOrganization() };
     }
 
+    // Recheck inside the selected page: tab navigation or organization switching
+    // may have happened after discovery. Writes are also checked by request().
+    await assertOrganization();
+
     if (command.type === "get_house_management_info") {
       return {
         ok: true,
@@ -2568,6 +2665,7 @@ async function runGisCommand(command) {
       for (const [key, value] of Object.entries(values)) form.append(key, value);
       form.append("file", blob, fileName);
 
+      await assertOrganization();
       const response = await fetch(
         "/filestore/api/rest/services/filestore/uploadFile",
         { method: "POST", body: form, credentials: "include" }

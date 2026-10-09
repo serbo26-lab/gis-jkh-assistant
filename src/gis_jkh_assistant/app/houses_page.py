@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
 import sqlite3
 from datetime import datetime
 from collections import defaultdict
@@ -10,7 +12,6 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -51,11 +52,11 @@ from gis_jkh_assistant.work_lists.gis_sync import (
 )
 
 from .dialogs import HouseDialog, HouseTariffDialog, OrganizationDialog
-from .gis_integration_worker import GisIntegrationWorker
+from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .registry_layouts import adapt_houses
 from .registry_workflow import refresh_houses
-from .widgets import ActionToolbar, SafeSpinBox
-from .workflow_widgets import OperationStatus
+from .widgets import ActionToolbar, SafeComboBox, SafeSpinBox
+from .workflow_widgets import LocalSaveStatus, OperationStatus
 
 
 class HousesPage(QWidget):
@@ -86,6 +87,11 @@ class HousesPage(QWidget):
         self._autosave_timer.setInterval(self.AUTOSAVE_DELAY_MS)
         self._autosave_timer.timeout.connect(self._flush_autosave)
 
+        self._selection_refresh_timer = QTimer(self)
+        self._selection_refresh_timer.setSingleShot(True)
+        self._selection_refresh_timer.setInterval(0)
+        self._selection_refresh_timer.timeout.connect(self._refresh_after_selection)
+
         self._build_ui()
         self.refresh_organizations()
 
@@ -99,9 +105,13 @@ class HousesPage(QWidget):
         title.setObjectName("Title")
         title_row.addWidget(title)
         title_row.addStretch(1)
-        self.save_status = QLabel("Сохранено")
+        self.save_status = LocalSaveStatus()
         self.save_status.setObjectName("SaveStatus")
         title_row.addWidget(self.save_status)
+        self.retry_save_button = QPushButton("Повторить сохранение")
+        self.retry_save_button.clicked.connect(self._flush_autosave)
+        self.retry_save_button.hide()
+        title_row.addWidget(self.retry_save_button)
         root.addLayout(title_row)
 
         context = QFrame()
@@ -110,7 +120,7 @@ class HousesPage(QWidget):
         context_layout.setContentsMargins(12, 9, 12, 9)
         context_layout.setSpacing(8)
         context_layout.addWidget(QLabel("Управляющая организация"))
-        self.organization_combo = QComboBox()
+        self.organization_combo = SafeComboBox()
         self.organization_combo.setMinimumWidth(260)
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         context_layout.addWidget(self.organization_combo, 1)
@@ -289,7 +299,7 @@ class HousesPage(QWidget):
         self.card_layout.addWidget(section)
 
         self.address_edit = QLineEdit()
-        self.card_org_combo = QComboBox()
+        self.card_org_combo = SafeComboBox()
         self.source_label = QLabel("—")
         form_main = QFormLayout()
         form_main.addRow("Адрес", self.address_edit)
@@ -495,14 +505,8 @@ class HousesPage(QWidget):
 
     def set_compact_mode(self, compact: bool) -> None:
         """Adjust the page density without allowing controls to collapse into unreadable shapes."""
-        if compact:
-            self.splitter.setSizes([300, 620])
-            self.card_layout.setContentsMargins(12, 12, 12, 14)
-            self.card_layout.setSpacing(10)
-        else:
-            self.splitter.setSizes([400, 820])
-            self.card_layout.setContentsMargins(18, 16, 18, 18)
-            self.card_layout.setSpacing(14)
+        self.card_layout.setContentsMargins(8, 6, 8, 8)
+        self.card_layout.setSpacing(6)
 
     def refresh_organizations(self, select_id: str | None = None) -> None:
         current = select_id or self.organization_combo.currentData()
@@ -534,7 +538,15 @@ class HousesPage(QWidget):
         self.card_org_combo.blockSignals(False)
 
     def _organization_changed(self) -> None:
-        self._flush_autosave()
+        if not self._flush_autosave():
+            house = self.repository.get_house(self._pending_house_id)
+            if house:
+                self.organization_combo.blockSignals(True)
+                self.organization_combo.setCurrentIndex(
+                    self.organization_combo.findData(house.organization_id)
+                )
+                self.organization_combo.blockSignals(False)
+            return
         self.refresh_houses()
 
     def refresh_houses(self) -> None:
@@ -549,11 +561,17 @@ class HousesPage(QWidget):
             return
 
         houses = self.repository.list_houses(organization_id, self.search_edit.text())
+        if self._pending_house_id and self._pending_fields:
+            pending_house = self.repository.get_house(self._pending_house_id)
+            if (pending_house and pending_house.organization_id == organization_id
+                    and all(house.id != pending_house.id for house in houses)):
+                houses.append(pending_house)
         for house in houses:
+            pending_note = " • Не сохранено" if house.id == self._pending_house_id and self._pending_fields else ""
             item = QListWidgetItem(
                 f"{house.address}\n"
                 f"{'Связан с ГИС' if house.house_object_guid else 'Локальный'} • "
-                f"Помещений: {house.total_premises_count}"
+                f"Помещений: {house.total_premises_count}{pending_note}"
             )
             item.setData(Qt.UserRole, house.id)
             self.house_list.addItem(item)
@@ -564,7 +582,9 @@ class HousesPage(QWidget):
             for row in range(self.house_list.count()):
                 item = self.house_list.item(row)
                 if item.data(Qt.UserRole) == selected_id:
+                    blocked = self.house_list.blockSignals(bool(self._pending_fields))
                     self.house_list.setCurrentItem(item)
+                    self.house_list.blockSignals(blocked)
                     return
         if self.house_list.count():
             self.house_list.setCurrentRow(0)
@@ -572,20 +592,52 @@ class HousesPage(QWidget):
             self._load_house(None)
 
     def _house_selection_changed(self, current: QListWidgetItem | None, _previous=None) -> None:
-        self._flush_autosave()
+        # Qt still uses both items until currentItemChanged has returned. Save
+        # without rebuilding the model, then refresh on the next event pass.
         house_id = current.data(Qt.UserRole) if current else None
+        had_pending = bool(self._pending_fields)
+        if not self._flush_autosave(refresh=False):
+            self.house_list.blockSignals(True)
+            for row in range(self.house_list.count()):
+                item = self.house_list.item(row)
+                if item.data(Qt.UserRole) == self._pending_house_id:
+                    self.house_list.setCurrentItem(item)
+                    break
+            self.house_list.blockSignals(False)
+            return
+        self.house_list.blockSignals(True)
+        for row in range(self.house_list.count()):
+            item = self.house_list.item(row)
+            if item.data(Qt.UserRole) == house_id:
+                self.house_list.setCurrentItem(item)
+                break
+        self.house_list.blockSignals(False)
         self._load_house(house_id)
+        if had_pending:
+            self._selection_refresh_timer.start()
+
+    def _refresh_after_selection(self) -> None:
+        if getattr(self.window(), "_closing", False):
+            return
+        self.refresh_houses()
 
     def _load_house(self, house_id: str | None) -> None:
+        if self._pending_fields:
+            if house_id == self._pending_house_id:
+                return  # A refresh must not replace the unsaved editor with DB values.
+            if not self._flush_autosave():
+                return
         self._current_house_id = house_id
         self.house_detail_title.setText("Выбранный дом: —")
         if not house_id:
+            self._clear_house_card()
             self.tariffs_table.setRowCount(0)
             self._set_card_enabled(False)
             self._refresh_workflow()
             return
         house = self.repository.get_house(house_id)
         if not house:
+            self._clear_house_card()
             self._set_card_enabled(False)
             self._refresh_workflow()
             return
@@ -699,7 +751,7 @@ class HousesPage(QWidget):
                 **dialog.values(),
             )
         except (sqlite3.DatabaseError, ValueError) as exc:
-            QMessageBox.critical(self, "Не удалось добавить тариф", str(exc))
+            QMessageBox.critical(self, "Не удалось добавить тариф", error_text(exc, context=context_text(self)))
             return
         self._refresh_tariffs(select_id=tariff.id)
 
@@ -716,7 +768,7 @@ class HousesPage(QWidget):
         try:
             self.repository.update_house_tariff(tariff_id, **dialog.values())
         except (sqlite3.DatabaseError, ValueError) as exc:
-            QMessageBox.critical(self, "Не удалось изменить тариф", str(exc))
+            QMessageBox.critical(self, "Не удалось изменить тариф", error_text(exc, context=context_text(self)))
             return
         self._refresh_tariffs(select_id=tariff_id)
 
@@ -737,6 +789,26 @@ class HousesPage(QWidget):
             return
         self.repository.delete_house_tariff(tariff_id)
         self._refresh_tariffs()
+
+    def _clear_house_card(self) -> None:
+        self._loading_card = True
+        try:
+            for name in (
+                "address_edit", "object_guid_edit", "gis_guid_edit", "fias_guid_edit",
+                "unique_number_edit", "cadastral_edit", "charge_area_edit",
+                "management_start_edit", "management_end_edit", "management_agreement_number_edit",
+                "management_agreement_date_edit", "comment_edit",
+            ):
+                getattr(self, name).clear()
+            self.card_org_combo.setCurrentIndex(-1)
+            self.residential_spin.setValue(0)
+            self.non_residential_spin.setValue(0)
+            for name in ("source_label", "management_source_label", "created_label", "updated_label"):
+                getattr(self, name).setText("—")
+            self.total_label.setText("0")
+        finally:
+            self._loading_card = False
+        self.save_status.setText("Дом не выбран")
 
     def _set_card_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -789,7 +861,7 @@ class HousesPage(QWidget):
         try:
             value = self._validated_management_date(widget.text())
         except ValueError as exc:
-            QMessageBox.warning(self, "Проверьте дату", str(exc))
+            QMessageBox.warning(self, "Проверьте дату", error_text(exc, context=context_text(self)))
             house = self.repository.get_house(self._current_house_id) if self._current_house_id else None
             widget.setText(str(getattr(house, field, "") or "") if house else "")
             return
@@ -907,7 +979,8 @@ class HousesPage(QWidget):
         return any(getattr(house, field) != value for field, value in comparable.items())
 
     def _sync_houses_from_gis(self) -> None:
-        self._flush_autosave()
+        if not self._flush_autosave():
+            return
         if self.integration_gateway is None:
             return
         organization_id = self.organization_combo.currentData()
@@ -1093,20 +1166,21 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить сведения о МКД",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
             self._houses_sync_worker = None
             self._finish_bulk_operation(self.bulk_operation_status.text())
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
     def _sync_all_work_lists_from_gis(self) -> None:
-        self._flush_autosave()
+        if not self._flush_autosave():
+            return
         if self.integration_gateway is None:
             return
 
@@ -1259,7 +1333,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить перечни МКД",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def progressed(progress: dict) -> None:
@@ -1275,8 +1349,8 @@ class HousesPage(QWidget):
             self._work_lists_sync_worker = None
             self._finish_bulk_operation(self.bulk_operation_status.text())
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
@@ -1307,7 +1381,8 @@ class HousesPage(QWidget):
         )
 
     def _sync_all_management_from_gis(self) -> None:
-        self._flush_autosave()
+        if not self._flush_autosave():
+            return
         if self.integration_gateway is None:
             return
         organization_id = self.organization_combo.currentData()
@@ -1509,20 +1584,21 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось обновить дома",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
             self._management_worker = None
             self._finish_bulk_operation(self.bulk_operation_status.text())
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
     def _sync_management_from_gis(self) -> None:
-        self._flush_autosave()
+        if not self._flush_autosave():
+            return
         if self._bulk_operation_name is not None:
             QMessageBox.information(
                 self,
@@ -1605,7 +1681,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось получить сведения",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
@@ -1616,8 +1692,8 @@ class HousesPage(QWidget):
                 "Обновить сведения об управлении из ГИС ЖКХ"
             )
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -1635,7 +1711,8 @@ class HousesPage(QWidget):
         if self._loading_card or not self._current_house_id:
             return
         if self._pending_house_id and self._pending_house_id != self._current_house_id:
-            self._flush_autosave()
+            if not self._flush_autosave():
+                return
         self._pending_house_id = self._current_house_id
         self._pending_fields[field] = value
         self._set_save_status("Сохраняется…")
@@ -1645,27 +1722,33 @@ class HousesPage(QWidget):
                 str(self.residential_spin.value() + self.non_residential_spin.value())
             )
 
-    def _flush_autosave(self) -> None:
+    def _flush_autosave(self, *, refresh: bool = True) -> bool:
         self._autosave_timer.stop()
         if not self._pending_house_id or not self._pending_fields:
-            return
+            return True
         house_id = self._pending_house_id
         fields = dict(self._pending_fields)
-        self._pending_house_id = None
-        self._pending_fields.clear()
         try:
             self.repository.update_house(house_id, **fields)
+            self._pending_house_id = None
+            self._pending_fields.clear()
+            self.retry_save_button.hide()
             self._set_save_status("Сохранено")
+            if not refresh:
+                return True
             if "organization_id" in fields:
                 self.refresh_organizations(select_id=str(fields["organization_id"]))
             else:
                 self.refresh_houses()
         except (sqlite3.DatabaseError, ValueError) as exc:
             self._set_save_status("Ошибка сохранения")
-            QMessageBox.critical(self, "Ошибка сохранения", str(exc))
+            self.retry_save_button.show()
+            QMessageBox.critical(self, "Ошибка сохранения", error_text(exc, context=context_text(self), effect="Ввод сохранён в карточке дома. Переход и закрытие заблокированы до сохранения.", recovery="Устраните причину и нажмите «Повторить сохранение»."))
+            return False
+        return True
 
     def _set_save_status(self, text: str) -> None:
-        self.save_status.setText(text)
+        self.save_status.setText("Сохранено локально" if text == "Сохранено" else text)
 
     def _add_organization(self) -> None:
         dialog = OrganizationDialog(self)
@@ -1704,6 +1787,9 @@ class HousesPage(QWidget):
         self.refresh_organizations(select_id=organization_id)
 
     def _delete_organization(self) -> None:
+        guard = getattr(self.window(), "can_delete_local_data", None)
+        if guard is not None and not guard():
+            return
         organization_id = self.organization_combo.currentData()
         if not organization_id:
             return
@@ -1750,6 +1836,9 @@ class HousesPage(QWidget):
         self.refresh_houses()
 
     def _delete_house(self) -> None:
+        guard = getattr(self.window(), "can_delete_local_data", None)
+        if guard is not None and not guard():
+            return
         if not self._current_house_id:
             return
         house = self.repository.get_house(self._current_house_id)
@@ -1808,7 +1897,7 @@ class HousesPage(QWidget):
                 tariffs_by_house=tariffs_by_house,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Не удалось создать шаблон", str(exc))
+            QMessageBox.critical(self, "Не удалось создать шаблон", error_text(exc, context=context_text(self)))
             return
 
         QMessageBox.information(
@@ -1841,7 +1930,7 @@ class HousesPage(QWidget):
         try:
             result = parse_house_data_template(Path(filename))
         except (HouseDataImportError, OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Не удалось прочитать файл", str(exc))
+            QMessageBox.critical(self, "Не удалось прочитать файл", error_text(exc, context=context_text(self)))
             return
 
         houses = self.repository.list_houses(str(organization_id))
@@ -2039,7 +2128,7 @@ class HousesPage(QWidget):
         try:
             result = parse_housing_objects_export(Path(filename))
         except (HousingObjectsImportError, OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Не удалось импортировать файл", str(exc))
+            QMessageBox.critical(self, "Не удалось импортировать файл", error_text(exc, context=context_text(self)))
             return
 
         org_lines = [f"• {org.name} — ОГРН {org.ogrn}" for org in result.organizations]
@@ -2103,10 +2192,13 @@ class HousesPage(QWidget):
                 message += f"\n… еще предупреждений: {len(result.warnings) - 6}"
         QMessageBox.information(self, "Импорт завершен", message)
 
-    def flush_pending_changes(self) -> None:
+    def flush_pending_changes(self) -> bool:
         """Persist any debounced edits before the application changes context or closes."""
-        self._flush_autosave()
+        self._selection_refresh_timer.stop()
+        return self._flush_autosave()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        self.flush_pending_changes()
+        if not self.flush_pending_changes():
+            event.ignore()
+            return
         super().closeEvent(event)

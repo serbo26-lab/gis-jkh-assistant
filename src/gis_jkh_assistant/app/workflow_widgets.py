@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, Signal
+from PySide6.QtCore import QEvent, Signal, Qt
 from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
     QPushButton, QSizePolicy, QVBoxLayout, QWidget,
@@ -36,13 +36,31 @@ class PageHeader(QWidget):
             label.setObjectName("Muted")
             label.setWordWrap(True)
             text.addWidget(label)
+            label.hide()
+            heading.setToolTip(subtitle)
         layout.addLayout(text, 1)
-        self.status = QLabel("Автосохранение")
+        self.status = LocalSaveStatus()
         self.status.setToolTip("Локальные изменения сохраняются автоматически")
         self.status.setObjectName("SaveStatus")
-        self.status.setWordWrap(True)
-        self.status.setMaximumWidth(240)
+        self.status.setWordWrap(False)
         layout.addWidget(self.status)
+
+
+class LocalSaveStatus(QLabel):
+    """Keep persistence vocabulary separate from exchange and business results."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setText("Сохранено локально")
+
+    def setText(self, text):  # noqa: N802 - Qt API
+        aliases = {
+            "Сохранено локально": "Локально: сохранено",
+            "Сохраняется…": "Локально: сохранение…",
+            "Ошибка сохранения": "Локально: ошибка сохранения",
+        }
+        super().setText(aliases.get(text, text))
+        self.setProperty("saveError", "ошибка" in self.text().lower() or "несохранённые" in self.text())
+        repolish(self)
 
 
 class ContextBar(QFrame):
@@ -51,10 +69,37 @@ class ContextBar(QFrame):
         super().__init__(parent)
         self.setObjectName("ContextBar")
         self.grid = QGridLayout(self)
-        self.grid.setContentsMargins(12, 9, 12, 9)
-        self.grid.setSpacing(8)
+        self.grid.setContentsMargins(8, 6, 8, 6)
+        self.grid.setSpacing(6)
         self.fields: list[QWidget] = []
         self._columns = 2
+        self._compact = False
+        self._expanded = False
+        self.summary = QLabel()
+        self.summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.summary.setAccessibleName("Текущий дом, перечень и год")
+        self.expand_button = QPushButton("Изменить выбор…")
+        self.expand_button.setCheckable(True)
+        self.expand_button.toggled.connect(self._expand)
+        self.controls = []
+
+    def _expand(self, expanded):
+        self._expanded = expanded
+        self._relayout()
+
+    def set_compact(self, compact):
+        # Critical context remains directly selectable at every window size.
+        self._compact = False
+        self._relayout()
+
+    def _summary_changed(self):
+        if not all(isinstance(control, QComboBox) for control in self.controls):
+            return
+        values = [control.currentText() for control in self.controls]
+        if len(values) == 4:
+            full = f"{values[1]} • {values[3]} • {values[2]}"
+            self.summary.setToolTip(" • ".join(values))
+            self.summary.setText(self.summary.fontMetrics().elidedText(full, Qt.TextElideMode.ElideRight, max(80, self.summary.width())))
 
     def add_field(self, label: str, control: QWidget) -> None:
         field = QWidget(self)
@@ -63,6 +108,7 @@ class ContextBar(QFrame):
         layout.setSpacing(3)
         caption = QLabel(label)
         caption.setObjectName("ContextCaption")
+        caption.setBuddy(control)
         layout.addWidget(caption)
         control.setMinimumWidth(0)
         if isinstance(control, QComboBox):
@@ -71,27 +117,69 @@ class ContextBar(QFrame):
             control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             control.currentTextChanged.connect(control.setToolTip)
         control.setAccessibleName(label)
+        control.setProperty("contextFieldLabel", label)
         layout.addWidget(control)
         self.fields.append(field)
+        self.controls.append(control)
+        if isinstance(control, QComboBox):
+            control.currentTextChanged.connect(self._summary_changed)
         self._relayout()
 
     def _relayout(self) -> None:
+        self._columns = self._readable_columns(self.width())
         while self.grid.count():
             self.grid.takeAt(0)
+        self.summary.setVisible(self._compact)
+        self.expand_button.setVisible(self._compact)
+        if self._compact:
+            self.grid.addWidget(self.summary, 0, 0, 1, max(1, self._columns - 1))
+            self.grid.addWidget(self.expand_button, 0, max(1, self._columns - 1))
+        count = len(self.fields)
+        scale = float(QApplication.instance().property("uiScale") or 1.0)
+        for control in self.controls:
+            if control.property("contextFieldLabel") in {"Месяц", "Месяц просмотра"}:
+                control.setMinimumWidth(control.fontMetrics().horizontalAdvance("Сентябрь") + round(72 * scale))
+            elif control.property("contextFieldLabel") == "Год":
+                control.setMinimumWidth(control.fontMetrics().horizontalAdvance("2026") + round(64 * scale))
         for i, field in enumerate(self.fields):
-            self.grid.addWidget(field, i // self._columns, i % self._columns)
-        for column in range(4):
-            weight = (1 if column == 3 else 3) if self._columns == 4 else 1
-            self.grid.setColumnStretch(column, weight if column < self._columns else 0)
+            field.setVisible(not self._compact or self._expanded)
+            if self._columns == 2 and count >= 4:
+                if i < 2:
+                    self.grid.addWidget(field, 0, i * 3, 1, 3)
+                elif i == 2:
+                    self.grid.addWidget(field, 1, 0, 1, 4)
+                else:
+                    self.grid.addWidget(field, 1, 4 + i - 3, 1, 2 if count == 4 else 1)
+            else:
+                self.grid.addWidget(field, i // self._columns, i % self._columns)
+        for column in range(6):
+            weight = (1 if column >= 3 else 3) if self._columns >= 4 else 1
+            self.grid.setColumnStretch(column, weight if column < (6 if self._columns == 2 and count >= 4 else self._columns) else 0)
+        self._summary_changed()
+
+    def _readable_columns(self, width: int) -> int:
+        scale = float(QApplication.instance().property("uiScale") or 1.0)
+        lengths = (18, 24, 26, 6, 8)
+        # The fields have stylesheet fonts different from the container font.
+        # Include text padding and the styled arrow when choosing a single row.
+        required = sum(control.fontMetrics().horizontalAdvance("о" * lengths[min(i, 4)]) + 72 * scale
+                       for i, control in enumerate(self.controls))
+        return len(self.fields) if width >= required else 1 if width < 420 * scale else 2
 
     def resizeEvent(self, event):  # noqa: N802
-        scale = float(QApplication.instance().property("uiScale") or 1.0)
-        width = event.size().width() / scale
-        columns = 4 if len(self.fields) == 4 and width >= 960 else 1 if width < 620 else 2
+        width = event.size().width()
+        columns = self._readable_columns(width)
         if columns != self._columns:
             self._columns = columns
             self._relayout()
+        self._summary_changed()
         super().resizeEvent(event)
+
+    def changeEvent(self, event):  # noqa: N802
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange) and hasattr(self, "controls"):
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._relayout)
 
 
 class SectionCard(QFrame):
@@ -99,8 +187,8 @@ class SectionCard(QFrame):
         super().__init__(parent)
         self.setObjectName("Card")
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(12, 10, 12, 12)
-        self.body.setSpacing(8)
+        self.body.setContentsMargins(8, 6, 8, 8)
+        self.body.setSpacing(6)
         self.actions = ActionFlowLayout()
         self.actions.setSpacing(6)
         if title:
@@ -120,22 +208,32 @@ class ActionMenuButton(QPushButton):
         self.menu_model = QMenu(self)
         self.setMenu(self.menu_model)
         self.entries: list[tuple[object, QPushButton, Callable[[], bool] | None]] = []
+        self.submenus: list[ActionMenuButton] = []
         self.menu_model.aboutToShow.connect(self.sync)
 
     def add_command(self, button: QPushButton, *, when=None, text: str | None = None):
         action = self.menu_model.addAction(text or button.text())
+        action.setIcon(button.icon())
         action.setProperty("followCommandText", text is None)
         action.triggered.connect(button.click)
         self.entries.append((action, button, when))
         return action
 
+    def add_submenu(self, button):
+        button.menu_model.setTitle(button.text())
+        self.menu_model.addMenu(button.menu_model)
+        self.submenus.append(button)
+
     def sync(self) -> None:
+        for submenu in self.submenus:
+            submenu.sync()
         for action, button, when in self.entries:
             if action.property("followCommandText"):
                 action.setText(button.text())
             action.setEnabled(button.isEnabled())
             action.setVisible(when is None or bool(when()))
             action.setToolTip(button.toolTip())
+            action.setIcon(button.icon())
 
 
 class DangerZone(ActionMenuButton):
@@ -143,6 +241,15 @@ class DangerZone(ActionMenuButton):
         super().__init__(text, "danger", parent)
         self.setObjectName("DangerButton")
         self.setToolTip("Команды удаления и отмены. Перед выполнением потребуется подтверждение.")
+
+
+def style_danger_button(button: QPushButton) -> QPushButton:
+    """Show the named command directly, retaining its existing confirmation."""
+    button.setObjectName("DangerButton")
+    set_button_icon(button, "danger", "danger")
+    button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    button.show()
+    return button
 
 
 class WorkflowPanel(QFrame):
@@ -153,13 +260,15 @@ class WorkflowPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("WorkflowPanel")
         self._key: str | None = None
+        self._compact = True
         self.commands: dict[str, QPushButton | Callable] = {}
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(12, 10, 12, 10)
-        self.body.setSpacing(8)
+        self.body.setContentsMargins(8, 6, 8, 6)
+        self.body.setSpacing(4)
         self.steps: list[QLabel] = []
         self.step_icons: list[QLabel] = []
         step_row = QHBoxLayout()
+        self.step_widgets = []
         step_row.setSpacing(6)
         for index, title in enumerate(steps):
             step = QWidget()
@@ -176,6 +285,7 @@ class WorkflowPanel(QFrame):
             step_layout.addWidget(label, 1)
             step_row.addWidget(step, 1)
             self.steps.append(label)
+            self.step_widgets.append(step)
             self.step_icons.append(status_icon)
         self.body.addLayout(step_row)
         row = QHBoxLayout()
@@ -198,14 +308,30 @@ class WorkflowPanel(QFrame):
         self.primary.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.primary.clicked.connect(self._execute)
         row.addWidget(self.primary)
+        self.help_button = QPushButton("Как продолжить")
+        self.help_button.setCheckable(True)
+        self.help_button.setObjectName("DisclosureButton")
+        self.help_button.toggled.connect(self._show_help)
+        row.addWidget(self.help_button)
         self.body.addLayout(row)
         self.reason = QLabel()
         self.reason.setObjectName("BlockingReason")
         self.reason.setWordWrap(True)
         self.body.addWidget(self.reason)
+        self.set_compact(True)
+
+    def _show_help(self, expanded):
+        for step in self.step_widgets:
+            step.setVisible(expanded)
+        self.detail.setVisible(expanded)
 
     def register(self, key: str, command) -> None:
         self.commands[key] = command
+
+    def set_compact(self, compact):
+        self._compact = True
+        self._show_help(self.help_button.isChecked())
+        self.action_row.setDirection(QBoxLayout.Direction.LeftToRight)
 
     def show_step(self, active: int, title: str, detail: str, key: str | None,
                   text: str, *, reason: str = "", completed: bool = False,
@@ -225,6 +351,9 @@ class WorkflowPanel(QFrame):
         self.detail.setText(detail)
         self.primary.setText(text)
         command = self.commands.get(key)
+        for alternate in self.commands.values():
+            if isinstance(alternate, QPushButton) and alternate.property("workflowAlternate"):
+                alternate.setVisible(alternate is not command)
         enabled = command is not None and (not isinstance(command, QPushButton) or command.isEnabled())
         self.primary.setEnabled(enabled and not reason)
         self.primary.setToolTip(reason or detail)
@@ -238,8 +367,8 @@ class WorkflowPanel(QFrame):
         self.reason.setVisible(bool(reason))
 
     def resizeEvent(self, event):  # noqa: N802 - Qt API
-        scale = float(QApplication.instance().property("uiScale") or 1.0)
-        direction = (QBoxLayout.Direction.TopToBottom if event.size().width() < 760 * scale
+        needed = self.title.minimumSizeHint().width() + self.primary.minimumSizeHint().width() + self.help_button.minimumSizeHint().width() + 2 * self.action_row.spacing() + 16
+        direction = (QBoxLayout.Direction.TopToBottom if event.size().width() < needed
                      else QBoxLayout.Direction.LeftToRight)
         if self.action_row.direction() != direction:
             self.action_row.setDirection(direction)
@@ -263,6 +392,14 @@ class OperationStatus(StatusStrip):
     def __init__(self, text: str = "Готово к работе", parent=None):
         super().__init__(text, parent)
         self._generation = 0
+
+    def outcome(self, text: str, *, tone: str = "muted"):
+        self._outcome_generation = self._generation
+        self.setProperty("tone", tone)
+        repolish(self)
+        self.hide_progress()
+        self.set_text(text)
+        self.show()
 
     def bind_worker(self, worker, title: str, context: str = "", queue=None):
         self._generation += 1
@@ -305,15 +442,15 @@ class OperationStatus(StatusStrip):
         def succeeded(_result):
             if generation != self._generation:
                 return
-            self.setProperty("tone", "success")
+            self.setProperty("tone", "accent")
             repolish(self)
             if queue:
                 index, total = queue
-                self.show_progress(total, index + 1)
-                self.set_text(f"{prefix} • обработано {index + 1} из {total} месяцев")
+                self.show_progress(total, index)
+                self.set_text(f"{prefix} • ответ получен, проверка результата • завершено {index} из {total} месяцев")
             else:
                 self.hide_progress()
-                self.set_text(prefix + " • завершено")
+                self.set_text(prefix + " • ответ получен, проверка результата")
 
         if queue:
             index, total = queue

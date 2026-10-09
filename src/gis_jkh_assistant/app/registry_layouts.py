@@ -2,10 +2,12 @@
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -16,20 +18,75 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .page_layouts import command, context_for, page_root, table
+from .action_layout import ActionFlowLayout
+from .page_layouts import command, command_menu, context_for, page_root, table, viewport_table, workspace_card
 from .icons import set_button_icon
 from .registry_workflow import check_work_list, refresh_work_lists, replace_from_template
 from .widgets import SafeComboBox, SafeSpinBox, ensure_combo_chevron
 from .workflow_widgets import (
     ActionMenuButton,
-    DangerZone,
     OperationStatus,
     SectionCard,
     WorkflowPanel,
+    style_danger_button,
 )
 
 
-def disclosure(title: str, body: QWidget, root) -> QPushButton:
+class WorkListDetailsCard(SectionCard):
+    """Keep the period visible without giving technical metadata the whole page."""
+
+    def __init__(self):
+        super().__init__("Период и параметры выбранного перечня")
+        self.period_grid = QGridLayout()
+        self.summary_grid = QGridLayout()
+        self.period_fields = []
+        self.summary_fields = []
+        self._columns = None
+        self.body.addLayout(self.period_grid)
+        self.body.addLayout(self.summary_grid)
+
+    def add_field(self, label, control, *, period=False):
+        field = QWidget()
+        layout = QVBoxLayout(field)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        caption = QLabel(label)
+        caption.setObjectName("ContextCaption")
+        layout.addWidget(caption)
+        layout.addWidget(control)
+        (self.period_fields if period else self.summary_fields).append(field)
+        self._columns = None
+        self._fit_fields()
+
+    def _fit_fields(self):
+        scale = float(QApplication.instance().property("uiScale") or 1.0)
+        columns = (2 if self.width() >= 680 * scale else 1,
+                   3 if self.width() >= 800 * scale else 2)
+        if columns == self._columns:
+            return
+        self._columns = columns
+        for grid, fields, count in (
+            (self.period_grid, self.period_fields, columns[0]),
+            (self.summary_grid, self.summary_fields, columns[1]),
+        ):
+            while grid.count():
+                grid.takeAt(0)
+            for index, field in enumerate(fields):
+                grid.addWidget(field, index // count, index % count)
+            for column in range(3):
+                grid.setColumnStretch(column, 1 if column < count else 0)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._fit_fields()
+
+    def changeEvent(self, event):  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange and hasattr(self, "_columns"):
+            self._fit_fields()
+
+
+def disclosure(title: str, body: QWidget, root, *, expanded: bool = False) -> QPushButton:
     toggle = QPushButton(f"Показать {title[:1].lower() + title[1:]}")
     set_button_icon(toggle, "chevron_down")
     toggle.setCheckable(True)
@@ -41,7 +98,8 @@ def disclosure(title: str, body: QWidget, root) -> QPushButton:
         toggle.setAccessibleDescription("Разворачивает или скрывает дополнительные поля")
 
     toggle.toggled.connect(change)
-    body.hide()
+    change(expanded)
+    toggle.setChecked(expanded)
     root.addWidget(toggle)
     root.addWidget(body)
     return toggle
@@ -59,32 +117,35 @@ def build_work_lists(page):
     page.registry_combo = SafeComboBox()
     page.registry_combo.setPlaceholderText("Выберите существующий перечень")
     page.list_count = QLabel("0")
+    command(page, "delete_button", "Удалить локальный перечень", page._delete_work_list)
     context.add_field("Существующий перечень", page.registry_combo)
     page.creation_toggle = QPushButton("Новый перечень…")
     page.creation_toggle.setCheckable(True)
     context.add_field("Создание", page.creation_toggle)
+    for field in context.fields:
+        field.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
     root.addWidget(context)
     page.context_status = QLabel()
     page.context_status.setObjectName("StatusBadge")
     page.context_status.setWordWrap(True)
     root.addWidget(page.context_status)
     creation = SectionCard("Создать отдельный перечень")
-    row = QHBoxLayout()
+    creation_form = QFormLayout()
+    creation_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
     page.year_spin = SafeSpinBox()
     page.year_spin.setRange(2015, 2100)
     page.year_spin.setValue(datetime.now().year)
     page.year_spin.setFixedWidth(130)
     page.template_combo = SafeComboBox()
-    row.addWidget(QLabel("Год нового перечня"))
-    row.addWidget(page.year_spin)
-    row.addWidget(page.template_combo, 1)
-    creation.body.addLayout(row)
+    creation_form.addRow("Год нового перечня", page.year_spin)
+    creation_form.addRow("Начальный состав", page.template_combo)
+    creation.body.addLayout(creation_form)
     command(page, "create_button", "Создать перечень", page._create_work_list)
     command(
         page, "create_from_current_button", "Копировать выбранный", page._clone_current_work_list
     )
     command(page, "templates_button", "Шаблоны пользователя…", page._manage_templates)
-    for button in (page.templates_button, page.create_from_current_button, page.create_button):
+    for button in (page.create_from_current_button, page.create_button):
         creation.actions.addWidget(button)
         button.show()
     creation.hide()
@@ -118,13 +179,12 @@ def build_work_lists(page):
             page._save_editable_work_list_to_gis,
         ),
         ("approve_gis_button", "Разместить", page._approve_current_work_list_in_gis),
-        ("delete_button", "Удалить локальный перечень", page._delete_work_list),
         ("add_works_button", "Добавить работу…", page._add_works_from_directory),
         ("remove_works_button", "Удалить выбранные строки", page._remove_selected_works),
         ("clear_works_button", "Очистить состав", page._clear_all_works),
         (
             "replace_from_template_button",
-            "Заменить по шаблону",
+            "Заменить состав по шаблону…",
             lambda: replace_from_template(page),
         ),
         ("save_as_template_button", "Сохранить как шаблон…", page._save_current_as_template),
@@ -140,63 +200,34 @@ def build_work_lists(page):
     page.workflow.register("sync", page.sync_gis_button)
     page.workflow.register("publish", page.approve_gis_button)
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(2))
-    network = SectionCard("Обмен выбранного дома и перечня с ГИС ЖКХ")
-    page.load_gis_lists_button.show()
-    network.actions.addWidget(page.load_gis_lists_button)
-    page.sync_gis_button.show()
-    network.actions.addWidget(page.sync_gis_button)
-    page.project_actions = ActionMenuButton("Проект и размещение в ГИС", "upload")
-    page.project_actions.add_command(
-        page.save_editable_gis_button, when=lambda: page.save_editable_gis_button.isEnabled()
-    )
-    page.project_actions.add_command(
-        page.approve_gis_button, when=lambda: page.approve_gis_button.isEnabled()
-    )
-    network.actions.addWidget(page.project_actions)
-    page.remote_danger = DangerZone()
-    page.remote_danger.add_command(
-        page.cancel_gis_button, when=lambda: page.cancel_gis_button.isEnabled()
-    )
-    network.actions.addWidget(page.remote_danger)
+    # Retain legacy handles used by the presenter; all execution stays in commands.
+    page.project_actions = command_menu("Проект в ГИС…", (page.save_editable_gis_button, page.approve_gis_button), name="upload")
+    page.project_actions.setParent(page.command_host)
+    page.gis_actions = command_menu("Обмен с ГИС ЖКХ", (page.load_gis_lists_button, page.sync_gis_button, page.save_editable_gis_button, page.approve_gis_button, page.cancel_gis_button), name="sync")
+    action, button, _when = page.gis_actions.entries[-1]
+    def cancellation_visible():
+        selected = page.repository.get_work_list(page._current_work_list_id) if page._current_work_list_id else None
+        return bool(selected and str(selected.gis_status or "").upper() == "APPROVED")
+    page.gis_actions.entries[-1] = (action, button, cancellation_visible)
     page.network_hint = QLabel()
     page.network_hint.setObjectName("Muted")
     page.network_hint.setWordWrap(True)
-    network.body.addWidget(page.network_hint)
-    root.addWidget(network)
-
-    files = SectionCard("Файлы на компьютере и шаблоны пользователя")
-    page.files_actions_button = ActionMenuButton("Локальные файлы XLSX", "files")
-    page.manual_template_action = page.files_actions_button.add_command(
-        page.load_export_template_file_button
-    )
+    page.files_card = QWidget(page.command_host)
+    page.files_actions_button = ActionMenuButton("Файлы Excel", "files")
+    page.manual_template_action = page.files_actions_button.add_command(page.load_export_template_file_button)
     page.export_xlsx_action = page.files_actions_button.add_command(page.export_button)
-    files.actions.addWidget(page.files_actions_button)
-    page.templates_button.show()
-    files.actions.addWidget(page.templates_button)
-    page.local_list_danger = DangerZone("Удалить локальный перечень")
-    page.local_list_danger.add_command(page.delete_button)
-    files.actions.addWidget(page.local_list_danger)
-    root.addWidget(files)
-    fallback = SectionCard("Резервный обмен с ГИС через XLSX")
-    hint = QLabel("Используйте этот способ, если нужно обменяться техническим файлом. Обычный путь — кнопка следующего шага выше.")
-    hint.setWordWrap(True)
-    hint.setObjectName("Muted")
-    fallback.body.addWidget(hint)
-    page.xlsx_network_actions = ActionMenuButton("XLSX: получить из ГИС или отправить в ГИС", "sync")
-    page.download_template_action = page.xlsx_network_actions.add_command(
-        page.load_export_template_button
-    )
-    page.xlsx_network_actions.add_command(page.upload_to_gis_button)
-    fallback.actions.addWidget(page.xlsx_network_actions)
-    page.xlsx_toggle = disclosure("резервный обмен через XLSX с ГИС ЖКХ", fallback, root)
+    page.files_actions_button.menu_model.addSeparator()
+    page.download_template_action = page.files_actions_button.add_command(page.load_export_template_button)
+    page.files_actions_button.add_command(page.upload_to_gis_button)
+    page.xlsx_network_actions = command_menu("Обмен XLSX…", (page.load_export_template_button, page.upload_to_gis_button))
+    page.xlsx_network_actions.setParent(page.command_host)
+    page.xlsx_toggle = QPushButton(page.command_host)
     page.operation_status = OperationStatus()
     page.operation_status.hide()
     root.addWidget(page.operation_status)
-    details = SectionCard("Период и параметры выбранного перечня")
-    page.selected_label = QLabel("Выбранный перечень: —")
-    details.body.addWidget(page.selected_label)
-    form = QFormLayout()
-    form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+    details = WorkListDetailsCard()
+    page.selected_label = QLabel("Выбранный перечень: —", page)
+    page.selected_label.hide()
     for prefix, label in (("start", "Период с"), ("end", "Период по")):
         widget = QWidget()
         row = QHBoxLayout(widget)
@@ -231,51 +262,61 @@ def build_work_lists(page):
         setattr(page, prefix + "_year", year)
         row.addWidget(month, 1)
         row.addWidget(year)
-        form.addRow(label, widget)
+        details.add_field(label, widget, period=True)
         month.currentIndexChanged.connect(page._queue_period_save)
         year.valueChanged.connect(page._queue_period_save)
     for name, label in (
         ("template_label", "Шаблон"),
         ("status_label", "Статус"),
         ("planned_total_label", "Планируемая сумма"),
-        ("gis_state_label", "Сведения ГИС"),
     ):
         widget = QLabel("—")
         widget.setWordWrap(True)
         setattr(page, name, widget)
-        form.addRow(label, widget)
-    details.body.addLayout(form)
+        details.add_field(label, widget)
+    technical = QWidget()
+    technical_layout = QVBoxLayout(technical)
+    technical_layout.setContentsMargins(0, 0, 0, 0)
+    technical_form = QFormLayout()
+    technical_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+    page.gis_state_label = QLabel("—")
+    page.gis_state_label.setWordWrap(True)
+    technical_form.addRow("Сведения ГИС", page.gis_state_label)
+    technical_layout.addLayout(technical_form)
     page.export_template_status = QLabel()
     page.export_template_status.setObjectName("Muted")
     page.export_template_status.setWordWrap(True)
-    details.body.addWidget(page.export_template_status)
-    page.details_toggle = disclosure("параметры выбранного перечня", details, root)
-    page.items_card = SectionCard("Состав работ и услуг")
-    for button in (page.add_works_button, page.lazy_fill_button):
+    technical_layout.addWidget(page.export_template_status)
+    page.details_more_toggle = disclosure(
+        "сведения ГИС и файл экспорта", technical, details.body
+    )
+    page.details_card = details
+    page.details_toggle = disclosure(
+        "параметры выбранного перечня", details, root, expanded=False
+    )
+    page.templates_card = QWidget(page.command_host)
+    page.items_card = workspace_card("Состав работ и услуг")
+    page.composition_actions = command_menu("Изменить состав", (page.templates_button, page.replace_from_template_button, page.save_as_template_button, page.remove_works_button, page.clear_works_button, page.delete_button))
+    for button in (page.add_works_button, page.lazy_fill_button, page.composition_actions, page.gis_actions, page.files_actions_button):
         button.show()
         page.items_card.actions.addWidget(button)
-    composition = ActionMenuButton("Состав и шаблоны")
-    page.composition_menu = composition
-    composition.add_command(page.save_as_template_button)
-    composition.menu_model.addSeparator()
-    composition.add_command(page.replace_from_template_button)
-    page.items_card.actions.addWidget(composition)
-    danger = DangerZone("Очистка")
-    page.composition_danger = danger
-    danger.add_command(page.remove_works_button)
-    danger.add_command(page.clear_works_button)
-    page.items_card.actions.addWidget(danger)
-    hint = QLabel(
-        "В строке: цена + объём + количество либо количество + стоимость. Локальные изменения сохраняются автоматически."
-    )
+    page.add_works_button.setProperty("workflowAlternate", True)
+    root.removeWidget(page.details_toggle)
+    root.removeWidget(details)
+    page.details_toggle.setText("Параметры перечня")
+    page.lazy_fill_button.setText("Распределить сумму…")
+    page.lazy_fill_button.setToolTip("Распределить сумму между работами и услугами выбранного перечня")
+    page.items_card.actions.addWidget(page.details_toggle)
+    hint = QLabel("Локальные изменения сохраняются автоматически.")
     page.items_hint = hint
     hint.setWordWrap(True)
     hint.setObjectName("Muted")
-    page.items_card.body.addWidget(hint)
-    page.items_table = table(["Работа / услуга", "Цена", "Объем", "Кол-во", "Стоимость"])
-    page.items_table.setMinimumHeight(300)
+    page.items_table = viewport_table(table(["Работа / услуга", "Цена", "Объем", "Кол-во", "Стоимость"]))
     page.items_card.body.addWidget(page.items_table, 1)
+    page.items_card.body.addWidget(hint)
+    root.addWidget(page.network_hint)
     root.addWidget(page.items_card, 1)
+    root.addWidget(details)
     page.organization_combo.currentIndexChanged.connect(page._organization_changed)
     page.house_combo.currentIndexChanged.connect(page._house_changed)
     page.work_lists.currentItemChanged.connect(page._work_list_changed)
@@ -310,7 +351,8 @@ def mirror_registry(page):
 def prepare_project(page):
     """Acquire the existing official export basis, then use the existing import path."""
     selected = page._current_work_list_id
-    page._save_period()
+    if page.flush_pending_changes() is False:
+        return
     if page._integration_busy:
         return
     if page._export_template_path() is not None:
@@ -330,8 +372,11 @@ def prepare_project(page):
 
         def ready():
             page._preparing_project = False
-            if obtained and selected == page._current_work_list_id:
-                QTimer.singleShot(0, page._upload_current_work_list_to_gis)
+            def upload_if_open():
+                if not getattr(page.window(), "_close_requested", False) and not getattr(page.window(), "_closing", False):
+                    page._upload_current_work_list_to_gis()
+            if obtained and selected == page._current_work_list_id and not getattr(page.window(), "_close_requested", False):
+                QTimer.singleShot(0, upload_if_open)
 
         worker.succeeded.connect(succeeded)
         worker.finished.connect(ready)
@@ -353,7 +398,7 @@ def adapt_houses(page):
     page.gis_actions_button.setObjectName("")
     page.gis_actions_button.setText("Загрузка из ГИС ЖКХ")
     page.organization_actions_button.setText("Управляющая организация")
-    page.files_actions_button.setText("Файлы на компьютере")
+    page.files_actions_button.setText("Файлы Excel")
     set_button_icon(page.files_actions_button, "files")
     page.add_house_button.setText("Добавить дом")
     page.add_org_button.setText("Добавить УО вручную")
@@ -375,11 +420,11 @@ def adapt_houses(page):
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         combo.setMinimumContentsLength(10)
         combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-    page.organization_actions_button.menu().insertSeparator(page.organization_delete_action)
-    page.organization_delete_action.setText("Удалить УО и её данные…")
+    page.command_host = QWidget(page)
+    page.command_host.hide()
     page.workflow = WorkflowPanel(("Реестр УО", "Выбрать дом", "Проверить карточку", "Перечни"))
     page.workflow.register("organization", page.add_org_button)
-    page.load_organization_button = QPushButton("Добавить УО из ГИС")
+    page.load_organization_button = QPushButton("Добавить УО из ГИС", page.command_host)
     set_button_icon(page.load_organization_button, "download")
     def load_organization():
         from .organization_sync import load_organization_from_gis
@@ -390,25 +435,27 @@ def adapt_houses(page):
     page.workflow.register("reset_search", page.search_edit.clear)
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(1))
     root.insertWidget(2, page.workflow)
-    page.organization_sync_card = SectionCard("Загрузка из ГИС ЖКХ — вся управляющая организация")
-    hint = QLabel("Эти действия относятся ко всей выбранной УО, независимо от дома в карточке. Реквизиты УО берутся из открытого личного кабинета: перед добавлением их можно проверить.")
-    hint.setObjectName("Muted")
-    hint.setWordWrap(True)
-    page.organization_sync_card.body.addWidget(hint)
-    for button in (page.load_organization_button, page.sync_houses_button,
-                   page.sync_all_management_button, page.sync_all_work_lists_button):
-        page.organization_sync_card.actions.addWidget(button)
+    page.organization_actions_button = ActionMenuButton("Управляющая организация", "organization")
+    page.organization_load_action = page.organization_actions_button.add_command(page.load_organization_button)
+    page.organization_add_action = page.organization_actions_button.add_command(page.add_org_button)
+    page.organization_edit_action = page.organization_actions_button.add_command(page.edit_org_button)
+    page.organization_actions_button.menu_model.addSeparator()
+    page.delete_org_button.setText("Удалить УО и её данные…")
+    style_danger_button(page.delete_org_button)
+    page.organization_delete_action = page.organization_actions_button.add_command(page.delete_org_button)
+    page.bulk_actions_button = command_menu("Обновить все дома УО", (page.sync_all_management_button, page.sync_all_work_lists_button), name="sync")
+    for button in (page.add_org_button, page.edit_org_button, page.delete_org_button, page.sync_all_management_button, page.sync_all_work_lists_button):
+        button.setParent(page.command_host)
+    page.organization_sync_card = QWidget(page.command_host)
+    page.manual_actions_card = QWidget(page.command_host)
+    toolbar = QWidget()
+    actions = ActionFlowLayout(toolbar)
+    actions.setSpacing(6)
+    for button in (page.organization_actions_button, page.add_house_button, page.sync_houses_button, page.bulk_actions_button, page.files_actions_button):
+        actions.addWidget(button)
         button.show()
-    root.insertWidget(3, page.organization_sync_card)
-    page.manual_actions_card = SectionCard("Ручное добавление и файлы на компьютере")
-    for button in (page.add_org_button, page.edit_org_button, page.add_house_button,
-                   page.files_actions_button):
-        page.manual_actions_card.actions.addWidget(button)
-        button.show()
-    page.organization_danger = DangerZone("Удаление УО")
-    page.organization_danger.add_command(page.delete_org_button)
-    page.manual_actions_card.actions.addWidget(page.organization_danger)
-    root.insertWidget(4, page.manual_actions_card)
+    page.sync_houses_button.setProperty("workflowAlternate", True)
+    root.insertWidget(3, toolbar)
     # Preserve existing autosave widgets and signals while moving deletion to the detail.
     page.delete_house_button.parentWidget().layout().removeWidget(page.delete_house_button)
     page.delete_house_button.hide()
@@ -430,6 +477,7 @@ def adapt_houses(page):
             if title == "Помещения":
                 title = "Площадь и помещения"
             section = SectionCard(title)
+            section.setObjectName("HouseSection")
             if title in {"Идентификаторы", "Служебное"}:
                 toggle = disclosure(title, section, page.card_layout)
                 if title == "Идентификаторы":
@@ -449,6 +497,7 @@ def adapt_houses(page):
                     and layout.itemAt(0).widget().text() == "Тарифы по периодам"
                 ):
                     section = SectionCard("Тарифы")
+                    section.setObjectName("HouseSection")
                     page.card_layout.addWidget(section)
                     while layout.count():
                         child = layout.takeAt(0).widget()
@@ -457,10 +506,9 @@ def adapt_houses(page):
                     page.add_tariff_button.setText("Добавить")
                     section.actions.addWidget(page.add_tariff_button)
                     section.actions.addWidget(page.edit_tariff_button)
-                    tariff_danger = DangerZone("Удаление")
-                    tariff_danger.add_command(page.delete_tariff_button)
-                    page.delete_tariff_button.hide()
-                    section.actions.addWidget(tariff_danger)
+                    page.delete_tariff_button.setText("Удалить тариф")
+                    style_danger_button(page.delete_tariff_button)
+                    section.actions.addWidget(page.delete_tariff_button)
                     continue
                 if isinstance(layout, QFormLayout):
                     layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -468,6 +516,7 @@ def adapt_houses(page):
             else:
                 page.card_layout.addItem(item)
     danger = SectionCard("Удаление дома")
+    danger.setObjectName("HouseSection")
     hint = QLabel(
         "Удаление из локальной базы затронет связанные перечни, планы, фиксацию и оценки этого дома."
     )
@@ -475,7 +524,7 @@ def adapt_houses(page):
     hint.setWordWrap(True)
     danger.body.addWidget(hint)
     danger.actions.addWidget(page.delete_house_button)
-    page.delete_house_button.show()
+    style_danger_button(page.delete_house_button)
     page.card_layout.addWidget(danger)
     page.operation_status = page.bulk_status_strip
     page.bulk_status_strip.hide()
@@ -490,7 +539,9 @@ def adapt_houses(page):
     page.page_scroll.setWidgetResizable(True)
     page.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     page.page_scroll.setWidget(content)
-    page.splitter.setMinimumHeight(340)
+    root.setContentsMargins(12, 10, 12, 10)
+    root.setSpacing(6)
+    page.splitter.setMinimumHeight(220)
     outer = QVBoxLayout(page)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.addWidget(page.page_scroll)

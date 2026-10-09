@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QButtonGroup, QComboBox, QLabel, QRadioButton, QWidget
+from PySide6.QtWidgets import QButtonGroup, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton, QWidget
 
 from gis_jkh_assistant.database import Repository
 
 from .page_layouts import page_root
+from .error_messages import error_text
 from .ui_scale import SCALE_OPTIONS, SCALE_SETTING, scale_percent
 from .workflow_widgets import SectionCard
 
@@ -19,21 +22,21 @@ class SettingsPage(QWidget):
     sharedContextChanged = Signal(bool)
     themeChanged = Signal(str)
     scaleChanged = Signal(int)
+    helperSetupRequested = Signal()
 
     def __init__(self, repository: Repository, parent=None) -> None:
         super().__init__(parent)
         self.repository = repository
 
         root = page_root(self, "Настройки", "Рабочий контекст, оформление и связь с ГИС ЖКХ")
-        self.save_status.setText("Настройки сохраняются автоматически")
-        context = SectionCard("Выбор между разделами")
+        self.save_status.setText("Настройки сохраняются сразу")
+        context = SectionCard("Рабочий контекст")
         hint = QLabel(
-            "Управляющая организация → дом → перечень → год составляют рабочий контекст. "
-            "Общий выбор позволяет продолжать работу с тем же объектом в следующем разделе."
+            "Общий выбор сохраняет УО, дом, перечень и год при переходах между разделами."
         )
         hint.setWordWrap(True)
         hint.setObjectName("Muted")
-        context.body.addWidget(hint)
+        context.setToolTip(hint.text())
         self.shared_radio = QRadioButton("Общий выбор")
         self.independent_radio = QRadioButton("Независимый выбор в каждом разделе")
         group = QButtonGroup(self)
@@ -43,9 +46,7 @@ class SettingsPage(QWidget):
         context.body.addWidget(self.shared_radio)
         context.body.addWidget(self.independent_radio)
         self.context_explanation = QLabel(
-            "При общем выборе переход между разделами сохраняет выбранные дом, перечень и год. "
-            "Если перечень ещё не размещён, планирование и месячные разделы объяснят, "
-            "какой этап нужно завершить. Другой перечень автоматически выбран не будет."
+            "Общий выбор сохраняет объект при переходах. Независимый — запоминает выбор каждого раздела отдельно."
         )
         self.context_explanation.setWordWrap(True)
         self.context_explanation.setObjectName("Muted")
@@ -55,6 +56,7 @@ class SettingsPage(QWidget):
         self.independent_radio.setChecked(not enabled)
         self.shared_radio.toggled.connect(self._shared_toggled)
         root.addWidget(context)
+        context.setMaximumWidth(900)
 
         appearance = SectionCard("Оформление")
         self.light_radio = QRadioButton("Светлая тема")
@@ -63,8 +65,11 @@ class SettingsPage(QWidget):
         themes.setExclusive(True)
         themes.addButton(self.light_radio)
         themes.addButton(self.dark_radio)
-        appearance.body.addWidget(self.light_radio)
-        appearance.body.addWidget(self.dark_radio)
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(self.light_radio)
+        theme_row.addWidget(self.dark_radio)
+        theme_row.addStretch(1)
+        appearance.body.addLayout(theme_row)
         self.dark_radio.setChecked(self.theme_name() == "dark")
         self.light_radio.setChecked(self.theme_name() == "light")
         self.light_radio.toggled.connect(lambda checked: self._theme_toggled("light", checked))
@@ -73,37 +78,41 @@ class SettingsPage(QWidget):
         self.scale_combo = QComboBox()
         self.scale_combo.setObjectName("InterfaceScale")
         scale_label.setBuddy(self.scale_combo)
-        appearance.body.addWidget(scale_label)
+        scale_row = QHBoxLayout()
+        scale_row.addWidget(scale_label)
         for percent, description in zip(SCALE_OPTIONS, ("Обычный", "Крупнее", "Самый крупный")):
             self.scale_combo.addItem(f"{percent}% — {description}", percent)
         self.scale_combo.setCurrentIndex(self.scale_combo.findData(self.scale_percent()))
         self.scale_combo.currentIndexChanged.connect(self._scale_changed)
-        appearance.body.addWidget(self.scale_combo)
+        scale_row.addWidget(self.scale_combo)
+        scale_row.addStretch(1)
+        appearance.body.addLayout(scale_row)
         scale_hint = QLabel(
-            "Увеличивает весь интерфейс сразу. Размер можно менять во время работы; "
-            "выбранные объекты и введённые данные сохраняются. Масштаб экрана Windows "
-            "учитывается дополнительно."
+            "Масштаб экрана Windows учитывается дополнительно. Выбор объектов и данные сохраняются."
         )
         scale_hint.setObjectName("Muted")
         scale_hint.setWordWrap(True)
         appearance.body.addWidget(scale_hint)
         root.addWidget(appearance)
+        appearance.setMaximumWidth(900)
 
         connection = SectionCard("Связь с ГИС ЖКХ")
         self.connection_status = QLabel("Проверка подключения…")
         self.connection_status.setWordWrap(True)
         connection.body.addWidget(self.connection_status)
         explanation = QLabel(
-            "Для получения и размещения данных откройте ГИС ЖКХ в браузере, "
-            "войдите в свою учётную запись и включите браузерный помощник. "
-            "Состояние подключения видно в левой панели. "
-            "Локальные данные можно редактировать и без подключения; "
-            "изменения сохраняются автоматически."
+            "Откройте ГИС ЖКХ в браузере, войдите и включите помощник. "
+            "Локальная работа доступна без подключения."
         )
         explanation.setObjectName("Muted")
         explanation.setWordWrap(True)
         connection.body.addWidget(explanation)
+        self.helper_setup_button = QPushButton("Установить браузерный помощник…")
+        self.helper_setup_button.setAccessibleName("Установить браузерный помощник")
+        self.helper_setup_button.clicked.connect(self.helperSetupRequested.emit)
+        connection.body.addWidget(self.helper_setup_button, 0)
         root.addWidget(connection)
+        connection.setMaximumWidth(900)
         root.addStretch(1)
 
     def shared_context_enabled(self) -> bool:
@@ -117,17 +126,50 @@ class SettingsPage(QWidget):
 
     def _scale_changed(self, _index: int) -> None:
         percent = scale_percent(self.scale_combo.currentData())
-        self.repository.set_setting(SCALE_SETTING, str(percent))
+        previous = self.scale_percent()
+        if not self._save_setting(SCALE_SETTING, str(percent), "Масштаб интерфейса"):
+            self.scale_combo.blockSignals(True)
+            self.scale_combo.setCurrentIndex(self.scale_combo.findData(previous))
+            self.scale_combo.blockSignals(False)
+            return
         self.scaleChanged.emit(percent)
 
     def _shared_toggled(self, checked: bool) -> None:
-        self.repository.set_setting(_SHARED_CONTEXT_KEY, "1" if checked else "0")
+        previous = self.repository.get_setting(_SHARED_CONTEXT_KEY) == "1"
+        if not self._save_setting(_SHARED_CONTEXT_KEY, "1" if checked else "0", "Рабочий контекст"):
+            for control in (self.shared_radio, self.independent_radio):
+                control.blockSignals(True)
+            self.shared_radio.setChecked(previous)
+            self.independent_radio.setChecked(not previous)
+            for control in (self.shared_radio, self.independent_radio):
+                control.blockSignals(False)
+            return
         self.sharedContextChanged.emit(bool(checked))
 
     def _theme_toggled(self, theme: str, checked: bool) -> None:
         if checked:
-            self.repository.set_setting(_THEME_KEY, theme)
+            previous = self.theme_name()
+            if not self._save_setting(_THEME_KEY, theme, "Тема интерфейса"):
+                for control in (self.light_radio, self.dark_radio):
+                    control.blockSignals(True)
+                self.light_radio.setChecked(previous == "light")
+                self.dark_radio.setChecked(previous == "dark")
+                for control in (self.light_radio, self.dark_radio):
+                    control.blockSignals(False)
+                return
             self.themeChanged.emit(theme)
+
+    def _save_setting(self, key: str, value: str, name: str) -> bool:
+        try:
+            self.repository.set_setting(key, value)
+        except (sqlite3.DatabaseError, OSError, ValueError) as exc:
+            self.save_status.setText("Локально: ошибка сохранения")
+            QMessageBox.warning(self, "Настройка не сохранена", error_text(
+                exc, context=name, effect="Сохранена прежняя настройка; изменение не применено.",
+            ))
+            return False
+        self.save_status.setText("Локально: сохранено")
+        return True
 
     def set_connection_status(self, text: str) -> None:
         self.connection_status.setText(text)

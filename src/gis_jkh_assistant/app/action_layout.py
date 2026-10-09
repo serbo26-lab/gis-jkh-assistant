@@ -16,7 +16,12 @@ class ActionFlowLayout(QLayout):
     def addItem(self, item):  # noqa: N802 - Qt API
         widget = item.widget()
         if widget is not None:
-            widget.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            if widget.property("flowFullText"):
+                # QWidgetItem otherwise clamps the requested text rectangle
+                # to QLabel's cached wrapped sizeHint in both dimensions.
+                widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            else:
+                widget.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._items.append(item)
 
     def addStretch(self, _stretch=0):  # noqa: N802 - compatible action-row API
@@ -65,6 +70,14 @@ class ActionFlowLayout(QLayout):
                 continue
             size = item.sizeHint()
             widget = item.widget()
+            if widget is not None and widget.property("flowFullText"):
+                # Prefer a complete status line. Long errors still wrap within
+                # the available width instead of extending outside the page.
+                width = max(widget.fontMetrics().horizontalAdvance(line) for line in widget.text().splitlines() or [""]) + 8
+                size = QSize(width, widget.heightForWidth(width))
+            if widget is not None and widget.hasHeightForWidth() and size.width() > available.width():
+                width = max(1, available.width())
+                size = QSize(width, max(size.height(), widget.heightForWidth(width)))
             gap = self.spacing()
             if gap < 0 and isinstance(widget, QWidget):
                 gap = widget.style().layoutSpacing(

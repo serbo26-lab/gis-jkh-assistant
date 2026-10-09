@@ -13,9 +13,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from .organization_context import (
+    MIN_ORGANIZATION_ROUTING_HELPER_VERSION, helper_supports_organization_routing,
+)
+
 
 _CLIENT_HEADER = "X-GIS-JKH-Helper"
 _CLIENT_VALUE = "desktop-helper"
+_CLIENT_VERSION_HEADER = "X-GIS-JKH-Helper-Version"
 
 
 class IntegrationError(RuntimeError):
@@ -112,7 +117,7 @@ class LocalIntegrationGateway:
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header(
                     "Access-Control-Allow-Headers",
-                    f"Content-Type, {_CLIENT_HEADER}",
+                    f"Content-Type, {_CLIENT_HEADER}, {_CLIENT_VERSION_HEADER}",
                 )
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
@@ -190,6 +195,12 @@ class LocalIntegrationGateway:
 
                 if urlparse(self.path).path != "/api/integration/next":
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                    return
+
+                # A second, older extension must not consume commands after a
+                # newer helper's hello made the desktop capability check pass.
+                if not helper_supports_organization_routing(self.headers.get(_CLIENT_VERSION_HEADER)):
+                    self._send_json(HTTPStatus.OK, {"idle": True, "error": "helper update required"})
                     return
 
                 try:
@@ -270,6 +281,15 @@ class LocalIntegrationGateway:
         if not status.gis_page_ready:
             raise IntegrationError(
                 "Откройте личный кабинет ГИС ЖКХ в браузере и обновите страницу."
+            )
+
+        if (payload or {}).get("organizationContext") and not helper_supports_organization_routing(
+            status.helper_version
+        ):
+            minimum = ".".join(map(str, MIN_ORGANIZATION_ROUTING_HELPER_VERSION))
+            raise IntegrationError(
+                f"Для выбора вкладки нужной УО требуется ГИС ЖКХ помощник {minimum}+. "
+                "Обновите расширение и нажмите «Перезагрузить» на его карточке в браузере."
             )
 
         command_id = str(uuid.uuid4())

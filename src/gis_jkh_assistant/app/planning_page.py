@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .error_messages import context_text, error_text
+
+import sqlite3
+
 import calendar
 import json
 
@@ -35,9 +39,9 @@ from gis_jkh_assistant.work_planning import (
     integral_quantity,
 )
 
-from .gis_integration_worker import GisIntegrationWorker
+from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .page_layouts import build_planning
-from .workflow_presenter import refresh_planning
+from .workflow_presenter import mark_plan_synced, plan_fingerprint, refresh_planning
 from .styles import color
 
 
@@ -65,8 +69,13 @@ class PlanningTable(QTableWidget):
     """Monthly table with spreadsheet-like Delete handling."""
 
     delete_requested = Signal()
+    context_menu_requested = Signal()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.key() == Qt.Key.Key_Menu or (event.key() == Qt.Key.Key_F10 and event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+            self.context_menu_requested.emit()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Delete:
             self.delete_requested.emit()
             event.accept()
@@ -256,27 +265,14 @@ class PlanningPage(QWidget):
         self._work_list_changed()
 
     def _work_list_changed(self) -> None:
-        work_list_id = self.work_list_combo.currentData()
-        self._current_work_list_id = str(work_list_id) if work_list_id else None
+        from .selection_memory import rebuild_years
+        rebuild_years(self, self.work_list_combo.currentData())
         self._current_plan_id = None
-
-        self.year_combo.blockSignals(True)
-        self.year_combo.clear()
-        work_list = (
-            self.repository.get_work_list(self._current_work_list_id)
-            if self._current_work_list_id
-            else None
-        )
-        if work_list:
-            for year in range(work_list.start_year, work_list.end_year + 1):
-                self.year_combo.addItem(str(year), year)
-            preferred = work_list.base_year
-            index = self.year_combo.findData(preferred)
-            self.year_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.year_combo.blockSignals(False)
         self._year_changed()
 
     def _year_changed(self) -> None:
+        from .selection_memory import select_year
+        select_year(self)
         work_list_id = self._current_work_list_id
         year = self.year_combo.currentData()
         if not work_list_id or year is None:
@@ -291,7 +287,7 @@ class PlanningPage(QWidget):
                 work_list_id=work_list_id,
                 year=int(year),
             )
-        except ValueError as exc:
+        except (sqlite3.DatabaseError, ValueError) as exc:
             self._current_plan_id = None
             self.table.setRowCount(0)
             self.plan_status.setText(f"План: {exc}")
@@ -422,8 +418,8 @@ class PlanningPage(QWidget):
                 count=count,
                 dates=dates,
             )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось сохранить", error_text(exc, context=context_text(self), effect="В ячейке будет восстановлено прежнее количество.", recovery="Устраните причину ошибки и введите количество повторно."))
             self._restore_count(cell)
             return
 
@@ -471,8 +467,8 @@ class PlanningPage(QWidget):
                 count=new_count,
                 dates=new_dates,
             )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось сохранить даты", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось сохранить даты", error_text(exc, context=context_text(self), effect="Выбранные даты не применены к таблице плана.", recovery="Устраните причину и снова откройте даты этой ячейки (Alt+D)."))
             return
 
         self.table.blockSignals(True)
@@ -513,8 +509,8 @@ class PlanningPage(QWidget):
 
         try:
             self.repository.apply_work_plan_distribution(self._current_plan_id, rows)
-        except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось очистить ячейки", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось очистить ячейки", error_text(exc, context=context_text(self)))
             return
 
         self.table.blockSignals(True)
@@ -570,8 +566,8 @@ class PlanningPage(QWidget):
 
         try:
             self.repository.apply_work_plan_distribution(self._current_plan_id, rows)
-        except ValueError as exc:
-            QMessageBox.warning(self, "Не удалось распределить", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось распределить", error_text(exc, context=context_text(self)))
             return
 
         self._load_table()
@@ -746,15 +742,15 @@ class PlanningPage(QWidget):
             )
             if self._current_plan_id == plan_id:
                 self._update_plan_status()
-            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", message)
+            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
 
         def finished() -> None:
             self._integration_worker = None
             self._set_integration_busy(False)
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
 
@@ -798,6 +794,7 @@ class PlanningPage(QWidget):
 
         def succeeded(result: dict) -> None:
             if not result.get("found"):
+                self.operation_status.outcome("План в ГИС не найден. Локальные данные сохранены.")
                 QMessageBox.information(
                     self,
                     "План в ГИС ЖКХ не найден",
@@ -833,25 +830,29 @@ class PlanningPage(QWidget):
                 question,
             )
             if answer != QMessageBox.StandardButton.Yes:
+                self.operation_status.outcome("Загрузка плана отменена. Локальные данные сохранены.")
                 return
 
             try:
                 applied = apply_remote_work_plan(
                     self.repository,
-                    work_list_id=self._current_work_list_id,
+                    work_list_id=work_list.id,
                     year=year,
                     remote=result,
                 )
-            except ValueError as exc:
+            except (sqlite3.DatabaseError, ValueError) as exc:
+                self.operation_status.outcome("Не удалось применить план. Изменения импорта отменены; повторите загрузку после устранения ошибки.", tone="danger")
                 QMessageBox.critical(
                     self,
                     "Не удалось применить планирование",
-                    str(exc),
+                    error_text(exc, context=context_text(self)),
                 )
                 return
 
+            mark_plan_synced(self, plan_id)
             self._load_table()
             self._update_plan_status()
+            self.operation_status.outcome(f"План загружен: работ {applied['items']}, месячных значений {applied['months']}.", tone="success")
             details = (
                 f"Загружено работ: {applied['items']}.\n"
                 f"Загружено месячных значений: {applied['months']}."
@@ -861,6 +862,8 @@ class PlanningPage(QWidget):
                     f"\nИсторических работ, отсутствующих в локальном перечне: "
                     f"{applied['historical']}."
                 )
+            if applied.get("preserved_local"):
+                details += "\nСохранены локальные исторические работы, отсутствующие в ответе ГИС. План требует проверки."
             QMessageBox.information(
                 self,
                 "Планирование загружено",
@@ -877,7 +880,7 @@ class PlanningPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить планирование из ГИС ЖКХ",
-                message,
+                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
             )
 
         def finished() -> None:
@@ -886,8 +889,8 @@ class PlanningPage(QWidget):
             self._update_plan_status()
             self._refresh_integration_status()
 
-        worker.succeeded.connect(succeeded)
-        worker.failed.connect(failed)
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
         worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
@@ -939,10 +942,11 @@ class PlanningPage(QWidget):
                 items=items,
                 months=months,
             )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Нельзя разместить план", str(exc))
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Нельзя разместить план", error_text(exc, context=context_text(self)))
             return
 
+        sent_fingerprint = plan_fingerprint(self, plan.id)
         total_count = sum(int(row.count) for row in months)
         operation = "обновлен" if plan.gis_work_plan_guid else "создан или обновлен"
         answer = QMessageBox.warning(
@@ -968,10 +972,12 @@ class PlanningPage(QWidget):
                 gis_status=result.get("gisStatus") or "SAVED",
                 gis_last_error=None,
             )
+            mark_plan_synced(self, plan_id, sent_fingerprint)
             if self._current_plan_id == plan_id:
                 self._update_plan_status()
 
             created = bool(result.get("created"))
+            self.operation_status.outcome("План создан в ГИС ЖКХ." if created else "План обновлён в ГИС ЖКХ.", tone="success")
             QMessageBox.information(
                 self,
                 "План размещен" if created else "План обновлен",
