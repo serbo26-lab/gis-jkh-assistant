@@ -147,6 +147,22 @@ def test_plan_name_stays_fixed_and_row_heights_match(desktop):
     assert frozen.rowHeight(0) == p.table.rowHeight(0)
 
 
+def test_frozen_header_updates_after_qt_style_notifications(desktop):
+    p = _select_page(desktop, 2)
+    frozen = p.table.frozen_name
+    before = frozen.view.columnWidth(0)
+    p.table.setColumnWidth(0, before + 40)
+    # Resizing a second view inside Qt's style/header signal is unsafe.
+    assert frozen.view.columnWidth(0) == before
+    assert frozen._sync_timer.isActive()
+    QTest.qWait(10)
+    assert frozen.view.columnWidth(0) == p.table.columnWidth(0)
+    desktop.window.settings_page.dark_radio.click()
+    QTest.qWait(10)
+    assert frozen.view.horizontalHeader().height() == p.table.horizontalHeader().height()
+    assert frozen.view.rowHeight(0) == p.table.rowHeight(0)
+
+
 def test_compact_context_retains_visible_labels_and_table_space(desktop):
     p = _select_page(desktop, 4)
     desktop.window.resize(1366, 730)
