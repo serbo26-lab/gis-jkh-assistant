@@ -103,10 +103,13 @@ class ContextBar(QFrame):
 
     def add_field(self, label: str, control: QWidget) -> None:
         field = QWidget(self)
-        layout = QVBoxLayout(field)
+        layout = QHBoxLayout(field)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
-        caption = QLabel(label)
+        short = {"Управляющая организация": "УО", "Размещённый перечень": "Перечень",
+                 "Существующий перечень": "Перечень", "Месяц просмотра": "Месяц"}
+        caption = QLabel(short.get(label, label))
+        caption.setToolTip(label)
         caption.setObjectName("ContextCaption")
         caption.setBuddy(control)
         layout.addWidget(caption)
@@ -118,7 +121,7 @@ class ContextBar(QFrame):
             control.currentTextChanged.connect(control.setToolTip)
         control.setAccessibleName(label)
         control.setProperty("contextFieldLabel", label)
-        layout.addWidget(control)
+        layout.addWidget(control, 1)
         self.fields.append(field)
         self.controls.append(control)
         if isinstance(control, QComboBox):
@@ -368,6 +371,9 @@ class WorkflowPanel(QFrame):
 
     def resizeEvent(self, event):  # noqa: N802 - Qt API
         needed = self.title.minimumSizeHint().width() + self.primary.minimumSizeHint().width() + self.help_button.minimumSizeHint().width() + 2 * self.action_row.spacing() + 16
+        if hasattr(self, "compact_scope") and not self.help_button.isChecked():
+            needed = (self.compact_scope.minimumSizeHint().width() + self.primary.minimumSizeHint().width()
+                      + self.help_button.minimumSizeHint().width() + 3 * self.action_row.spacing() + 16)
         direction = (QBoxLayout.Direction.TopToBottom if event.size().width() < needed
                      else QBoxLayout.Direction.LeftToRight)
         if self.action_row.direction() != direction:

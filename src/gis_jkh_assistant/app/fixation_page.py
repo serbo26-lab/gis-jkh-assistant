@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .error_messages import context_text, error_text
+from .queue_controls import preview as queue_preview
 
 import sqlite3
 
@@ -30,6 +31,8 @@ from gis_jkh_assistant.work_fixation import (
     calculate_fact_total_cost,
     helper_supports_fixations,
     item_has_fact,
+    fact_validation_error,
+    validate_fact_numbers,
 )
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
@@ -88,6 +91,8 @@ class FixationPage(QWidget):
         self._queue_running = False
 
         self._build_ui()
+        from .local_history import FactHistory
+        self.fact_history = FactHistory(self)
         self.refresh_organizations()
         self._refresh_integration_status()
 
@@ -326,9 +331,11 @@ class FixationPage(QWidget):
                 )
                 self.table.setCellWidget(row, 9, photo_button)
 
-                status = QTableWidgetItem(values[9] or "")
+                error = fact_validation_error(item)
+                status = QTableWidgetItem("Ошибка данных" if error else values[9] or "")
+                status.setToolTip(error or "")
                 status.setFlags(status.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if item_has_fact(item):
+                if item_has_fact(item) and not error:
                     status.setBackground(QBrush(QColor(color("success_surface"))))
                 self.table.setItem(row, 10, status)
                 self._apply_planned_row_mode(row)
@@ -538,6 +545,13 @@ class FixationPage(QWidget):
         price = text_at(3)
         amount = text_at(4)
         cost = text_at(6)
+        try:
+            validate_fact_numbers(price, amount, fact_count, cost)
+        except ValueError as exc:
+            work_name = name_cell.text()
+            self._load_unplanned_table()
+            QMessageBox.warning(self, "Проверьте числовые показатели", f"{work_name}\n{exc}\nПрежние значения сохранены.")
+            return
         if price or amount:
             calculated = calculate_fact_total_cost(price, amount, fact_count)
             if calculated is None:
@@ -685,6 +699,19 @@ class FixationPage(QWidget):
 
         cost = text_at(4)
         price, amount = text_at(1), text_at(2)
+        try:
+            validate_fact_numbers(price, amount, fact_count, cost)
+        except ValueError as exc:
+            work_name, row, column = name_cell.text(), cell.row(), cell.column()
+            self._load_table()
+            self.table.setCurrentCell(row, column)
+            blocked = self.table.blockSignals(True)
+            self.table.item(row, column).setToolTip(str(exc))
+            self.table.blockSignals(blocked)
+            QMessageBox.warning(self, "Проверьте числовые показатели", f"{work_name}\n{exc}\nПрежние значения сохранены.")
+            return
+        previous = next(item for item in self.repository.list_work_fixation_items(self._current_period_id)
+                        if item.id == str(item_id))
         mode = self._planned_row_mode(cell.row())
         if mode == WorkRowMode.COMPONENTS:
             cost = calculate_fact_total_cost(price, amount, fact_count)
@@ -717,6 +744,7 @@ class FixationPage(QWidget):
             return
 
         status = self.table.item(cell.row(), 10)
+        self.fact_history.record(previous, (price, amount, fact_count, cost))
         if status:
             filled = any((text_at(1), text_at(2), fact_count is not None, cost))
             status.setText("заполнено" if filled else "—")
@@ -727,6 +755,11 @@ class FixationPage(QWidget):
 
     def _scope_is_period(self) -> bool:
         return self.scope_switcher.scope() == "period"
+
+    def _validation_error(self, period_id: str) -> str | None:
+        items = self.repository.list_work_fixation_items(period_id)
+        items += self.repository.list_work_fixation_unplanned_items(period_id)
+        return next((error for item in items if (error := fact_validation_error(item))), None)
 
     def _scope_changed(self, _scope: str) -> None:
         self._set_enabled(bool(self._current_period_id))
@@ -1138,6 +1171,7 @@ class FixationPage(QWidget):
         self._queue_successes = 0
         self._queue_skipped = 0
         self._queue_failed_period_id = None
+        self._stop_queue_requested = False
         self._queue_mode = "load"
         self.continue_queue_button.setVisible(False)
         self.queue_status_strip.setVisible(True)
@@ -1189,7 +1223,8 @@ class FixationPage(QWidget):
             "Разместить заполненные месяцы года?",
             f"Будет последовательно обработано месяцев: {len(periods)}. "
             "Подтверждение потребуется только один раз. При первой ошибке очередь "
-            "остановится, уже успешно размещенные месяцы останутся размещенными.",
+            "остановится, уже успешно размещенные месяцы останутся размещенными."
+            + "\n\n" + queue_preview(self, periods),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -1201,6 +1236,7 @@ class FixationPage(QWidget):
         self._queue_successes = 0
         self._queue_skipped = 0
         self._queue_failed_period_id = None
+        self._stop_queue_requested = False
         self._queue_mode = "publish"
         self.continue_queue_button.setVisible(False)
         self.queue_status_strip.setVisible(True)
@@ -1219,11 +1255,15 @@ class FixationPage(QWidget):
             return
         self._queue_index = failed_index
         self._queue_failed_period_id = None
+        self._stop_queue_requested = False
         self.continue_queue_button.setVisible(False)
         self.queue_label.setText("Продолжаем очередь…")
         self._start_next_queue_item()
 
     def _start_next_queue_item(self) -> None:
+        from .queue_controls import stop_before_next
+        if stop_before_next(self):
+            return
         if getattr(self.window(), "_close_requested", False):
             self._queue_running = False
             self.queue_label.setText(f"Очередь остановлена при закрытии. Обработано месяцев: {self._queue_successes}.")
@@ -1564,6 +1604,8 @@ class FixationPage(QWidget):
 
     def _refresh_gis_buttons(self) -> None:
         refresh_monthly(self, "fixation")
+        if hasattr(self, "fact_history"):
+            self.fact_history.refresh()
 
     def _set_enabled(self, enabled: bool) -> None:
         self.table.setEnabled(enabled)

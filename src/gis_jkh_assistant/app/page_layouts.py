@@ -74,8 +74,8 @@ def page_root(page, title: str, subtitle: str) -> QVBoxLayout:
     page.page_scroll.setWidget(page.page_content)
     outer.addWidget(page.page_scroll)
     page.page_layout = QVBoxLayout(page.page_content)
-    page.page_layout.setContentsMargins(12, 10, 12, 10)
-    page.page_layout.setSpacing(6)
+    page.page_layout.setContentsMargins(10, 6, 10, 6)
+    page.page_layout.setSpacing(4)
     header = PageHeader(title, subtitle)
     page.page_header = header
     page.save_status = header.status
@@ -287,6 +287,8 @@ def build_planning(page, table_class):
     hint.setObjectName("Muted")
     page.table = table(["Работа / услуга", "В перечне", "В плане", "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"], table_class=table_class)
     viewport_table(page.table)
+    from .frozen_name import FrozenName
+    page.table.frozen_name = FrozenName(page.table)
     page.table.setEditTriggers(QAbstractItemView.EditTrigger.SelectedClicked | QAbstractItemView.EditTrigger.EditKeyPressed | QAbstractItemView.EditTrigger.AnyKeyPressed)
     card.body.addWidget(page.table, 1)
     card.body.addWidget(hint)
@@ -365,12 +367,10 @@ def build_monthly(page, kind: str):
     steps = ("Сформировать", "Акты", "Проект в ГИС", "Разместить") if quality else ("План готов", "Заполнить факт", "Проверить", "Разместить")
     page.workflow = WorkflowPanel(steps)
     root.addWidget(page.workflow)
-    scope = ActionFlowLayout()
+    scope = QHBoxLayout()
     scope.setContentsMargins(0, 0, 0, 0)
-    caption = QLabel("Рекомендация для:")
-    caption.setObjectName("ContextCaption")
-    scope.addWidget(caption)
-    page.scope_switcher = ScopeSwitcher("month", "Открытый месяц", "period", "Доступный период")
+    page.scope_switcher = ScopeSwitcher("month", "Месяц", "period", "Период")
+    page.scope_switcher.setAccessibleName("Область основной команды: открытый месяц или доступный период")
     page.scope_switcher.setToolTip("Меняет только рекомендацию и её основную кнопку. Команды «Заполнение и обмен» отдельно указывают свою область; месяц таблицы не меняется.")
     scope.addWidget(page.scope_switcher)
     page.scope_hint = QLabel()
@@ -382,7 +382,10 @@ def build_monthly(page, kind: str):
     scope.addWidget(page.month_details_button)
     page.scope_row = QWidget()
     page.scope_row.setLayout(scope)
-    page.workflow.body.insertWidget(1, page.scope_row)
+    page.workflow.action_row.insertWidget(0, page.scope_row)
+    page.workflow.compact_scope = page.scope_row
+    page.workflow.title.hide()
+    page.workflow.help_button.toggled.connect(page.workflow.title.setVisible)
     page.month_status = QLabel()
     page.month_status.setObjectName("Muted")
     page.month_status.setWordWrap(True)
@@ -395,6 +398,12 @@ def build_monthly(page, kind: str):
     page.queue_progress = page.operation_status.progress
     page.queue_label = page.operation_status.label
     page.operation_status.add_action(page.continue_queue_button)
+    from .queue_controls import request_stop
+    page.stop_queue_button = QPushButton("Остановить после месяца")
+    page.stop_queue_button.setToolTip("Текущий запрос завершится; следующие месяцы не будут отправлены.")
+    page.stop_queue_button.clicked.connect(lambda: request_stop(page))
+    page.stop_queue_button.hide()
+    page.operation_status.add_action(page.stop_queue_button)
     page.operation_status.hide()
     if quality:
         _quality_commands(page)
@@ -494,7 +503,8 @@ def _quality_data(page, root):
     page.month_acts_summary = QLabel("Акты месяца: —")
     page.month_acts_summary.setObjectName("Muted")
     page.month_acts_summary.setWordWrap(True)
-    help_button = QPushButton("Акты и перерасчёт…")
+    help_button = QPushButton("Об актах…")
+    help_button.setToolTip("Акты и перерасчёт: правила подготовки документов")
     help_button.setCheckable(True)
     page.acts_explanation = QLabel(
         "Обычный акт подтверждает выполнение: поля перерасчёта оставьте пустыми. Автоакт создаётся по фактическим показателям. "

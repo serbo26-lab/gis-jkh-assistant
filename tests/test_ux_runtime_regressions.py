@@ -202,7 +202,7 @@ def test_partial_generation_reports_failure_and_resumes_without_replacing_comple
         item = page.store.list_items(period.id)[0]
         page.store.update_item(item.id, included=True, cost=None, days_count=None, cost_reduction=None)
         periods.append(period.id)
-    monkeypatch.setattr(page, "_sync_work_units_for_act", lambda: None)
+    monkeypatch.setattr(page, "_sync_work_units_for_act", lambda *args: False)
     calls = []
     def generate(period_id):
         calls.append(period_id)

@@ -4,6 +4,7 @@ from PySide6.QtCore import QTimer
 from .page_layouts import MONTHS
 
 TITLES = {
+    "resolve_planned_work_units": "Подготовка PDF • уточнение единиц измерения",
     "get_current_organization": "Загрузка управляющей организации",
     "save_work_plan": "Размещение плана", "load_work_plan": "Загрузка плана",
     "load_work_fixation": "Загрузка фиксации", "save_work_fixation": "Размещение фиксации",

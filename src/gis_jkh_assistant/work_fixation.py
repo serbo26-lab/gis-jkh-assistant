@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
+import math
 from typing import Iterable, Mapping
 
 from gis_jkh_assistant.database.models import (
@@ -15,6 +16,31 @@ from gis_jkh_assistant.database.models import (
 
 
 MIN_FIXATION_HELPER_VERSION = (0, 1, 9)
+
+
+def validate_fact_numbers(price, amount, count, cost) -> None:
+    """Validate new input / outgoing data without rewriting historical records."""
+    for label, value in (("Цена факт", price), ("Объём факт", amount),
+                         ("Количество факт", count), ("Стоимость факт", cost)):
+        if value is None or not str(value).strip():
+            continue
+        try:
+            number = _decimal(str(value))
+            if not number.is_finite() or not math.isfinite(float(number)) or number < 0:
+                raise ValueError
+            if label == "Количество факт" and number != number.to_integral_value():
+                raise ValueError
+        except (InvalidOperation, ValueError, OverflowError):
+            raise ValueError(f"{label}: требуется {'целое ' if label == 'Количество факт' else ''}число не меньше нуля.") from None
+
+
+def fact_validation_error(item) -> str | None:
+    try:
+        validate_fact_numbers(item.fact_price, item.fact_amount, item.fact_count,
+                              item.fact_total_cost)
+    except ValueError as exc:
+        return f"{item.work_name}: {exc}"
+    return None
 
 
 def helper_supports_fixations(version: str | None) -> bool:
@@ -39,6 +65,7 @@ def calculate_fact_total_cost(
     if not str(price).strip() or not str(amount).strip() or not str(count).strip():
         return None
     try:
+        validate_fact_numbers(price, amount, count, None)
         price_value = _decimal(str(price))
         amount_value = _decimal(str(amount))
         count_value = Decimal(str(int(count)))
@@ -46,10 +73,12 @@ def calculate_fact_total_cost(
         return None
     if price_value < 0 or amount_value < 0 or count_value < 0:
         return None
-    value = (price_value * amount_value * count_value).quantize(
-        Decimal("0.01"),
-        rounding=ROUND_HALF_UP,
-    )
+    with localcontext() as context:
+        context.prec = max(28, sum(len(v.as_tuple().digits) + max(0, v.adjusted())
+                                  for v in (price_value, amount_value, count_value)) + 8)
+        value = (price_value * amount_value * count_value).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP,
+        )
     return format(value, ".2f")
 
 
@@ -110,6 +139,8 @@ def build_fixation_command_payload(
 
     result_items: list[dict] = []
     for item in items:
+        if error := fact_validation_error(item):
+            raise ValueError(error)
         result_items.append(
             {
                 "localItemId": item.id,
@@ -136,6 +167,8 @@ def build_fixation_command_payload(
 
     result_unplanned: list[dict] = []
     for item in unplanned_items:
+        if error := fact_validation_error(item):
+            raise ValueError(error)
         result_unplanned.append(
             {
                 "localItemId": item.id,
