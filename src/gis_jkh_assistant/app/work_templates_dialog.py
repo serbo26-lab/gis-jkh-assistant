@@ -68,6 +68,7 @@ class WorkTemplatesDialog(QDialog):
         self.rename_button.clicked.connect(self._rename)
         self.delete_button.clicked.connect(self._delete)
         self.close_button.clicked.connect(self.accept)
+        self.list_widget.currentItemChanged.connect(self._update_actions)
 
         for button in (
             self.import_button,
@@ -79,6 +80,13 @@ class WorkTemplatesDialog(QDialog):
         layout.addLayout(buttons)
 
         self.refresh()
+
+    def _update_actions(self, *_args):
+        selected = bool(self._selected_template_id())
+        self.rename_button.setEnabled(selected)
+        self.delete_button.setEnabled(selected)
+        self.list_widget.setToolTip("Шаблонов пока нет. Импортируйте состав из Excel или сохраните состав перечня как шаблон."
+                                    if not self.list_widget.count() else "Выберите шаблон")
 
     def refresh(self, select_id: str | None = None) -> None:
         self.list_widget.clear()
@@ -102,6 +110,7 @@ class WorkTemplatesDialog(QDialog):
                 self.list_widget.setCurrentItem(item)
         if self.list_widget.count() and not self.list_widget.currentItem():
             self.list_widget.setCurrentRow(0)
+        self._update_actions()
 
     def _selected_template_id(self) -> str | None:
         item = self.list_widget.currentItem()

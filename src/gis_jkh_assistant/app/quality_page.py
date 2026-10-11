@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .error_messages import context_text, error_text
+from .queue_controls import preview as queue_preview
 
 import sqlite3
 
@@ -16,8 +17,7 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
-from gis_jkh_assistant.gis_integration import IntegrationError, LocalIntegrationGateway
-from gis_jkh_assistant.gis_integration.organization_context import with_organization_context
+from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 from gis_jkh_assistant.work_lists.gis_quality_sync import (
     apply_remote_quality_assessment,
     local_quality_has_data,
@@ -501,10 +501,11 @@ class QualityAssessmentPage(QWidget):
             house_address=self.house_combo.currentText(),
         )
 
-    def _auto_generate_month_act(self) -> None:
+    def _auto_generate_month_act(self, *, units_ready=False) -> None:
         if not self._current_period_id:
             return
-        self._sync_work_units_for_act()
+        if not units_ready and self._sync_work_units_for_act(lambda: self._auto_generate_month_act(units_ready=True)):
+            return
         try:
             result = self._auto_generate_act_for_period(self._current_period_id)
         except (sqlite3.DatabaseError, OSError, RuntimeError, ValueError) as exc:
@@ -539,7 +540,7 @@ class QualityAssessmentPage(QWidget):
             )
         QMessageBox.information(self, "Автоматический акт месяца", text)
 
-    def _auto_generate_year_acts(self) -> None:
+    def _auto_generate_year_acts(self, *, units_ready=False) -> None:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return
         months = self._active_months()
@@ -547,19 +548,21 @@ class QualityAssessmentPage(QWidget):
         resume_here = bool(resume and resume[:2] == (self._current_work_list_id, int(self.year_combo.currentData())))
         if resume_here:
             months = tuple(month for month in months if month >= resume[2])
-        answer = QMessageBox.question(
-            self,
-            "Сформировать акты за доступные месяцы года?",
-            f"Будут обработаны сформированные оценки в доступных месяцах "
-            f"выбранного года ({len(months)} мес. в периоде перечня). "
-            "Пользовательские и импортированные акты не изменяются. "
-            "Ранее сформированные программой акты будут заменены. Продолжить?"
-            + (f"\nПродолжение с {_MONTHS[resume[2] - 1]}. Акты предыдущих успешно обработанных месяцев сохраняются."
-               if resume_here else ""),
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if not units_ready:
+            answer = QMessageBox.question(
+                self,
+                "Сформировать акты за доступные месяцы года?",
+                f"Будут обработаны сформированные оценки в доступных месяцах "
+                f"выбранного года ({len(months)} мес. в периоде перечня). "
+                "Пользовательские и импортированные акты не изменяются. "
+                "Ранее сформированные программой акты будут заменены. Продолжить?"
+                + (f"\nПродолжение с {_MONTHS[resume[2] - 1]}. Акты предыдущих успешно обработанных месяцев сохраняются."
+                   if resume_here else ""),
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        if not units_ready and self._sync_work_units_for_act(lambda: self._auto_generate_year_acts(units_ready=True)):
             return
-        self._sync_work_units_for_act()
         year = int(self.year_combo.currentData())
         created = linked = protected = missing = 0
         processed = 0
@@ -603,61 +606,59 @@ class QualityAssessmentPage(QWidget):
             + (f"\n\nОстановлено: {failure}\nУспешно созданные акты сохранены." if failure else ""),
         )
 
-    def _sync_work_units_for_act(self) -> None:
+    def _sync_work_units_for_act(self, continuation=None) -> bool:
+        """Prepare PDF metadata asynchronously; False means no lookup is needed."""
         if not self._current_work_list_id:
-            return
+            return False
+        if self._integration_worker is not None and self._integration_worker.isRunning():
+            return True
         status = self.integration_gateway.status()
-        if not (
-            status.running
-            and status.helper_connected
-            and status.gis_page_ready
-            and helper_supports_quality_assessment(status.helper_version)
-        ):
-            return
-
-        items = [
-            item
-            for item in self.repository.list_work_list_items(
-                self._current_work_list_id
-            )
-            if not str(item.unit_name or "").strip()
-        ]
+        if not (status.running and status.helper_connected and status.gis_page_ready
+                and helper_supports_quality_assessment(status.helper_version)):
+            return False
+        work_list_id = self._current_work_list_id
+        owner_period_id = self._current_period_id
+        items = [item for item in self.repository.list_work_list_items(work_list_id)
+                 if not str(item.unit_name or "").strip() and (item.work_code or item.work_guid)]
         if not items:
-            return
-        payload = {
-            "items": [
-                {
-                    "localItemId": item.id,
-                    "workCode": item.work_code,
-                    "workGuid": item.work_guid,
-                }
-                for item in items
-                if item.work_code or item.work_guid
-            ]
-        }
-        if not payload["items"]:
-            return
+            return False
+        payload = {"items": [{"localItemId": i.id, "workCode": i.work_code,
+                              "workGuid": i.work_guid} for i in items]}
+        self._integration_busy = True
+        self._refresh_gis_buttons()
+        worker = GisIntegrationWorker(self.integration_gateway, "resolve_planned_work_units",
+                                      payload, timeout=45.0, parent=self)
+        self._integration_worker = worker
+        ready = {"value": False}
 
-        try:
-            result = self.integration_gateway.execute(
-                "resolve_planned_work_units",
-                with_organization_context(
-                    self.repository, self.organization_combo.currentData(), payload,
-                ),
-                timeout=45.0,
-            )
-        except IntegrationError:
-            return
+        def succeeded(result):
+            units = {str(row["localItemId"]): str(row["unitName"]).strip()
+                     for row in (result.get("items") or [])
+                     if row.get("localItemId") and str(row.get("unitName") or "").strip()}
+            self.repository.update_work_list_unit_names(work_list_id, units)
+            ready["value"] = True
 
-        units = {
-            str(row.get("localItemId")): str(row.get("unitName")).strip()
-            for row in (result.get("items") or [])
-            if row.get("localItemId") and str(row.get("unitName") or "").strip()
-        }
-        self.repository.update_work_list_unit_names(
-            self._current_work_list_id,
-            units,
-        )
+        def failed(message):
+            self.operation_status.outcome(
+                "Не удалось уточнить единицы измерения. Локальные акты сохранены. "
+                "Повторите подготовку PDF после восстановления связи.\n" + message, tone="danger")
+
+        def finished():
+            self._integration_worker = None
+            self._integration_busy = False
+            self._refresh_gis_buttons()
+            if (ready["value"] and not getattr(worker, "result_apply_failed", False)
+                    and not getattr(self.window(), "_close_requested", False)):
+                self.operation_status.outcome("Единицы измерения проверены.", tone="success")
+                if (continuation is not None and self._current_work_list_id == work_list_id
+                        and self._current_period_id == owner_period_id):
+                    continuation()
+
+        connect_result(worker, worker.succeeded, succeeded)
+        connect_result(worker, worker.failed, failed)
+        connect_result(worker, worker.finished, finished)
+        worker.start()
+        return True
 
     def _open_month_acts(self, *, start_upload: bool = False, start_generate: bool = False) -> None:
         if (
@@ -666,7 +667,6 @@ class QualityAssessmentPage(QWidget):
             or self.year_combo.currentData() is None
         ):
             return
-        self._sync_work_units_for_act()
         dialog = QualityMonthActsDialog(
             self.store,
             period_id=self._current_period_id,
@@ -688,13 +688,14 @@ class QualityAssessmentPage(QWidget):
 
     def _refresh_act_summary(self) -> None:
         if not self._current_period_id:
-            self.month_acts_summary.setText("Акты месяца: —")
+            self.month_acts_summary.setText("Актов: —")
             return
         acts = self.store.list_period_acts(self._current_period_id)
         links = sum(self.store.count_act_links(act.id) for act in acts)
         self.month_acts_summary.setText(
-            f"Акты месяца: {len(acts)} • связей с работами: {links}"
+            f"Актов: {len(acts)} • Связей: {links}"
         )
+        self.month_acts_summary.setToolTip(f"Акты месяца: {len(acts)} • связей с работами: {links}")
 
     def _open_acts(self, item_id: str) -> None:
         if not self._current_period_id or self._current_month is None:
@@ -1007,6 +1008,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_successes = 0
         self._queue_skipped = 0
         self._queue_failed_period_id = None
+        self._stop_queue_requested = False
         self._queue_command = "load_quality_assessment"
         self._queue_title = "Загрузка оценки качества из ГИС ЖКХ"
         self._queue_running = True
@@ -1152,7 +1154,8 @@ class QualityAssessmentPage(QWidget):
             title,
             confirmation
             + f"\n\nБудет обработано месяцев: {len(periods)}. "
-            "При ошибке очередь остановится на проблемном месяце.",
+            "При ошибке очередь остановится на проблемном месяце."
+            + "\n\n" + queue_preview(self, periods),
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -1162,6 +1165,7 @@ class QualityAssessmentPage(QWidget):
         self._queue_successes = 0
         self._queue_skipped = 0
         self._queue_failed_period_id = None
+        self._stop_queue_requested = False
         self._queue_command = command
         self._queue_title = title
         self._queue_running = True
@@ -1184,12 +1188,16 @@ class QualityAssessmentPage(QWidget):
             return
         self._queue_index = failed_index
         self._queue_failed_period_id = None
+        self._stop_queue_requested = False
         self._queue_running = True
         self.continue_queue_button.setVisible(False)
         self.queue_label.setText("Продолжаем очередь…")
         self._start_next_queue_item()
 
     def _start_next_queue_item(self) -> None:
+        from .queue_controls import stop_before_next
+        if stop_before_next(self):
+            return
         if getattr(self.window(), "_close_requested", False):
             self._queue_running = False
             self._integration_busy = False

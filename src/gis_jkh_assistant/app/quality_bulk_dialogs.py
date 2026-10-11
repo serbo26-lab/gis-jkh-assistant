@@ -340,7 +340,14 @@ class QualityMonthActsDialog(QDialog):
         root.addWidget(note)
 
         self.list = QListWidget()
+        self.list.setWordWrap(True)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         root.addWidget(self.list, 1)
+
+        self.empty_hint = QLabel("Актов пока нет. Добавьте готовый акт или сформируйте PDF.")
+        self.empty_hint.setWordWrap(True)
+        root.addWidget(self.empty_hint)
 
         from .action_layout import ActionFlowLayout
         from .workflow_widgets import style_danger_button
@@ -348,10 +355,18 @@ class QualityMonthActsDialog(QDialog):
         actions = ActionFlowLayout()
         add = QPushButton("Добавить готовый акт")
         generate = QPushButton("Сформировать PDF с проверкой данных")
+        self.generate_button = generate
+        self.preparation_hint = QLabel()
+        self.preparation_hint.setWordWrap(True)
+        self.preparation_hint.hide()
+        root.addWidget(self.preparation_hint)
         apply_to = QPushButton("Связать с выбранными работами…")
         apply_all = QPushButton("Связать со всеми включёнными")
         save_copy = QPushButton("Сохранить копию файла…")
         delete = style_danger_button(QPushButton("Удалить акт"))
+        self.selection_buttons = (apply_to, apply_all, delete)
+        self.save_copy_button = save_copy
+        self.list.currentItemChanged.connect(self._update_actions)
         actions.addWidget(add)
         actions.addWidget(generate)
         actions.addWidget(apply_to)
@@ -374,6 +389,14 @@ class QualityMonthActsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         self._reload()
 
+    def _update_actions(self, *_args):
+        act = self._current_act()
+        for button in self.selection_buttons:
+            button.setEnabled(act is not None)
+        self.save_copy_button.setEnabled(bool(act and act.content))
+        self.save_copy_button.setToolTip(act.file_name if act else "Сначала выберите акт")
+        self.empty_hint.setVisible(self.list.count() == 0)
+
     def _items(self) -> list[QualityAssessmentItem]:
         return self.store.list_items(self.period_id)
 
@@ -393,18 +416,21 @@ class QualityMonthActsDialog(QDialog):
                 else "Акт нарушения качества"
             )
             links = self.store.count_act_links(act.id)
-            source = " • сформирован программой" if act.generated else ""
-            remote = " • сохранён в ГИС" if act.remote_act_guid else ""
+            source = "Сформирован программой" if act.generated else "Добавлен / импортирован"
+            remote = "Сохранён в ГИС" if act.remote_act_guid else "Нет подтверждения ГИС"
+            local = "Файл есть" if act.content else "Нет локального файла"
             text = (
-                f"{act_name} • № {act.number} от {act.reg_date} • "
-                f"{act.period_from}—{act.period_to} • {act.file_name} • "
-                f"применён к {links} работам{source}{remote}"
+                f"{act_name} • № {act.number} от {act.reg_date}\n"
+                f"{source} • {remote} • {local} • Работ: {links}\n"
+                f"Период: {act.period_from}—{act.period_to}"
             )
             row = QListWidgetItem(text)
+            row.setToolTip(f"{text}\n{act.file_name} • {act.file_size / 1024:.1f} КБ")
             row.setData(Qt.ItemDataRole.UserRole, act.id)
             self.list.addItem(row)
             if select_id and act.id == select_id:
                 self.list.setCurrentItem(row)
+        self._update_actions()
 
     def _choose_links(
         self,
@@ -516,7 +542,22 @@ class QualityMonthActsDialog(QDialog):
 
         return rows, missing_cost_names, fixation_period is not None
 
-    def _generate(self) -> None:
+    def _generate(self, *, units_ready=False) -> None:
+        page = self.parent()
+        prepare = getattr(page, "_sync_work_units_for_act", None)
+        if not units_ready and prepare is not None:
+            if prepare(lambda: self._generate(units_ready=True) if self.isVisible() else None):
+                self.generate_button.setEnabled(False)
+                self.preparation_hint.setText("Уточняются единицы измерения… Можно закрыть окно: PDF не будет сформирован после закрытия.")
+                self.preparation_hint.show()
+                worker = page._integration_worker
+                if worker is not None:
+                    def finished():
+                        self.generate_button.setEnabled(True)
+                        self.preparation_hint.setText(page.operation_status.label.text())
+                    worker.finished.connect(finished)
+                return
+        self.preparation_hint.hide()
         items = self._items()
         if not items:
             return

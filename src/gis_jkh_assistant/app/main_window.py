@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QSize, QTimer, Qt
+from PySide6.QtCore import QEvent, QItemSelectionModel, QSize, QTimer, Qt
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
@@ -46,6 +46,8 @@ class MainWindow(QMainWindow):
         self._ui_scale = scale_factor(repository.get_setting(SCALE_SETTING))
         app = QApplication.instance()
         if app is not None:
+            from .russian_buttons import install
+            install(app)
             app.setStyle("Fusion")
             apply_theme(app, repository.get_setting("ui.theme") or "light", self._ui_scale)
         self.integration_gateway = LocalIntegrationGateway()
@@ -788,6 +790,13 @@ class MainWindow(QMainWindow):
         self.fixation_page._refresh_integration_status()
         self.quality_page._refresh_integration_status()
 
+    def _restore_navigation(self, index: int) -> None:
+        if self.pages.currentIndex() != index:
+            return
+        blocked = self.navigation.blockSignals(True)
+        self.navigation.setCurrentRow(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        self.navigation.blockSignals(blocked)
+
     def _navigation_changed(self, index: int) -> None:
         if index < 0 or index >= self.pages.count():
             return
@@ -796,9 +805,10 @@ class MainWindow(QMainWindow):
             flush = getattr(previous_page, "flush_pending_changes", None)
             if flush is not None:
                 if flush() is False:
-                    self.navigation.blockSignals(True)
-                    self.navigation.setCurrentRow(self.pages.currentIndex())
-                    self.navigation.blockSignals(False)
+                    previous = self.pages.currentIndex()
+                    self._restore_navigation(previous)
+                    # Mouse selection may complete after currentRowChanged has returned.
+                    QTimer.singleShot(0, lambda: self._restore_navigation(previous))
                     return
         context_name = {
             0: "houses",

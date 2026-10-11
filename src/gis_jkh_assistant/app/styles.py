@@ -135,7 +135,7 @@ QListWidget::item:hover:!selected { background: @elevated_surface; }
 QListWidget#Navigation { background: transparent; border: none; padding: 0; }
 QListWidget#Navigation::item { padding: 6px 6px; color: @muted_text; }
 QListWidget#Navigation::item:selected { background: @surface; color: @text; font-weight: 600; border-left: 3px solid @accent; }
-QTableWidget { background: @surface; alternate-background-color: @elevated_surface; border: 1px solid @border; gridline-color: @border; selection-background-color: @selection; selection-color: @selection_text; }
+QTableWidget, QTableView#FrozenName { background: @surface; alternate-background-color: @elevated_surface; border: 1px solid @border; gridline-color: @border; selection-background-color: @selection; selection-color: @selection_text; }
 QTableWidget:focus, QListWidget:focus { border-color: @accent; }
 QListWidget#Navigation::item:focus { border: 2px solid @accent; }
 QHeaderView::section { background: @elevated_surface; border: none; border-right: 1px solid @border; border-bottom: 1px solid @border; padding: 4px; font-size: 9pt; font-weight: 600; }

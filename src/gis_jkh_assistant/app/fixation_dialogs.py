@@ -77,6 +77,8 @@ class FixationPhotoDialog(QDialog):
         actions = QHBoxLayout()
         add_button = QPushButton("Добавить фото")
         remove_button = style_danger_button(QPushButton("Удалить выбранное фото"))
+        remove_button.setEnabled(False)
+        self.list.currentItemChanged.connect(lambda *_: remove_button.setEnabled(self.list.currentItem() is not None))
         actions.addWidget(add_button)
         actions.addWidget(remove_button)
         actions.addStretch(1)

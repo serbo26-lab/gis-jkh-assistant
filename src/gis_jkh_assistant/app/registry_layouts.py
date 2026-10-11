@@ -47,20 +47,21 @@ class WorkListDetailsCard(SectionCard):
 
     def add_field(self, label, control, *, period=False):
         field = QWidget()
-        layout = QVBoxLayout(field)
+        layout = QHBoxLayout(field)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
         caption = QLabel(label)
+        caption.setBuddy(control)
         caption.setObjectName("ContextCaption")
         layout.addWidget(caption)
-        layout.addWidget(control)
+        layout.addWidget(control, 1)
         (self.period_fields if period else self.summary_fields).append(field)
         self._columns = None
         self._fit_fields()
 
     def _fit_fields(self):
         scale = float(QApplication.instance().property("uiScale") or 1.0)
-        columns = (2 if self.width() >= 680 * scale else 1,
+        columns = (2 if self.width() >= 580 * scale else 1,
                    3 if self.width() >= 800 * scale else 2)
         if columns == self._columns:
             return

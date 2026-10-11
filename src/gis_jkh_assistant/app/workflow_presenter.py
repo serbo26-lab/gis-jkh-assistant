@@ -68,6 +68,8 @@ def refresh_monthly(page, kind: str):
     if not hasattr(page, "workflow"):
         return
     quality = kind == "quality"
+    page.stop_queue_button.setVisible(page._queue_running)
+    page.stop_queue_button.setEnabled(not getattr(page, "_stop_queue_requested", False))
     work_list, year, house = _target(page)
     active = active_months_for_work_list(work_list, year) if work_list and year else ()
     owner = getattr(page.operation_status, "_operation_owner", None)
@@ -118,7 +120,8 @@ def refresh_monthly(page, kind: str):
         else:
             has_data = (any(i.included for i in page.store.list_items(period.id)) if quality
                         else page._period_has_data(period.id)) if period else False
-            validation = page._validation_error(period.id, require_acts=True) if quality and has_data else None
+            validation = ((page._validation_error(period.id, require_acts=True) if quality
+                           else page._validation_error(period.id)) if has_data else None)
             cached_states[month] = (has_data, validation)
         if month not in active:
             suffix, tone = "вне периода", "muted"
