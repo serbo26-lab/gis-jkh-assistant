@@ -475,8 +475,16 @@ def test_named_month_and_period_commands_keep_their_scope(
         period_command.setEnabled(True)
         page.month_actions.sync()
         page.period_actions.sync()
-        month_action = next(action for action, source, _when in page.month_actions.entries if source is button)
-        period_action = next(action for action, source, _when in page.period_actions.entries if source is period_command)
+        page.data_actions.sync()
+        month_menu = (page.data_actions if page_index == 3 and command_name == "fill_month_button"
+                      else page.month_actions)
+        month_action = next(
+            action for action, source, _when in month_menu.entries if source is button
+        )
+        period_action = next(
+            action for action, source, _when in page.period_actions.entries
+            if source is period_command
+        )
         assert month_action.isVisible() and month_action.isEnabled()
         assert period_action.isVisible() and period_action.isEnabled()
         month_action.trigger()
