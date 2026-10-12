@@ -190,11 +190,11 @@ class HousesPage(QWidget):
         self.files_actions_button = QPushButton("Импорт / Экспорт ▾")
         files_menu = QMenu(self.files_actions_button)
         files_menu.addAction(
-            "Шаблон площадей и тарифов…",
+            "Экспорт Excel: шаблон площадей и тарифов…",
             self.export_house_data_button.click,
         )
         files_menu.addAction(
-            "Импорт площадей и тарифов…",
+            "Импорт Excel: площади и тарифы…",
             self.import_house_data_button.click,
         )
         self.import_houses_action = files_menu.addAction(
