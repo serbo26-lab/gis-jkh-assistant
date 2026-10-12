@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import zipfile
 import zlib
@@ -139,6 +140,94 @@ def prepare_helper(bundle: HelperBundle, root: Path | None = None) -> Path:
             shutil.rmtree(staging)
 
 
+
+def application_directory() -> Path:
+    """The real EXE folder, never PyInstaller's temporary _MEIPASS directory."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    # In a source checkout, use the folder that also holds browser-extension.
+    return Path(__file__).resolve().parents[3]
+
+
+def verify_adjacent_helper(destination: Path, bundle: HelperBundle) -> None:
+    """Accept the distributed browser-extension folder, including its README."""
+    _plain_directory(destination)
+    if not destination.is_dir():
+        raise ValueError("Папка помощника не найдена.")
+    for name, data in bundle.content:
+        path = destination / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"В папке помощника отсутствует {name}.")
+        # Git checkout on Windows may use CRLF, whereas the embedded ZIP uses LF.
+        if path.read_bytes().replace(b"\\r\\n", b"\\n") != data:
+            raise ValueError(f"Файл {name} отличается от версии программы.")
+
+
+def verify_installation(destination: Path, bundle: HelperBundle) -> None:
+    """Validate the actual browser extension directory before showing readiness."""
+    if destination.name == "browser-extension":
+        verify_adjacent_helper(destination, bundle)
+    else:
+        verify_prepared(destination, bundle)
+
+
+def _publish_adjacent(bundle: HelperBundle, destination: Path) -> Path:
+    """Safely create an unpacked extension beside the EXE without overwriting files."""
+    parent = destination.parent
+    for ancestor in (parent, *parent.parents):
+        _plain_directory(ancestor)
+    parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        verify_prepared(destination, bundle)
+        return destination
+    staging = Path(tempfile.mkdtemp(prefix=".prepare-", dir=parent))
+    try:
+        for name, data in bundle.content:
+            (staging / name).write_bytes(data)
+        verify_prepared(staging, bundle)
+        try:
+            staging.rename(destination)
+        except OSError:
+            if not destination.exists():
+                raise
+            verify_prepared(destination, bundle)
+        return destination
+    finally:
+        if staging.exists():
+            _plain_directory(staging)
+            if staging.resolve().parent != parent.resolve():
+                raise ValueError("Временная папка находится вне каталога программы.")
+            shutil.rmtree(staging)
+
+
+def prepare_helper_near_program(
+    bundle: HelperBundle, directory: Path | None = None,
+) -> Path:
+    """Use the shipped folder; for an EXE alone, prepare a sibling folder.
+
+    Preserve an existing differing browser-extension folder, since installed
+    browser profiles can still be using it. A new version gets a new sibling.
+    """
+    base = Path(directory) if directory is not None else application_directory()
+    primary = base / "browser-extension"
+    if primary.exists() or primary.is_symlink():
+        try:
+            verify_adjacent_helper(primary, bundle)
+        except (ValueError, OSError):
+            # Never silently replace the directory an existing browser uses.
+            destination = base / f"browser-extension-{bundle.directory_name}"
+        else:
+            return primary
+    else:
+        destination = primary
+    if destination.name == "browser-extension":
+        # The primary folder may include README only when shipped in the ZIP.
+        result = _publish_adjacent(bundle, destination)
+        verify_installation(result, bundle)
+        return result
+    return _publish_adjacent(bundle, destination)
+
+
 def detect_browsers(environment=None) -> tuple[Browser, ...]:
     env = os.environ if environment is None else environment
     suffixes = {
@@ -170,6 +259,6 @@ def open_extensions_page(browser: Browser) -> None:
     ):
         raise FileNotFoundError(f"Укажите существующий файл {browser.executable_name}.")
     subprocess.Popen(
-        [str(executable), browser.extensions_url], shell=False,
+        [str(executable), "--new-tab", browser.extensions_url], shell=False,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
