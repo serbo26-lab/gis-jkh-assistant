@@ -1,10 +1,7 @@
 """UX stage 3: targeted presentation/regression contracts with local data only."""
 from __future__ import annotations
 
-import os
 from decimal import Decimal
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QHeaderView
