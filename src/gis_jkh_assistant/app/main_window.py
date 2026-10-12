@@ -782,7 +782,10 @@ class MainWindow(QMainWindow):
         self.integration_status.setText(brief)
         self.integration_status.setToolTip(text)
         self.integration_status.setStyleSheet(f"color: {color(tone)};")
-        self.settings_page.set_connection_status(text)
+        self.settings_page.set_connection_status(
+            text, helper_connected=status.helper_connected,
+            gis_page_ready=status.gis_page_ready,
+        )
 
         self.houses_page._refresh_workflow()
         self.work_lists_page._refresh_integration_status()
