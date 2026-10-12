@@ -252,6 +252,30 @@ class QualityAssessmentPage(QWidget):
             self.table.blockSignals(False)
             self._loading = False
         self._resize_table()
+        self._update_selected_act_button()
+
+    def _selected_act_item_id(self) -> str | None:
+        row = self.table.currentRow()
+        if row < 0 or row >= self.table.rowCount():
+            return None
+        cell = self.table.item(row, 0)
+        return str(cell.data(_ITEM_ID_ROLE)) if cell and cell.data(_ITEM_ID_ROLE) else None
+
+    def _update_selected_act_button(self) -> None:
+        item_id = self._selected_act_item_id()
+        self.selected_act_button.setEnabled(bool(
+            item_id and self._current_period_id and self.table.isEnabled()
+        ))
+        row = self.table.currentRow()
+        name = self.table.item(row, 1) if row >= 0 else None
+        self.selected_act_button.setToolTip(
+            f"Акты: {name.text()}" if name else "Выберите работу в таблице"
+        )
+
+    def _open_selected_acts(self) -> None:
+        item_id = self._selected_act_item_id()
+        if item_id and self.selected_act_button.isEnabled():
+            self._open_acts(item_id)
 
     def _table_item_changed(self, cell: QTableWidgetItem) -> None:
         if self._loading or cell.column() not in (0, 2, 3):
