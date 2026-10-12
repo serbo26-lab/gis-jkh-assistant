@@ -155,6 +155,7 @@ def test_browser_and_folder_launch_errors_preserve_prepared_files(wizard, tmp_pa
     QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
     assert dialog.errors[1].isVisible()
     assert "вручную" in dialog.errors[1].text()
+    monkeypatch.setattr(setup, "reveal_helper_folder", lambda *_: False)
     monkeypatch.setattr(setup.QDesktopServices, "openUrl", lambda *_: False)
     QTest.mouseClick(dialog.open_folder, Qt.MouseButton.LeftButton)
     assert "проводнике" in dialog.errors[1].text()
@@ -178,8 +179,9 @@ def test_status_reports_local_observations_not_browser_or_authentication(status,
 
 
 def test_settings_button_opens_single_dialog_and_reopens_status_timer(desktop, tmp_path, monkeypatch):
-    original = setup.prepare_helper
-    monkeypatch.setattr(setup, "prepare_helper", lambda bundle, _root: original(bundle, tmp_path / "private-helper"))
+    original = setup.prepare_helper_near_program
+    monkeypatch.setattr(setup, "prepare_helper_near_program",
+                        lambda bundle, _directory=None: original(bundle, tmp_path / "private-helper"))
     window = desktop.window
     window.navigation.setCurrentRow(5)
     _settle(desktop.app)
@@ -193,7 +195,7 @@ def test_settings_button_opens_single_dialog_and_reopens_status_timer(desktop, t
     QTest.keyClick(dialog.next, Qt.Key.Key_Return)
     _settle(desktop.app)
     assert dialog._step == 1
-    assert dialog.prepared_path.parent == tmp_path / "private-helper"
+    assert dialog.prepared_path == tmp_path / "private-helper" / "browser-extension"
     QTest.keyClick(dialog, Qt.Key.Key_Escape)
     assert not dialog.timer.isActive()
     window.settings_page.helper_setup_button.click()
@@ -298,3 +300,57 @@ def test_minimum_dialog_keeps_all_footer_captions_readable(wizard, theme, scale)
         assert button.width() >= button.sizeHint().width()
         assert dialog.rect().contains(button.geometry())
     apply_theme(wizard.app, "light")
+
+
+def test_open_button_copies_internal_url_and_explains_manual_navigation(wizard, tmp_path, monkeypatch):
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"test executable; no process will be started")
+    wizard.dialog.browsers[0] = replace(BROWSERS[0], executable=exe)
+    dialog = select_and_prepare(wizard)
+    calls = []
+    monkeypatch.setattr(setup, "open_extensions_page", lambda browser: calls.append(browser.key))
+    QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
+    assert calls == ["chrome"]
+    assert wizard.app.clipboard().text() == "chrome://extensions/"
+    assert "Ctrl+L" in dialog.feedback.text()
+    assert "Ctrl+V" in dialog.feedback.text()
+    # The user sees the browser step before the folder path.
+    layout = dialog.stack.widget(1).layout()
+    assert layout.indexOf(dialog.open_browser.parentWidget()) < layout.indexOf(dialog.path_edit)
+
+
+def test_single_exe_fallback_prompts_visible_directory(wizard, tmp_path, monkeypatch):
+    dialog = wizard.dialog
+    # Simulate the ordinary distribution path, not the fixture's explicit root.
+    dialog.root = None
+    original = setup.prepare_helper_near_program
+    output = tmp_path / "Documents"
+    output.mkdir()
+    attempts = []
+    def prepare(bundle, directory=None):
+        attempts.append(directory)
+        if directory is None:
+            raise PermissionError("program folder read-only")
+        return original(bundle, directory)
+    monkeypatch.setattr(setup, "prepare_helper_near_program", prepare)
+    monkeypatch.setattr(setup.QFileDialog, "getExistingDirectory", lambda *a: str(output))
+    dialog.browser_combo.setCurrentIndex(0)
+    QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
+    assert dialog._step == 1
+    assert attempts == [None, output]
+    assert dialog.prepared_path == output / "browser-extension"
+    assert dialog.selected_directory == output
+    assert (dialog.prepared_path / "manifest.json").is_file()
+
+
+def test_cancel_alternative_folder_keeps_error_visible(wizard, monkeypatch):
+    dialog = wizard.dialog
+    dialog.root = None
+    monkeypatch.setattr(setup, "prepare_helper_near_program",
+                        lambda *a: (_ for _ in ()).throw(PermissionError("read-only")))
+    monkeypatch.setattr(setup.QFileDialog, "getExistingDirectory", lambda *a: "")
+    dialog.browser_combo.setCurrentIndex(0)
+    QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
+    assert dialog._step == 0
+    assert dialog.errors[0].isVisible()
+    assert "доступное место" in dialog.errors[0].text()
