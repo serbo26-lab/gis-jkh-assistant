@@ -40,14 +40,19 @@ class SelectActWorksDialog(QDialog):
         *,
         items: list[QualityAssessmentItem],
         selected_ids: set[str] | None = None,
+        act_label: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.items = items
-        self.setWindowTitle("Применить акт к работам")
+        self.setWindowTitle("Выбрать работы для акта")
         self.resize(720, 520)
 
         root = QVBoxLayout(self)
+        self.act_context = QLabel(act_label or "Выбор работ для акта")
+        self.act_context.setObjectName("SectionTitle")
+        self.act_context.setWordWrap(True)
+        root.addWidget(self.act_context)
         note = QLabel(
             "Отметьте работы и услуги, к которым относится этот акт. "
             "Один документ можно использовать сразу для нескольких строк."
@@ -80,6 +85,9 @@ class SelectActWorksDialog(QDialog):
             )
             self.list.addItem(row)
         root.addWidget(self.list, 1)
+        self.selection_count = QLabel()
+        self.selection_count.setObjectName("Muted")
+        root.addWidget(self.selection_count)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
@@ -88,6 +96,9 @@ class SelectActWorksDialog(QDialog):
         buttons.button(QDialogButtonBox.StandardButton.Save).setText("Применить")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
         root.addWidget(buttons)
+        self.apply_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        self.list.itemChanged.connect(self._refresh_selection_count)
+        self._refresh_selection_count()
 
         included.clicked.connect(self._select_included)
         select_all.clicked.connect(
@@ -96,6 +107,11 @@ class SelectActWorksDialog(QDialog):
         clear.clicked.connect(lambda: self._set_checks(set()))
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
+
+    def _refresh_selection_count(self, *_args) -> None:
+        count = len(self.selected_item_ids())
+        self.selection_count.setText(f"Выбрано: {count} из {self.list.count()}")
+        self.apply_button.setEnabled(count > 0)
 
     def _set_checks(self, item_ids: set[str]) -> None:
         for index in range(self.list.count()):
@@ -238,7 +254,7 @@ class GenerateAcceptanceActDialog(QDialog):
             | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.button(QDialogButtonBox.StandardButton.Save).setText(
-            "Сформировать PDF и применить"
+            "Создать PDF и связать с выбранными работами"
         )
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
         root.addWidget(buttons)
@@ -360,8 +376,8 @@ class QualityMonthActsDialog(QDialog):
         self.preparation_hint.setWordWrap(True)
         self.preparation_hint.hide()
         root.addWidget(self.preparation_hint)
-        apply_to = QPushButton("Связать с выбранными работами…")
-        apply_all = QPushButton("Связать со всеми включёнными")
+        apply_to = QPushButton("Выбрать работы для акта…")
+        apply_all = QPushButton("Применить к N включённым работам")
         save_copy = QPushButton("Сохранить копию файла…")
         delete = style_danger_button(QPushButton("Удалить акт"))
         self.selection_buttons = (apply_to, apply_all, delete)
@@ -369,11 +385,16 @@ class QualityMonthActsDialog(QDialog):
         self.list.currentItemChanged.connect(self._update_actions)
         actions.addWidget(add)
         actions.addWidget(generate)
-        actions.addWidget(apply_to)
-        actions.addWidget(apply_all)
-        actions.addWidget(save_copy)
-        actions.addWidget(delete)
+        root.addWidget(QLabel("Связи выбранного документа с работами"))
+        actions_links = ActionFlowLayout()
+        actions_links.addWidget(apply_to)
+        actions_links.addWidget(apply_all)
+        actions_links.addWidget(save_copy)
+        danger_actions = ActionFlowLayout()
+        danger_actions.addWidget(delete)
         root.addLayout(actions)
+        root.addLayout(actions_links)
+        root.addLayout(danger_actions)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("Закрыть")
@@ -396,6 +417,8 @@ class QualityMonthActsDialog(QDialog):
         self.save_copy_button.setEnabled(bool(act and act.content))
         self.save_copy_button.setToolTip(act.file_name if act else "Сначала выберите акт")
         self.empty_hint.setVisible(self.list.count() == 0)
+        count = sum(item.included for item in self._items())
+        self.selection_buttons[1].setText(f"Применить к {count} включённым работам")
 
     def _items(self) -> list[QualityAssessmentItem]:
         return self.store.list_items(self.period_id)
@@ -436,10 +459,12 @@ class QualityMonthActsDialog(QDialog):
         self,
         *,
         selected_ids: set[str] | None = None,
+        act_label: str = "",
     ) -> list[str] | None:
         dialog = SelectActWorksDialog(
             items=self._items(),
             selected_ids=selected_ids,
+            act_label=act_label,
             parent=self,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
@@ -450,7 +475,9 @@ class QualityMonthActsDialog(QDialog):
         items = self._items()
         if not items:
             return
-        dialog = AddQualityActDialog(year=self.year, month=self.month, parent=self)
+        dialog = AddQualityActDialog(
+            year=self.year, month=self.month, house_address=self.house_address, parent=self,
+        )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         links = self._choose_links()
@@ -655,7 +682,8 @@ class QualityMonthActsDialog(QDialog):
         if act is None:
             return
         links = self._choose_links(
-            selected_ids=set(self.store.act_link_item_ids(act.id))
+            selected_ids=set(self.store.act_link_item_ids(act.id)),
+            act_label=f"Акт № {act.number} от {act.reg_date}",
         )
         if links is None:
             return
