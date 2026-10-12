@@ -194,7 +194,7 @@ def test_adjacent_distribution_with_readme_is_used_without_copy(tmp_path):
     folder = tmp_path / "browser-extension"
     folder.mkdir()
     for name, content in bundle.content:
-        (folder / name).write_bytes(content.replace(b"\\n", b"\\r\\n"))
+        (folder / name).write_bytes(content.replace(b"\n", b"\r\n"))
     (folder / "README.md").write_text("Instructions", encoding="utf-8")
     before = {p.name: p.stat().st_mtime_ns for p in folder.iterdir()}
     assert installation.prepare_helper_near_program(bundle, tmp_path) == folder
@@ -246,6 +246,8 @@ def test_application_directory_never_uses_pyinstaller_temp(tmp_path, monkeypatch
     assert installation.application_directory() == tmp_path
 
 
-def test_reveal_folder_is_optional_outside_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr(installation.os, "name", "posix")
+def test_reveal_folder_is_optional_outside_windows(tmp_path):
+    import os
+    if os.name == "nt":
+        pytest.skip("Windows uses Explorer selection")
     assert not installation.reveal_helper_folder(tmp_path / "browser-extension")
