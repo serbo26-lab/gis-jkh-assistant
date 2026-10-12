@@ -171,14 +171,17 @@ def test_browser_detection_only_reads_standard_executable_paths(tmp_path):
 
 
 @pytest.mark.parametrize("browser", installation.BROWSERS)
-def test_open_page_launches_only_selected_executable_and_internal_url(tmp_path, monkeypatch, browser):
+def test_open_browser_uses_direct_internal_url_only_for_chrome(tmp_path, monkeypatch, browser):
     executable = tmp_path / browser.executable_name
     executable.write_bytes(b"not executed")
     calls = []
     monkeypatch.setattr(installation.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
     installation.open_extensions_page(replace(browser, executable=executable))
     args, kwargs = calls[0]
-    assert args == ([str(executable), "--new-tab", browser.extensions_url],)
+    expected = [str(executable)]
+    if browser.key == "chrome":
+        expected += ["--new-tab", browser.extensions_url]
+    assert args == (expected,)
     assert kwargs["shell"] is False
     assert len(calls) == 1
 
