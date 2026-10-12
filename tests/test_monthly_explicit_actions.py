@@ -78,7 +78,9 @@ def test_direct_actions_keep_exact_scope(pages, monkeypatch, page_name, month_bu
             button = getattr(page, name)
             assert button.menu() is None
             button.setEnabled(True)
-            menus = (page.month_actions, page.period_actions) + ((page.acts_actions,) if page_name == "quality" else ())
+            menus = (page.month_actions, page.period_actions) + (
+                (page.acts_actions,) if page_name == "quality" else (page.data_actions,)
+            )
             for menu in menus:
                 menu.sync()
             action = next(action for menu in menus for action, source, _when in menu.entries if source is button)
