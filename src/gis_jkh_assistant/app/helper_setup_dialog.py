@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 import time
 
+from shiboken6 import isValid
+
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -440,7 +442,8 @@ class HelperSetupDialog(QDialog):
         label = self.errors[self._step]
         label.setText(error_text(exc, effect=effect, recovery=recovery or "Проверьте доступ и повторите действие."))
         label.show()
-        QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(label))
+        QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(label)
+                          if isValid(self.scroll) and isValid(label) else None)
 
     def _clear_error(self):
         for label in self.errors:
