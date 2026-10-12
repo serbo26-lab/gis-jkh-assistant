@@ -154,7 +154,7 @@ def test_browser_and_folder_launch_errors_preserve_prepared_files(wizard, tmp_pa
     monkeypatch.setattr(setup, "open_extensions_page", lambda *a: (_ for _ in ()).throw(FileNotFoundError("deleted executable")))
     QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
     assert dialog.errors[1].isVisible()
-    assert "вручную" in dialog.errors[1].text()
+    assert "Ctrl+L" in dialog.errors[1].text()
     monkeypatch.setattr(setup, "reveal_helper_folder", lambda *_: False)
     monkeypatch.setattr(setup.QDesktopServices, "openUrl", lambda *_: False)
     QTest.mouseClick(dialog.open_folder, Qt.MouseButton.LeftButton)
