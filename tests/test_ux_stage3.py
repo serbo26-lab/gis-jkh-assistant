@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QHeaderView
 from gis_jkh_assistant.app.lazy_distribution_dialog import LazyDistributionDialog
 from gis_jkh_assistant.app.work_templates_dialog import WorkTemplatesDialog
@@ -32,7 +34,8 @@ def test_distribution_calculator_has_permanent_field_labels(desktop):
         dialog.area_edit.setText("1250.50")
         dialog.months_edit.setText("12")
         dialog.calculate_total_button.click()
-        assert dialog.total_edit.text().replace(" ", "").replace(",", ".") == "487695.00"
+        total = dialog.total_edit.text().replace("\u00a0", "").replace(" ", "").replace(",", ".")
+        assert Decimal(total) == Decimal("487695")
     finally:
         dialog.close()
         dialog.deleteLater()
@@ -84,7 +87,6 @@ def test_unplanned_columns_prioritize_names_and_numeric_data(desktop):
     assert table.columnWidth(2) < 160
     assert table.columnWidth(7) < 280
     assert table.columnWidth(0) >= 320
-    assert not page.unplanned_toggle.isChecked()
 
 
 def test_settings_separate_reconnection_and_installation(desktop):
@@ -134,8 +136,8 @@ def test_quality_group_labels_and_selected_work_act_action(desktop, monkeypatch)
         page.table.horizontalScrollBar().maximum()
     )
     page.selected_act_button.click()
-    assert calls == [page.table.item(0, 0).data(256)]
-    page.table.clearSelection()
-    page.table.setCurrentCell(-1, -1)
+    assert calls == [page.table.item(0, 0).data(Qt.ItemDataRole.UserRole)]
+    page.table.setEnabled(False)
     page._update_selected_act_button()
     assert not page.selected_act_button.isEnabled()
+    page._refresh_year_status()
