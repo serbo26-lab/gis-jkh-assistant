@@ -179,7 +179,12 @@ class LazyDistributionDialog(QDialog):
                 f"01.01.{work_list.base_year}: {house_tariff.amount} руб./м²"
             )
         self.tariff_edit.setToolTip(tariff_tooltip)
-        controls.addWidget(self.tariff_edit, 1, 1)
+        tariff_field = QVBoxLayout()
+        tariff_caption = QLabel("Тариф, руб./м²")
+        tariff_caption.setBuddy(self.tariff_edit)
+        tariff_field.addWidget(tariff_caption)
+        tariff_field.addWidget(self.tariff_edit)
+        controls.addLayout(tariff_field, 1, 1)
 
         multiply_1 = QLabel("×")
         multiply_1.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -189,7 +194,12 @@ class LazyDistributionDialog(QDialog):
         self.area_edit.setPlaceholderText("Площадь, м²")
         if not work_list.planned_area and house and house.charge_area:
             self.area_edit.setToolTip("Подставлено из поля «Площадь к начислению» карточки дома.")
-        controls.addWidget(self.area_edit, 1, 3)
+        area_field = QVBoxLayout()
+        area_caption = QLabel("Площадь, м²")
+        area_caption.setBuddy(self.area_edit)
+        area_field.addWidget(area_caption)
+        area_field.addWidget(self.area_edit)
+        controls.addLayout(area_field, 1, 3)
 
         multiply_2 = QLabel("×")
         multiply_2.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -199,7 +209,12 @@ class LazyDistributionDialog(QDialog):
         self.months_edit = QLineEdit(initial_calc_months)
         self.months_edit.setPlaceholderText("Месяцы")
         self.months_edit.setMaximumWidth(100)
-        controls.addWidget(self.months_edit, 1, 5)
+        months_field = QVBoxLayout()
+        months_caption = QLabel("Месяцы")
+        months_caption.setBuddy(self.months_edit)
+        months_field.addWidget(months_caption)
+        months_field.addWidget(self.months_edit)
+        controls.addLayout(months_field, 1, 5)
 
         self.calculate_total_button = QPushButton("Рассчитать")
         controls.addWidget(self.calculate_total_button, 1, 6)
