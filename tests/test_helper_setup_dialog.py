@@ -353,3 +353,54 @@ def test_cancel_alternative_folder_keeps_error_visible(wizard, monkeypatch):
     assert dialog._step == 0
     assert dialog.errors[0].isVisible()
     assert "доступное место" in dialog.errors[0].text()
+
+
+@pytest.mark.parametrize("index, caption, advice", [
+    (0, "рекомендуется", "сохранял"),
+    (1, "поддерживается", "подтверждение"),
+    (2, "не рекомендуется", "принудительно"),
+])
+def test_browser_recommendations_are_visible_before_installation(wizard, index, caption, advice):
+    dialog = wizard.dialog
+    dialog.browser_combo.setCurrentIndex(index)
+    assert caption in dialog.browser_combo.itemText(index)
+    assert advice in dialog.browser_advice.text()
+    assert "найден" in dialog.browser_combo.itemText(index) or "не найден" in dialog.browser_combo.itemText(index)
+
+
+@pytest.mark.parametrize("index", range(3))
+def test_browser_shortcuts_explain_address_bar_paste_and_navigation(wizard, tmp_path, monkeypatch, index):
+    dialog = wizard.dialog
+    browser = BROWSERS[index]
+    exe = tmp_path / browser.executable_name
+    exe.write_bytes(b"test executable")
+    dialog.browsers[index] = replace(browser, executable=exe)
+    dialog.browser_combo.setCurrentIndex(index)
+    assert dialog.open_browser.isEnabled()
+    if index == 0:
+        assert "Открыть настройки расширений" == dialog.open_browser.text()
+    else:
+        assert "Открыть браузер и скопировать адрес" == dialog.open_browser.text()
+    instructions = dialog.browser_steps.text()
+    assert "Ctrl+L" in instructions and "адресная строка" in instructions
+    assert "Ctrl+V" in instructions and "вставится адрес" in instructions
+    assert "Enter" in instructions and "откроет страницу" in instructions
+    select_and_prepare(wizard, index)
+    calls = []
+    monkeypatch.setattr(setup, "open_extensions_page", lambda candidate: calls.append(candidate.key))
+    QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
+    assert calls == [browser.key]
+    assert wizard.app.clipboard().text() == browser.extensions_url
+    if index == 0:
+        assert "Chrome" in dialog.feedback.text()
+    else:
+        assert "Браузер запущен" in dialog.feedback.text()
+
+
+def test_copy_address_explains_shortcuts_without_launching_browser(wizard, monkeypatch):
+    dialog = select_and_prepare(wizard, 1)
+    monkeypatch.setattr(setup, "open_extensions_page", lambda *_: pytest.fail("No launch when copying"))
+    QTest.mouseClick(dialog.copy_url, Qt.MouseButton.LeftButton)
+    assert wizard.app.clipboard().text() == "edge://extensions/"
+    assert "адресная строка" in dialog.feedback.text()
+    assert "вставить адрес" in dialog.feedback.text()
