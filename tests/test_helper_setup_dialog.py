@@ -315,8 +315,7 @@ def test_open_button_copies_internal_url_and_explains_manual_navigation(wizard, 
     assert "Ctrl+L" in dialog.feedback.text()
     assert "Ctrl+V" in dialog.feedback.text()
     # The user sees the browser step before the folder path.
-    layout = dialog.stack.widget(1).layout()
-    assert layout.indexOf(dialog.open_browser.parentWidget()) < layout.indexOf(dialog.path_edit)
+    assert dialog.open_browser.y() < dialog.path_edit.y()
 
 
 def test_single_exe_fallback_prompts_visible_directory(wizard, tmp_path, monkeypatch):
