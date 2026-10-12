@@ -437,6 +437,9 @@ def adapt_houses(page):
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(1))
     root.insertWidget(2, page.workflow)
     page.organization_actions_button = ActionMenuButton("Управляющая организация", "organization")
+    # The menu acts on the selected UO, so keep it beside the UO selector.
+    page.organization_combo.parentWidget().layout().addWidget(page.organization_actions_button)
+    page.organization_actions_button.show()
     page.organization_load_action = page.organization_actions_button.add_command(page.load_organization_button)
     page.organization_add_action = page.organization_actions_button.add_command(page.add_org_button)
     page.organization_edit_action = page.organization_actions_button.add_command(page.edit_org_button)
@@ -445,6 +448,14 @@ def adapt_houses(page):
     style_danger_button(page.delete_org_button)
     page.organization_delete_action = page.organization_actions_button.add_command(page.delete_org_button)
     page.bulk_actions_button = command_menu("Обновить все дома УО", (page.sync_all_management_button, page.sync_all_work_lists_button), name="sync")
+    page.bulk_actions_button.setToolTip(
+        "Обновить сведения об управлении и перечнях для домов выбранной УО."
+    )
+    # Existing Excel operations keep their original handlers and file formats.
+    files_menu = page.files_actions_button.menu()
+    files_menu.actions()[0].setText("Экспорт Excel: шаблон площадей и тарифов…")
+    files_menu.actions()[1].setText("Импорт Excel: площади и тарифы…")
+    page.import_houses_action.setText("Импорт Excel: дома из XLSX…")
     for button in (page.add_org_button, page.edit_org_button, page.delete_org_button, page.sync_all_management_button, page.sync_all_work_lists_button):
         button.setParent(page.command_host)
     page.organization_sync_card = QWidget(page.command_host)
@@ -452,7 +463,7 @@ def adapt_houses(page):
     toolbar = QWidget()
     actions = ActionFlowLayout(toolbar)
     actions.setSpacing(6)
-    for button in (page.organization_actions_button, page.add_house_button, page.sync_houses_button, page.bulk_actions_button, page.files_actions_button):
+    for button in (page.add_house_button, page.sync_houses_button, page.bulk_actions_button, page.files_actions_button):
         actions.addWidget(button)
         button.show()
     page.sync_houses_button.setProperty("workflowAlternate", True)
