@@ -463,7 +463,12 @@ def adapt_houses(page):
     toolbar = QWidget()
     actions = ActionFlowLayout(toolbar)
     actions.setSpacing(6)
-    for button in (page.add_house_button, page.sync_houses_button, page.bulk_actions_button, page.files_actions_button):
+    actions.addWidget(page.add_house_button)
+    page.add_house_button.show()
+    portfolio_gap = QWidget()
+    portfolio_gap.setFixedWidth(12)
+    actions.addWidget(portfolio_gap)
+    for button in (page.sync_houses_button, page.bulk_actions_button, page.files_actions_button):
         actions.addWidget(button)
         button.show()
     page.sync_houses_button.setProperty("workflowAlternate", True)
