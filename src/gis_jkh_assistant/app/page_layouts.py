@@ -514,16 +514,37 @@ def _fixation_commands(page):
 
 def _quality_data(page, root):
     card = workspace_card("Работы в оценке качества")
-    page.selection_actions = command_menu("Включение работ", (page.include_all_button, page.exclude_all_button))
-    page.acts_actions = command_menu("Подготовка актов", (page.auto_act_month_button, page.auto_act_period_button, page.create_act_button, page.upload_acts_button), name="act")
+    page.selection_actions = command_menu(
+        "Оценка: включение работ", (page.include_all_button, page.exclude_all_button)
+    )
+    page.acts_actions = command_menu(
+        "Документы: подготовка актов",
+        (page.auto_act_month_button, page.auto_act_period_button,
+         page.create_act_button, page.upload_acts_button), name="act",
+    )
     page.month_actions = command_menu("Открытый месяц", (page.form_month_button, page.load_gis_button, page.save_button, page.publish_button, page.clear_values_button, page.cancel_button), name="quality")
     page.period_actions = command_menu("Доступные месяцы года", (page.form_period_button, page.load_period_button, page.save_period_button, page.publish_period_button, page.clear_period_values_button), name="sync")
     _monthly_data_menu(page)
-    for button in (page.month_acts_button, page.selection_actions, page.acts_actions, page.data_actions):
+    page.data_actions.setText("Данные и обмен с ГИС")
+    for button in (page.selection_actions, page.month_acts_button,
+                   page.acts_actions, page.data_actions):
         card.actions.addWidget(button)
         button.show()
     page.table = viewport_table(table(["В оценку", "Работа / услуга", "Стоимость в\nежемесячной плате", "Дней ненадлежащего\nкачества", "Дней в\nмесяце", "Уменьшение\nплаты", "Акты"], name_column=1))
+    page.selected_act_button = QPushButton("Акты выбранной работы…")
+    page.selected_act_button.setToolTip(
+        "Открыть акты выбранной строки без горизонтальной прокрутки таблицы"
+    )
+    page.selected_act_button.setEnabled(False)
+    page.selected_act_button.clicked.connect(page._open_selected_acts)
+    row_tools = QHBoxLayout()
+    row_tools.addWidget(page.selected_act_button)
+    row_tools.addStretch(1)
+    card.body.addLayout(row_tools)
     card.body.addWidget(page.table, 1)
+    page.table.currentCellChanged.connect(
+        lambda *_: page._update_selected_act_button()
+    )
     page.month_acts_summary = QLabel("Акты месяца: —")
     page.month_acts_summary.setObjectName("Muted")
     page.month_acts_summary.setWordWrap(True)
