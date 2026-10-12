@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [isolated-ui, isolated-no-frozen, full-suite, full-gdb]
+        scenario: [full-quiet, full-quiet-no-frozen]
     env:
       QT_QPA_PLATFORM: offscreen
       PYTHONFAULTHANDLER: "1"
@@ -59,6 +59,16 @@ jobs:
         run: |
           set -o pipefail
           case "${{ matrix.scenario }}" in
+            full-quiet)
+              echo "DIAGNOSTIC ROUND 2: exact standard CI command; all widgets enabled"
+              python -m pytest -q
+              ;;
+            full-quiet-no-frozen)
+              echo "DIAGNOSTIC ROUND 2: exact quiet full suite, except two overlay-specific tests"
+              echo "FrozenName disabled by plugin only in this test process"
+              python -m pytest -p tools.qt_diagnostic_plugin -q \
+                -k "not plan_name_stays_fixed_and_row_heights_match and not frozen_header_updates_after_qt_style_notifications"
+              ;;
             isolated-ui)
               echo "DIAGNOSTIC: only the 18 layout/theme/scale parameter combinations"
               python -m pytest -vv -x tests/test_ui_scale.py::test_pages_fit_desktop_at_selected_ui_size
