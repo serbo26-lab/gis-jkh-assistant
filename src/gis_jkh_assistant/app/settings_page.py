@@ -107,8 +107,27 @@ class SettingsPage(QWidget):
         explanation.setObjectName("Muted")
         explanation.setWordWrap(True)
         connection.body.addWidget(explanation)
-        self.helper_setup_button = QPushButton("Установить браузерный помощник…")
-        self.helper_setup_button.setAccessibleName("Установить браузерный помощник")
+        self.recover_connection_button = QPushButton("Как восстановить подключение…")
+        self.recover_connection_button.setCheckable(True)
+        self.recover_connection_button.setAccessibleDescription(
+            "Показывает действия для восстановления связи без повторной установки"
+        )
+        self.recovery_steps = QLabel(
+            "1. Откройте ГИС ЖКХ в браузере и войдите в личный кабинет. "
+            "2. Проверьте, что помощник включён именно в этом профиле браузера. "
+            "3. Если соединение не появилось, перезапустите приложение и "
+            "обновите состояние связи. Устанавливать помощник повторно "
+            "не нужно, если он уже добавлен и включён."
+        )
+        self.recovery_steps.setObjectName("Muted")
+        self.recovery_steps.setWordWrap(True)
+        self.recovery_steps.hide()
+        self.recover_connection_button.toggled.connect(self.recovery_steps.setVisible)
+        connection.body.addWidget(self.recover_connection_button)
+        connection.body.addWidget(self.recovery_steps)
+
+        self.helper_setup_button = QPushButton("Установить / настроить помощник…")
+        self.helper_setup_button.setAccessibleName("Настроить браузерный помощник")
         self.helper_setup_button.clicked.connect(self.helperSetupRequested.emit)
         connection.body.addWidget(self.helper_setup_button, 0)
         root.addWidget(connection)
@@ -171,5 +190,25 @@ class SettingsPage(QWidget):
         self.save_status.setText("Локально: сохранено")
         return True
 
-    def set_connection_status(self, text: str) -> None:
+    def set_connection_status(
+        self, text: str, *, helper_connected: bool | None = None,
+        gis_page_ready: bool | None = None,
+    ) -> None:
         self.connection_status.setText(text)
+        if helper_connected is None:
+            return
+        self.helper_setup_button.setText(
+            "Настроить / обновить помощник…" if helper_connected
+            else "Установить / настроить помощник…"
+        )
+        self.recover_connection_button.setText(
+            "Как открыть вкладку ГИС ЖКХ…" if helper_connected and not gis_page_ready
+            else "Как восстановить подключение…"
+        )
+        # The troubleshooting entry is distinct from the setup wizard, and
+        # does not assert that installing the extension fixes a lost session.
+        self.recover_connection_button.setVisible(
+            not (helper_connected and gis_page_ready)
+        )
+        if helper_connected and gis_page_ready:
+            self.recover_connection_button.setChecked(False)
