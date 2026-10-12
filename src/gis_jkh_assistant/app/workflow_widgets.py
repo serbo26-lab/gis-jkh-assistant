@@ -294,7 +294,9 @@ class WorkflowPanel(QFrame):
         row = QHBoxLayout()
         self.action_row = row
         row.setSpacing(12)
-        text = QVBoxLayout()
+        self._summary_widget = QWidget(self)
+        text = QVBoxLayout(self._summary_widget)
+        text.setContentsMargins(0, 0, 0, 0)
         text.setSpacing(4)
         self.title = QLabel()
         self.title.setObjectName("SectionTitle")
@@ -304,7 +306,7 @@ class WorkflowPanel(QFrame):
         self.detail.setWordWrap(True)
         text.addWidget(self.title)
         text.addWidget(self.detail)
-        row.addLayout(text, 1)
+        row.addWidget(self._summary_widget, 1)
         self.primary = QPushButton()
         self.primary.setObjectName("PrimaryButton")
         self.primary.setMinimumWidth(160)
@@ -327,6 +329,28 @@ class WorkflowPanel(QFrame):
         for step in self.step_widgets:
             step.setVisible(expanded)
         self.detail.setVisible(expanded)
+
+    def place_help_below_actions(self) -> None:
+        """Put expanded guidance on its own full-width row for dense monthly pages.
+
+        The command row must not share a narrow text column with the expanded
+        explanation. The existing labels, signals and next-step behavior remain
+        unchanged; other pages retain their original compact summary.
+        """
+        if hasattr(self, "help_panel"):
+            return
+        self.help_panel = QWidget(self)
+        content = QVBoxLayout(self.help_panel)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(4)
+        for label in (self.title, self.detail):
+            label.setParent(self.help_panel)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            content.addWidget(label)
+        self._summary_widget.hide()
+        self.body.insertWidget(self.body.indexOf(self.reason), self.help_panel)
+        self.help_panel.setVisible(self.help_button.isChecked())
+        self.help_button.toggled.connect(self.help_panel.setVisible)
 
     def register(self, key: str, command) -> None:
         self.commands[key] = command
@@ -371,7 +395,7 @@ class WorkflowPanel(QFrame):
 
     def resizeEvent(self, event):  # noqa: N802 - Qt API
         needed = self.title.minimumSizeHint().width() + self.primary.minimumSizeHint().width() + self.help_button.minimumSizeHint().width() + 2 * self.action_row.spacing() + 16
-        if hasattr(self, "compact_scope") and not self.help_button.isChecked():
+        if hasattr(self, "compact_scope"):
             needed = (self.compact_scope.minimumSizeHint().width() + self.primary.minimumSizeHint().width()
                       + self.help_button.minimumSizeHint().width() + 3 * self.action_row.spacing() + 16)
         direction = (QBoxLayout.Direction.TopToBottom if event.size().width() < needed
