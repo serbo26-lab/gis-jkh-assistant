@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialogButtonBox
 
 import test_ui_workflow as workflow_tests
@@ -54,7 +53,7 @@ def test_unplanned_entry_keeps_each_mode_and_submits_only_active_values(desktop)
     try:
         assert dialog.mode_combo.currentData() == "detail"
         assert dialog.cost_edit.isReadOnly()
-        assert dialog.price_edit.isVisibleTo(dialog) is False  # not shown yet
+        assert dialog.fact_form.isRowVisible(dialog.price_edit)
         dialog.price_edit.setText("10")
         dialog.amount_edit.setText("2")
         dialog.count_edit.setText("3")
@@ -133,10 +132,10 @@ def test_quality_shows_table_month_and_period_action_separately(desktop):
     page = desktop.window.quality_page
     page._select_month(1)
     page.scope_switcher.set_scope("period")
-    page._refresh_workflow()
+    page._refresh_year_status()
     assert "Таблица: Январь" in page.scope_hint.text()
     assert "Действие:" in page.action_scope_hint.text()
     assert "месяцев:" in page.action_scope_hint.text()
     page.scope_switcher.set_scope("month")
-    page._refresh_workflow()
+    page._refresh_year_status()
     assert "Действие: Январь" in page.action_scope_hint.text()
