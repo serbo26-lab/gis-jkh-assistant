@@ -85,7 +85,9 @@ def refresh_monthly(page, kind: str):
     has_context = bool(active and page._current_period_id)
     local = has_context and not locked
     page.table.setEnabled(local)
-    if not quality:
+    if quality:
+        page._update_selected_act_button()
+    else:
         page.unplanned_table.setEnabled(local)
     if quality:
         table_month = MONTHS[page._current_month - 1] if page._current_month else "—"
