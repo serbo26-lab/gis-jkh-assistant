@@ -159,7 +159,7 @@ def verify_adjacent_helper(destination: Path, bundle: HelperBundle) -> None:
         if path.is_symlink() or not path.is_file():
             raise ValueError(f"В папке помощника отсутствует {name}.")
         # Git checkout on Windows may use CRLF, whereas the embedded ZIP uses LF.
-        if path.read_bytes().replace(b"\\r\\n", b"\\n") != data:
+        if path.read_bytes().replace(b"\r\n", b"\n") != data:
             raise ValueError(f"Файл {name} отличается от версии программы.")
 
 
@@ -226,6 +226,21 @@ def prepare_helper_near_program(
         verify_installation(result, bundle)
         return result
     return _publish_adjacent(bundle, destination)
+
+
+
+def reveal_helper_folder(path: Path) -> bool:
+    """Reveal the actual directory, not its manifest; fall back on other OSes."""
+    if os.name != "nt":
+        return False
+    try:
+        subprocess.Popen(
+            ["explorer.exe", "/select,", str(path)], shell=False,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    return True
 
 
 def detect_browsers(environment=None) -> tuple[Browser, ...]:
