@@ -4,7 +4,6 @@ Real Qt pages with isolated local state; no GIS requests or browser processes.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QBoxLayout
 
 import test_ui_workflow as workflow_tests
@@ -84,7 +83,10 @@ def test_month_fill_first_level_stays_in_month_scope_and_uses_existing_command(d
     assert first_command is page.month_fill_menu_action
     assert first_command.text() == "Заполнить текущий месяц по плану…"
     assert any(action.isSeparator() for action in menu.menu_model.actions())
-    assert all(source is not page.fill_month_button for _action, source, _when in page.month_actions.entries)
+    assert all(
+        source is not page.fill_month_button
+        for _action, source, _when in page.month_actions.entries
+    )
     assert any(source is page.fill_period_button for _action, source, _when in page.period_actions.entries)
 
     calls = []
