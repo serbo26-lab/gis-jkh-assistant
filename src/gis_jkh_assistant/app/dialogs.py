@@ -13,7 +13,10 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from gis_jkh_assistant.database.models import House, HouseTariff, ManagementOrganization
@@ -111,35 +114,60 @@ class HouseDialog(QDialog):
         self.non_residential_spin.setRange(0, 100000)
         self.non_residential_spin.setValue(house.non_residential_premises_count if house else 0)
 
+        # Keep the working fields before optional technical identifiers.
         form = QFormLayout()
         form.addRow("Адрес *", self.address_edit)
-        form.addRow("GUID объекта жилищного фонда", self.object_guid_edit)
-        form.addRow("HOUSEGUID ГИС ЖКХ", self.gis_guid_edit)
-        form.addRow("HOUSEGUID ФИАС", self.fias_guid_edit)
-        form.addRow("Уникальный номер дома", self.unique_number_edit)
-        form.addRow("Кадастровый номер", self.cadastral_edit)
-        form.addRow("Площадь к начислению, м²", self.charge_area_edit)
         form.addRow("Начало управления", self.management_start_edit)
         form.addRow("Окончание управления", self.management_end_edit)
         form.addRow("Номер договора управления", self.management_agreement_number_edit)
         form.addRow("Дата договора управления", self.management_agreement_date_edit)
+        form.addRow("Площадь к начислению, м²", self.charge_area_edit)
         form.addRow("Жилых помещений", self.residential_spin)
         form.addRow("Нежилых помещений", self.non_residential_spin)
+
+        self.ids_toggle = QPushButton("Связь с ГИС и идентификаторы")
+        self.ids_toggle.setCheckable(True)
+        self.ids_toggle.setAccessibleDescription("Показать или скрыть технические реквизиты дома")
+        self.ids_group = QWidget()
+        ids_form = QFormLayout(self.ids_group)
+        ids_form.addRow("GUID объекта жилищного фонда", self.object_guid_edit)
+        ids_form.addRow("HOUSEGUID ГИС ЖКХ", self.gis_guid_edit)
+        ids_form.addRow("HOUSEGUID ФИАС", self.fias_guid_edit)
+        ids_form.addRow("Уникальный номер дома", self.unique_number_edit)
+        ids_form.addRow("Кадастровый номер", self.cadastral_edit)
+        self.ids_toggle.toggled.connect(self.ids_group.setVisible)
+        show_ids = bool(house and any(
+            (house.house_object_guid, house.gis_house_guid, house.fias_house_guid,
+             house.gis_unique_house_number, house.cadastral_number)
+        ))
+        self.ids_toggle.setChecked(show_ids)
+        self.ids_group.setVisible(show_ids)
+
+        self.form_content = QWidget()
+        content = QVBoxLayout(self.form_content)
+        content.addLayout(form)
+        content.addWidget(self.ids_toggle)
+        content.addWidget(self.ids_group)
+        content.addStretch(1)
+        self.form_scroll = QScrollArea()
+        self.form_scroll.setWidgetResizable(True)
+        self.form_scroll.setWidget(self.form_content)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        save_button.setText("Сохранить")
+        save_button.setText("Добавить дом" if house is None else "Сохранить")
         save_button.setObjectName("PrimaryButton")
         cancel_button.setText("Отмена")
         save_button.clicked.connect(self._validate_and_accept)
         cancel_button.clicked.connect(self.reject)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.addWidget(self.form_scroll, 1)
         layout.addWidget(buttons)
+        self.resize(620, 630)
 
     def values(self) -> dict[str, object]:
         return {
