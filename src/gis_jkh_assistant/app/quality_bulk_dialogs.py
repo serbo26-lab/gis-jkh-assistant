@@ -480,7 +480,12 @@ class QualityMonthActsDialog(QDialog):
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        links = self._choose_links()
+        links = self._choose_links(
+            act_label=(
+                f"Акт № {dialog.number_edit.text().strip()} от "
+                f"{dialog.reg_date.date().toString('dd.MM.yyyy')}"
+            )
+        )
         if not links:
             return
         try:
