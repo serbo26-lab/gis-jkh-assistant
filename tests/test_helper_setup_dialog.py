@@ -312,8 +312,8 @@ def test_open_button_copies_internal_url_and_explains_manual_navigation(wizard, 
     QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
     assert calls == ["chrome"]
     assert wizard.app.clipboard().text() == "chrome://extensions/"
-    assert "Ctrl+L" in dialog.feedback.text()
-    assert "Ctrl+V" in dialog.feedback.text()
+    assert "Ctrl+L" in dialog.browser_steps.text()
+    assert "Ctrl+V" in dialog.browser_steps.text()
     # The user sees the browser step before the folder path.
     assert dialog.open_browser.y() < dialog.path_edit.y()
 
@@ -357,7 +357,7 @@ def test_cancel_alternative_folder_keeps_error_visible(wizard, monkeypatch):
 
 @pytest.mark.parametrize("index, caption, advice", [
     (0, "рекомендуется", "сохранял"),
-    (1, "поддерживается", "подтверждение"),
+    (1, "поддерживается", "спросить"),
     (2, "не рекомендуется", "принудительно"),
 ])
 def test_browser_recommendations_are_visible_before_installation(wizard, index, caption, advice):
