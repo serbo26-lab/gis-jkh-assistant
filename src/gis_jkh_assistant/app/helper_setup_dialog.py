@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 import time
 
+from shiboken6 import isValid
+
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -14,7 +16,8 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.browser.helper_installation import (
-    detect_browsers, open_extensions_page, prepare_helper, read_bundle, verify_prepared,
+    detect_browsers, open_extensions_page, prepare_helper, prepare_helper_near_program,
+    read_bundle, reveal_helper_folder, verify_installation,
 )
 from gis_jkh_assistant.gis_integration.organization_context import (
     MIN_ORGANIZATION_ROUTING_HELPER_VERSION, helper_supports_organization_routing,
@@ -67,6 +70,7 @@ class HelperSetupDialog(QDialog):
         self.gateway = gateway
         self.bundle = bundle
         self.root = root
+        self.selected_directory = None
         self.prepared_path = None
         self.browsers = list(detect_browsers() if browsers is None else browsers)
         self._waiting_since = time.monotonic()
@@ -201,42 +205,52 @@ class HelperSetupDialog(QDialog):
         body = self._page()
         self.prepared_label = self._label("")
         body.addWidget(self.prepared_label)
-        path_label = QLabel("&Папка помощника")
-        self.path_edit = QLineEdit()
-        self.path_edit.setReadOnly(True)
-        self.path_edit.setAccessibleName("Постоянная папка помощника")
-        path_label.setBuddy(self.path_edit)
-        body.addWidget(path_label)
-        body.addWidget(self.path_edit)
-        self.copy_path = QPushButton("Копировать путь")
-        self.copy_path.clicked.connect(self._copy_path)
-        self.open_folder = QPushButton("Открыть папку")
-        self.open_folder.clicked.connect(self._open_folder)
-        self._actions(body, self.copy_path, self.open_folder)
+        body.addWidget(self._label(
+            "1. Откройте настройки расширений выбранного браузера."
+        ))
+        self.open_browser = QPushButton("Открыть настройки расширений")
+        self.open_browser.clicked.connect(self._open_browser)
+        self.copy_url = QPushButton("Скопировать адрес")
+        self.copy_url.clicked.connect(lambda: self._copy(
+            self.extensions_url.text(), "Адрес скопирован. Перейдите в адресную строку браузера."
+        ))
+        self._actions(body, self.open_browser, self.copy_url)
         self.extensions_url = QLineEdit()
         self.extensions_url.setReadOnly(True)
         self.extensions_url.setAccessibleName("Адрес страницы расширений")
         body.addWidget(self.extensions_url)
-        self.open_browser = QPushButton("Открыть страницу расширений")
-        self.open_browser.clicked.connect(self._open_browser)
-        self.copy_url = QPushButton("Копировать адрес")
-        self.copy_url.clicked.connect(lambda: self._copy(self.extensions_url.text(), "Адрес скопирован."))
-        self._actions(body, self.open_browser, self.copy_url)
         body.addWidget(self._label(
-            "1. На странице расширений включите «Режим разработчика».\n"
-            "2. Нажмите «Загрузить распакованное расширение».\n"
-            "3. Вставьте скопированный путь и выберите папку помощника."
+            "Если открылась обычная вкладка, нажмите Ctrl+L, затем Ctrl+V и Enter. "
+            "Адрес настроек копируется автоматически при нажатии кнопки открытия.", muted=True,
         ))
-        body.addWidget(self._label("Не удаляйте эту папку: браузер использует её файлы.", muted=True))
+        body.addWidget(self._label(
+            "2. Включите «Режим разработчика» и нажмите «Загрузить распакованное расширение»."
+        ))
+        body.addWidget(self._label(
+            "3. Когда браузер попросит выбрать папку, укажите папку помощника рядом с программой."
+        ))
+        self.path_edit = QLineEdit()
+        self.path_edit.setReadOnly(True)
+        self.path_edit.setAccessibleName("Папка с файлами помощника")
+        self.path_edit.setToolTip("Выбирайте эту папку целиком: manifest.json находится внутри неё.")
+        body.addWidget(self.path_edit)
+        self.open_folder = QPushButton("Показать папку помощника")
+        self.open_folder.clicked.connect(self._open_folder)
+        self.copy_path = QPushButton("Копировать путь")
+        self.copy_path.clicked.connect(self._copy_path)
+        self._actions(body, self.open_folder, self.copy_path)
+        body.addWidget(self._label(
+            "Выберите именно папку помощника, а не файл manifest.json. "
+            "Не перемещайте её после установки: браузер продолжит использовать эти файлы.", muted=True,
+        ))
         self.yandex_notice = self._label(
             "Яндекс может отключить расширение после установки или перезапуска браузера. "
-            "Откройте browser://extensions/ и включите его снова. "
-            "Если после обновления оно не работает, выключите и включите его.", muted=True,
+            "Откройте browser://extensions/ и включите его снова.", muted=True,
         )
         body.addWidget(self.yandex_notice)
         body.addWidget(self._label(
-            "При обновлении отключите прежнюю копию помощника и загрузите эту папку. "
-            "«Перезагрузка» прежней копии продолжит читать её старую папку.", muted=True,
+            "Если помощник уже установлен из другой папки, отключите прежнюю копию "
+            "и подключите эту. Перезагрузка прежней копии не заменяет её файлы.", muted=True,
         ))
         self.feedback = self._label("", muted=True)
         body.addWidget(self.feedback)
@@ -305,6 +319,29 @@ class HelperSetupDialog(QDialog):
         self._clear_error()
         self._browser_changed()
 
+    def _prepare_files(self):
+        if self.root is not None:
+            # Explicit test/legacy destination keeps the isolated versioned layout.
+            return prepare_helper(self.bundle, self.root)
+        try:
+            return prepare_helper_near_program(self.bundle, self.selected_directory)
+        except OSError:
+            if self.selected_directory is not None:
+                raise
+            chosen = QFileDialog.getExistingDirectory(
+                self, "Выберите доступную папку для помощника",
+                str(Path.home()),
+            )
+            if not chosen:
+                raise PermissionError(
+                    "Папка программы защищена от записи. Выберите доступное место "
+                    "для папки browser-extension."
+                ) from None
+            target = Path(chosen)
+            result = prepare_helper_near_program(self.bundle, target)
+            self.selected_directory = target
+            return result
+
     def _advance(self):
         if self._step == 0:
             if self._browser() is None:
@@ -315,7 +352,7 @@ class HelperSetupDialog(QDialog):
                 self._load_bundle()
                 if self.bundle is None:
                     return
-                self.prepared_path = prepare_helper(self.bundle, self.root)
+                self.prepared_path = self._prepare_files()
             except (OSError, ValueError) as exc:
                 self._show_error(exc, "Подготовка не выполнена; прежние версии сохранены.")
                 return
@@ -323,7 +360,7 @@ class HelperSetupDialog(QDialog):
                 self.next.setEnabled(True)
             self.path_edit.setText(str(self.prepared_path))
             self.path_edit.setCursorPosition(0)
-            self.prepared_label.setText(f"Файлы помощника {self.bundle.version} готовы.")
+            self.prepared_label.setText(f"Файлы помощника {self.bundle.version} готовы. Выберите папку «{self.prepared_path.name}».")
             self.files_status.setText(f"Файлы подготовлены: версия {self.bundle.version}.")
             self._show_step(1)
         elif self._step == 1:
@@ -362,7 +399,7 @@ class HelperSetupDialog(QDialog):
         try:
             if self.prepared_path is None or self.bundle is None:
                 raise ValueError("Файлы помощника ещё не подготовлены.")
-            verify_prepared(self.prepared_path, self.bundle)
+            verify_installation(self.prepared_path, self.bundle)
         except (OSError, ValueError) as exc:
             previous_path = self.prepared_path
             self.prepared_path = None
@@ -405,7 +442,8 @@ class HelperSetupDialog(QDialog):
         label = self.errors[self._step]
         label.setText(error_text(exc, effect=effect, recovery=recovery or "Проверьте доступ и повторите действие."))
         label.show()
-        QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(label))
+        QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(label)
+                          if isValid(self.scroll) and isValid(label) else None)
 
     def _clear_error(self):
         for label in self.errors:
@@ -417,21 +455,43 @@ class HelperSetupDialog(QDialog):
         self.feedback.setText(message)
 
     def _copy_path(self):
-        self._copy(self.path_edit.text(), "Путь скопирован. Вставьте его в окно выбора папки браузера.")
+        self._copy(self.path_edit.text(), "Путь скопирован. Укажите в браузере именно эту папку целиком.")
 
     def _open_folder(self):
         self._clear_error()
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.prepared_path))):
-            self._show_error(OSError("Не удалось открыть папку."), "Файлы помощника сохранены.", "Скопируйте путь и откройте его в проводнике.")
+        if self.prepared_path is None:
+            return
+        if reveal_helper_folder(self.prepared_path):
+            self.feedback.setText("Папка помощника выделена в Проводнике. Выберите её целиком в браузере.")
+            return
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.prepared_path.parent))):
+            self.feedback.setText(
+                f"Открыта папка с помощником. Найдите и выберите «{self.prepared_path.name}»."
+            )
+        else:
+            self._show_error(
+                OSError("Не удалось открыть папку."), "Файлы помощника сохранены.",
+                "Скопируйте путь к папке и откройте его в проводнике.",
+            )
 
     def _open_browser(self):
         self._clear_error()
+        # Internal browser URLs may be ignored on process startup. Give the user
+        # a reliable fallback in the *selected* browser without GUI automation.
+        address = self.extensions_url.text()
+        QApplication.clipboard().setText(address)
         try:
             open_extensions_page(self._browser())
         except OSError as exc:
-            self._show_error(exc, "Файлы помощника сохранены.", "Скопируйте адрес и откройте его вручную в выбранном браузере.")
+            self._show_error(
+                exc, "Адрес настроек расширений скопирован.",
+                "Откройте нужный браузер, нажмите Ctrl+L, Ctrl+V и Enter.",
+            )
         else:
-            self.feedback.setText("Запрос на открытие отправлен. Если страница не появилась, скопируйте её адрес.")
+            self.feedback.setText(
+                "Браузеру передана команда открыть настройки. Если появилась обычная "
+                "вкладка, нажмите Ctrl+L, Ctrl+V и Enter: адрес уже скопирован."
+            )
 
     def _refresh_connection(self):
         if self._step != 2 or self.bundle is None:

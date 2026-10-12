@@ -178,7 +178,7 @@ def test_open_page_launches_only_selected_executable_and_internal_url(tmp_path, 
     monkeypatch.setattr(installation.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
     installation.open_extensions_page(replace(browser, executable=executable))
     args, kwargs = calls[0]
-    assert args == ([str(executable), browser.extensions_url],)
+    assert args == ([str(executable), "--new-tab", browser.extensions_url],)
     assert kwargs["shell"] is False
     assert len(calls) == 1
 
@@ -187,3 +187,67 @@ def test_missing_browser_never_launches_a_default_browser(monkeypatch):
     monkeypatch.setattr(installation.subprocess, "Popen", lambda *a, **k: pytest.fail("Unexpected browser launch"))
     with pytest.raises(FileNotFoundError):
         installation.open_extensions_page(installation.BROWSERS[0])
+
+
+def test_adjacent_distribution_with_readme_is_used_without_copy(tmp_path):
+    bundle = installation.read_bundle()
+    folder = tmp_path / "browser-extension"
+    folder.mkdir()
+    for name, content in bundle.content:
+        (folder / name).write_bytes(content.replace(b"\n", b"\r\n"))
+    (folder / "README.md").write_text("Instructions", encoding="utf-8")
+    before = {p.name: p.stat().st_mtime_ns for p in folder.iterdir()}
+    assert installation.prepare_helper_near_program(bundle, tmp_path) == folder
+    assert {p.name: p.stat().st_mtime_ns for p in folder.iterdir()} == before
+    installation.verify_installation(folder, bundle)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["browser-extension"]
+
+
+def test_exe_without_zip_companion_prepares_browser_extension_beside_it(tmp_path):
+    bundle = installation.read_bundle()
+    target = installation.prepare_helper_near_program(bundle, tmp_path)
+    assert target == tmp_path / "browser-extension"
+    assert (target / "manifest.json").is_file()
+    assert (target / "background.js").is_file()
+    assert installation.prepare_helper_near_program(bundle, tmp_path) == target
+
+
+def test_existing_different_extension_is_preserved_and_new_sibling_is_created(tmp_path):
+    bundle = installation.read_bundle()
+    old = tmp_path / "browser-extension"
+    old.mkdir()
+    (old / "manifest.json").write_bytes(b"old manifest")
+    (old / "background.js").write_bytes(b"old script")
+    target = installation.prepare_helper_near_program(bundle, tmp_path)
+    assert target == tmp_path / f"browser-extension-{bundle.directory_name}"
+    assert target != old
+    assert (old / "manifest.json").read_bytes() == b"old manifest"
+    assert installation.prepare_helper_near_program(bundle, tmp_path) == target
+    installation.verify_installation(target, bundle)
+
+
+def test_adjacent_changed_version_folder_does_not_get_overwritten(tmp_path):
+    bundle = installation.read_bundle()
+    primary = tmp_path / "browser-extension"
+    primary.mkdir()
+    (primary / "manifest.json").write_bytes(b"old")
+    target = installation.prepare_helper_near_program(bundle, tmp_path)
+    (target / "background.js").write_bytes(b"user change")
+    with pytest.raises(ValueError, match="изменен|изменены|перезапись"):
+        installation.prepare_helper_near_program(bundle, tmp_path)
+    assert (target / "background.js").read_bytes() == b"user change"
+
+
+def test_application_directory_never_uses_pyinstaller_temp(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "GIS JKH Assistant.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_extract"), raising=False)
+    assert installation.application_directory() == tmp_path
+
+
+def test_reveal_folder_is_optional_outside_windows(tmp_path):
+    import os
+    if os.name == "nt":
+        pytest.skip("Windows uses Explorer selection")
+    assert not installation.reveal_helper_folder(tmp_path / "browser-extension")
