@@ -4,8 +4,6 @@ Real Qt pages with isolated local state; no GIS requests or browser processes.
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QBoxLayout
-
 import test_ui_workflow as workflow_tests
 
 desktop = workflow_tests.desktop
@@ -63,10 +61,10 @@ def test_quality_narrow_actions_wrap_as_groups_but_not_help_text(desktop):
     _settle(desktop.app)
     assert page.workflow.help_panel.width() >= page.workflow.width() - 20
     assert page.workflow.detail.isVisibleTo(window)
-    assert page.workflow.action_row.direction() in (
-        QBoxLayout.Direction.LeftToRight,
-        QBoxLayout.Direction.TopToBottom,
+    assert not page.workflow.primary.geometry().intersects(
+        page.workflow.help_button.geometry()
     )
+    assert not page.workflow.primary.geometry().intersects(page.scope_row.geometry())
     assert page.workflow.primary.geometry().right() < page.workflow.width()
 
 
