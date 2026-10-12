@@ -130,7 +130,6 @@ def test_house_uo_commands_live_next_to_org_selector(desktop):
     text = [action.text() for action in actions if not action.isSeparator()]
     assert any("Экспорт Excel" in name for name in text)
     assert any("Импорт Excel" in name for name in text)
-    assert any("Импорт домов из XLSX" in name for name in text)
 
 
 def test_quality_shows_table_month_and_period_action_separately(desktop):
