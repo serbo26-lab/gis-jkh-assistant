@@ -71,9 +71,12 @@ class WorkListSelector(QTableWidget):
                     continue
                 state = str(work_list.gis_status or "LOCAL").upper()
                 status = {"APPROVED": "Размещён", "DRAFT": "Проект", "CANCELLED": "Отменён",
+                          "LOCAL": "Не отправлен", "ERROR": "Ошибка",
                           "IMPORT_SENT": "Обрабатывается", "NOT_FOUND": "Не найден"}.get(state, "Не проверено")
-                local = "Состав загружен" if self.page.repository.list_work_list_items(key) else "Состав не загружен"
                 baseline = self.page.repository.get_setting(f"ui_work_list_saved:{key}")
+                local = ("Состав загружен" if self.page.repository.list_work_list_items(key)
+                         else "Состав пуст" if not work_list.gis_work_list_guid or baseline
+                         else "Состав не загружен")
                 if baseline:
                     from .registry_workflow import work_list_fingerprint
                     if baseline != work_list_fingerprint(self.page, key):
