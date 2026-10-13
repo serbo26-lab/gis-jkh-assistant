@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .action_layout import ActionFlowLayout
+from .action_layout import ActionFlowLayout, PairedActionBar
 from .page_layouts import command, command_menu, context_for, page_root, table, viewport_table, workspace_card
 from .icons import set_button_icon
 from .registry_workflow import check_work_list, refresh_work_lists, replace_from_template
@@ -36,7 +36,7 @@ class WorkListDetailsCard(SectionCard):
     """Keep the period visible without giving technical metadata the whole page."""
 
     def __init__(self):
-        super().__init__("Период и параметры выбранного перечня")
+        super().__init__("Период и параметры выбранного перечня", fit_content=True)
         self.period_grid = QGridLayout()
         self.summary_grid = QGridLayout()
         self.period_fields = []
@@ -97,6 +97,9 @@ def disclosure(title: str, body: QWidget, root, *, expanded: bool = False) -> QP
         toggle.setText(f"{'Скрыть' if expanded else 'Показать'} {title[:1].lower() + title[1:]}")
         set_button_icon(toggle, "chevron_up" if expanded else "chevron_down")
         toggle.setAccessibleDescription("Разворачивает или скрывает дополнительные поля")
+        body.updateGeometry()
+        if root.parentWidget():
+            root.parentWidget().updateGeometry()
 
     toggle.toggled.connect(change)
     change(expanded)
@@ -119,10 +122,11 @@ def build_work_lists(page):
     page.registry_combo.setPlaceholderText("Выберите существующий перечень")
     page.list_count = QLabel("0")
     command(page, "delete_button", "Удалить локальный перечень", page._delete_work_list)
-    context.add_field("Существующий перечень", page.registry_combo)
+    page.registry_combo.setParent(page.command_host)
+    page.registry_combo.hide()
     page.creation_toggle = QPushButton("Новый перечень…")
     page.creation_toggle.setCheckable(True)
-    context.add_field("Создание", page.creation_toggle)
+
     for field in context.fields:
         field.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
     root.addWidget(context)
@@ -136,7 +140,7 @@ def build_work_lists(page):
     page.year_spin = SafeSpinBox()
     page.year_spin.setRange(2015, 2100)
     page.year_spin.setValue(datetime.now().year)
-    page.year_spin.setFixedWidth(130)
+    page.year_spin.setMinimumWidth(130)
     page.template_combo = SafeComboBox()
     creation_form.addRow("Год нового перечня", page.year_spin)
     creation_form.addRow("Начальный состав", page.template_combo)
@@ -180,6 +184,8 @@ def build_work_lists(page):
             page._save_editable_work_list_to_gis,
         ),
         ("approve_gis_button", "Разместить", page._approve_current_work_list_in_gis),
+        ("directory_button", "Справочник работ…", page._refresh_directory),
+        ("project_save_button", "Сохранить проект в ГИС", page._save_or_prepare_project),
         ("add_works_button", "Добавить работу…", page._add_works_from_directory),
         ("remove_works_button", "Удалить выбранные строки", page._remove_selected_works),
         ("clear_works_button", "Очистить состав", page._clear_all_works),
@@ -192,6 +198,7 @@ def build_work_lists(page):
         ("lazy_fill_button", "Распределить сумму…", page._open_lazy_distribution),
     ):
         command(page, name, text, handler)
+    page.workflow.direct_keys = {"new", "create", "add", "prepare", "save", "sync", "publish"}
     page.workflow.register("new", lambda: page.creation_toggle.setChecked(True))
     page.workflow.register("create", page.create_button)
     page.workflow.register("check", lambda: check_work_list(page))
@@ -218,7 +225,7 @@ def build_work_lists(page):
     page.manual_template_action = page.files_actions_button.add_command(page.load_export_template_file_button)
     page.export_xlsx_action = page.files_actions_button.add_command(page.export_button)
     page.files_actions_button.menu_model.addSeparator()
-    page.download_template_action = page.files_actions_button.add_command(page.load_export_template_button)
+    page.download_template_action = page.gis_actions.add_command(page.load_export_template_button)
     page.files_actions_button.add_command(page.upload_to_gis_button)
     page.xlsx_network_actions = command_menu("Обмен XLSX…", (page.load_export_template_button, page.upload_to_gis_button))
     page.xlsx_network_actions.setParent(page.command_host)
@@ -258,7 +265,7 @@ def build_work_lists(page):
         )
         year = SafeSpinBox()
         year.setRange(2015, 2100)
-        year.setFixedWidth(130)
+        year.setMinimumWidth(130)
         setattr(page, prefix + "_month", month)
         setattr(page, prefix + "_year", year)
         row.addWidget(month, 1)
@@ -306,22 +313,41 @@ def build_work_lists(page):
     page.composition_actions.menu_model.addSection("Выбранные строки перечня")
     for button in (page.remove_works_button, page.clear_works_button, page.delete_button):
         page.composition_actions.add_command(button)
-    for button in (page.add_works_button, page.composition_actions, page.lazy_fill_button):
-        button.show()
-        page.items_card.actions.addWidget(button)
-    local_vs_exchange = QWidget()
-    local_vs_exchange.setFixedWidth(12)
-    page.items_card.actions.addWidget(local_vs_exchange)
-    for button in (page.gis_actions, page.files_actions_button):
-        button.show()
-        page.items_card.actions.addWidget(button)
+    page.composition_actions.setParent(page.command_host)
+    page.composition_actions.hide()
+    page.gis_actions.hide()
+    page.gis_actions.setParent(page.command_host)
+    page.registry_danger = ActionMenuButton("Опасные действия…", "danger")
+    page.registry_danger.add_command(page.cancel_gis_button, when=cancellation_visible)
+    page.registry_danger.setParent(page.command_host)
+    page.registry_danger.hide()
+    page.preparation_bar = PairedActionBar(
+        (page.creation_toggle, page.directory_button, page.load_export_template_button,
+         page.load_gis_lists_button, page.files_actions_button),
+        (page.delete_button, page.cancel_gis_button),
+    )
+    page.preparation_bar.groups[0].setAccessibleName("Подготовка перечня")
+    page.preparation_bar.groups[1].setAccessibleName("Удаление и отмена выбранного перечня")
+    root.insertWidget(root.indexOf(page.context_status) + 1, page.preparation_bar)
+    page.editing_bar = PairedActionBar(
+        (page.add_works_button, page.remove_works_button, page.replace_from_template_button,
+         page.clear_works_button, page.templates_button, page.save_as_template_button,
+         page.lazy_fill_button),
+        (page.project_save_button, page.approve_gis_button, page.sync_gis_button),
+    )
+    page.editing_bar.groups[0].setAccessibleName("Редактирование состава перечня")
+    page.editing_bar.groups[1].setAccessibleName("Размещение перечня в ГИС")
+    page.items_card.body.addWidget(page.editing_bar)
+    page.remove_works_button.setText("Удалить строку")
+    page.replace_from_template_button.setText("Заменить состав по шаблону…")
+    page.lazy_fill_button.setText("Распределение суммы…")
     page.add_works_button.setProperty("workflowAlternate", True)
     root.removeWidget(page.details_toggle)
     root.removeWidget(details)
     page.details_toggle.setText("Параметры перечня")
-    page.lazy_fill_button.setText("Распределить сумму…")
     page.lazy_fill_button.setToolTip("Распределить сумму между работами и услугами выбранного перечня")
-    page.items_card.actions.addWidget(page.details_toggle)
+    page.details_toggle.hide()
+    details.show()
     hint = QLabel("Локальные изменения сохраняются автоматически.")
     page.items_hint = hint
     hint.setWordWrap(True)
@@ -331,7 +357,8 @@ def build_work_lists(page):
     page.items_card.body.addWidget(hint)
     root.addWidget(page.network_hint)
     root.addWidget(page.items_card, 1)
-    root.addWidget(details)
+    # Only the editable period is above the composition; technical details stay optional.
+    root.insertWidget(root.indexOf(page.workflow), details)
     page.organization_combo.currentIndexChanged.connect(page._organization_changed)
     page.house_combo.currentIndexChanged.connect(page._house_changed)
     page.work_lists.currentItemChanged.connect(page._work_list_changed)
@@ -342,6 +369,9 @@ def build_work_lists(page):
     page.creation_toggle.toggled.connect(lambda: refresh_work_lists(page))
     page._view_mode = "normal"
     page._set_editor_enabled(False)
+    from .work_list_selector import install_selector
+    install_selector(page, root, page.work_lists)
+    # Creation belongs to preparation beside the selected registry, not the title.
 
 
 def mirror_registry(page):
@@ -450,10 +480,13 @@ def adapt_houses(page):
     page.workflow.register("reset_search", page.search_edit.clear)
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(1))
     root.insertWidget(2, page.workflow)
-    page.organization_actions_button = ActionMenuButton("Управляющая организация", "organization")
+    page.organization_actions_button = ActionMenuButton("Действия с УО", "organization")
     # The menu acts on the selected UO, so keep it beside the UO selector.
     page.organization_combo.parentWidget().layout().addWidget(page.organization_actions_button)
     page.organization_actions_button.show()
+    caption = page.organization_combo.parentWidget().layout().itemAt(0).widget()
+    caption.setText("УО")
+    caption.setToolTip("Управляющая организация")
     page.organization_load_action = page.organization_actions_button.add_command(page.load_organization_button)
     page.organization_add_action = page.organization_actions_button.add_command(page.add_org_button)
     page.organization_edit_action = page.organization_actions_button.add_command(page.edit_org_button)
@@ -474,19 +507,53 @@ def adapt_houses(page):
         button.setParent(page.command_host)
     page.organization_sync_card = QWidget(page.command_host)
     page.manual_actions_card = QWidget(page.command_host)
-    toolbar = QWidget()
-    actions = ActionFlowLayout(toolbar)
-    actions.setSpacing(6)
-    actions.addWidget(page.add_house_button)
-    page.add_house_button.show()
-    portfolio_gap = QWidget()
-    portfolio_gap.setFixedWidth(12)
-    actions.addWidget(portfolio_gap)
-    for button in (page.sync_houses_button, page.bulk_actions_button, page.files_actions_button):
-        actions.addWidget(button)
+    page.add_house_button.setText("Добавить дом вручную")
+    page.import_button.setText("Импортировать дома из XLSX…")
+    set_button_icon(page.import_button, "files")
+    house_list_actions = QWidget()
+    page.house_list_actions = house_list_actions
+    house_actions = ActionFlowLayout(house_list_actions)
+    for button in (page.add_house_button, page.import_button):
+        button.setProperty("compactCommand", True)
+        house_actions.addWidget(button)
         button.show()
-    page.sync_houses_button.setProperty("workflowAlternate", True)
-    root.insertWidget(3, toolbar)
+    list_layout = page.house_list.parentWidget().layout()
+    list_layout.addWidget(house_list_actions)
+    page.bulk_actions_button.hide()
+    page.bulk_actions_button.setParent(page.command_host)
+    page.files_actions_button.hide()
+    page.files_actions_button.setParent(page.command_host)
+    page.house_download_actions = QWidget()
+    flow = ActionFlowLayout(page.house_download_actions)
+    label = QLabel("Импорт из ГИС ЖКХ:")
+    label.setObjectName("ToolbarGroupLabel")
+    flow.addWidget(label)
+    for button in (page.sync_houses_button, page.sync_all_management_button, page.sync_all_work_lists_button,
+                   *page.portfolio_import_buttons.values()):
+        button.setProperty("compactCommand", True)
+        flow.addWidget(button)
+        button.show()
+    root.insertWidget(3, page.house_download_actions)
+    page.house_local_actions = QWidget()
+    local_flow = ActionFlowLayout(page.house_local_actions)
+    local_label = QLabel("Импорт локальный:")
+    local_label.setObjectName("ToolbarGroupLabel")
+    local_flow.addWidget(local_label)
+    for button in (page.export_house_data_button, page.import_house_data_button):
+        button.setProperty("compactCommand", True)
+        local_flow.addWidget(button)
+        button.show()
+    root.insertWidget(4, page.house_local_actions)
+    page.export_house_data_button.setText("Экспорт шаблона Excel…")
+    page.import_house_data_button.setText("Импорт тарифов и площадей из Excel…")
+    page.sync_houses_button.setText("Загрузить дома")
+    page.sync_all_management_button.setText("Загрузить управление")
+    page.sync_all_work_lists_button.setText("Загрузить перечни")
+    page.organization_combo.parentWidget().layout().addWidget(page.load_organization_button)
+    page.load_organization_button.show()
+    page.workflow.direct_keys = {"organization_load", "load"}
+    page.workflow.detail.setText("Управление, перечни и площади можно загрузить отдельно; эти шаги необязательны.")
+
     # Preserve existing autosave widgets and signals while moving deletion to the detail.
     page.delete_house_button.parentWidget().layout().removeWidget(page.delete_house_button)
     page.delete_house_button.hide()

@@ -216,9 +216,9 @@ class HelperSetupDialog(QDialog):
         body.addWidget(self._label(
             "1. Откройте настройки расширений выбранного браузера."
         ))
-        self.open_browser = QPushButton("Открыть настройки расширений")
+        self.open_browser = QPushButton("Открыть браузер")
         self.open_browser.clicked.connect(self._open_browser)
-        self.copy_url = QPushButton("Скопировать адрес")
+        self.copy_url = QPushButton("Копировать адрес расширений")
         self.copy_url.clicked.connect(lambda: self._copy(
             self.extensions_url.text(),
             "Адрес скопирован. В браузере нажмите Ctrl+L (адресная строка), "
@@ -318,10 +318,7 @@ class HelperSetupDialog(QDialog):
             else "Для установки dev-помощника рекомендуем Google Chrome."
         )
         direct_open = bool(browser and browser.key == "chrome")
-        self.open_browser.setText(
-            "Открыть настройки расширений" if direct_open
-            else "Открыть браузер и скопировать адрес"
-        )
+        self.open_browser.setText("Открыть браузер")
         self.browser_steps.setText(
             ("Если Chrome не открыл страницу расширений, сделайте это вручную:\n"
              if direct_open else
@@ -525,7 +522,8 @@ class HelperSetupDialog(QDialog):
             if self._browser().key == "chrome":
                 self.feedback.setText(
                     "Chrome получил запрос открыть настройки расширений. Если открылось "
-                    "обычное окно, выполните три действия выше — адрес уже скопирован."
+                    "обычное окно, нажмите Ctrl+L (адресная строка), Ctrl+V (вставить адрес), "
+                    "Enter (переход) — адрес уже скопирован."
                 )
             else:
                 self.feedback.setText(

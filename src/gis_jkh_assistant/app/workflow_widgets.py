@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, Signal, Qt
+from PySide6.QtCore import QEvent, QObject, QTimer, Signal, Qt
 from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
-    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
 from .icons import icon, set_button_icon
@@ -19,6 +19,131 @@ def repolish(widget: QWidget) -> None:
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     widget.update()
+
+
+class ContentHeightGuard(QObject):
+    """Reserve wrapped content height before a splitter compresses the panel.
+
+    Qt's minimumSizeHint does not include height-for-width at the actual width.
+    Calculate it after layout events, never inside a stylesheet/paint callback.
+    The owned timer is cancelled with its widget.
+    """
+
+    def __init__(self, widget):
+        super().__init__(widget)
+        self.widget = widget
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.fit)
+        widget.installEventFilter(self)
+
+    def queue(self):
+        if not self.timer.isActive():
+            self.timer.start(0)
+
+    def fit(self):
+        widget = self.widget
+        layout = widget.layout()
+        if not widget.isVisible() or layout is None:
+            return
+        margins = layout.contentsMargins()
+        width = max(1, widget.contentsRect().width() - margins.left() - margins.right())
+        heights = []
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item.isEmpty():
+                continue
+            child = item.widget()
+            if child is not None:
+                height = max(child.minimumHeight(), child.minimumSizeHint().height())
+                if child.hasHeightForWidth():
+                    height = max(height, child.heightForWidth(width))
+            else:
+                height = max(0, item.minimumSize().height())
+                if item.hasHeightForWidth():
+                    height = max(height, item.heightForWidth(width))
+            if height > 0:
+                heights.append(height)
+        frame = widget.contentsMargins()
+        height = (frame.top() + frame.bottom() + margins.top() + margins.bottom()
+                  + sum(heights) + layout.spacing() * max(0, len(heights) - 1))
+        if widget.minimumHeight() != height:
+            widget.setMinimumHeight(height)
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() in (QEvent.Type.Show, QEvent.Type.Resize, QEvent.Type.LayoutRequest,
+                            QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self.queue()
+        return False
+
+
+class ReservedVBoxLayout(QVBoxLayout):
+    """The guard measures wrapping; a parent box must respect the resulting minimum.
+
+    Qt otherwise substitutes a cached height-for-width smaller than the widget's
+    new minimum, advances its next item by that size and overlaps the panels.
+    Internal heightForWidth remains usable for the deferred measurement.
+    """
+
+    def hasHeightForWidth(self):  # noqa: N802 - Qt API
+        return False
+
+
+class WorkspaceSplitter(QSplitter):
+    """Refresh cached splitter minima when wrapped child panels change height."""
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Vertical, parent)
+        self._minimum_timer = QTimer(self)
+        self._minimum_timer.setSingleShot(True)
+        self._minimum_timer.timeout.connect(self._fit_minimum)
+
+    def addWidget(self, widget):  # noqa: N802 - Qt API
+        super().addWidget(widget)
+        widget.installEventFilter(self)
+        self._queue_minimum()
+
+    def _queue_minimum(self):
+        if not self._minimum_timer.isActive():
+            self._minimum_timer.start(0)
+
+    def _fit_minimum(self):
+        if not self.isVisible():
+            return
+        children = [self.widget(i) for i in range(self.count()) if not self.widget(i).isHidden()]
+        height = sum(max(widget.minimumHeight(), widget.minimumSizeHint().height()) for widget in children)
+        height += max(0, len(children) - 1) * self.handleWidth()
+        if self.minimumHeight() != height:
+            self.setMinimumHeight(height)
+            self.refresh()
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Resize, QEvent.Type.Show,
+                            QEvent.Type.Hide, QEvent.Type.FontChange):
+            self._queue_minimum()
+        return False
+
+    def showEvent(self, event):  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._queue_minimum()
+
+
+class CommandGroup(QFrame):
+    """A compact framed operation scope; commands wrap, captions stay readable."""
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setObjectName("CommandGroup")
+        self.setAccessibleName(title)
+        self.body = ReservedVBoxLayout(self)
+        self.body.setContentsMargins(8, 4, 8, 6)
+        self.body.setSpacing(3)
+        self.caption = QLabel(title)
+        self.caption.setObjectName("SectionTitle")
+        self.body.addWidget(self.caption)
+        self.actions = ActionFlowLayout()
+        self.body.addLayout(self.actions)
+        self.height_guard = ContentHeightGuard(self)
 
 
 class PageHeader(QWidget):
@@ -186,10 +311,10 @@ class ContextBar(QFrame):
 
 
 class SectionCard(QFrame):
-    def __init__(self, title: str = "", parent=None):
+    def __init__(self, title: str = "", parent=None, *, fit_content=False, reserve_height=False):
         super().__init__(parent)
         self.setObjectName("Card")
-        self.body = QVBoxLayout(self)
+        self.body = ReservedVBoxLayout(self) if fit_content or reserve_height else QVBoxLayout(self)
         self.body.setContentsMargins(8, 6, 8, 8)
         self.body.setSpacing(6)
         self.actions = ActionFlowLayout()
@@ -200,6 +325,47 @@ class SectionCard(QFrame):
             label.setWordWrap(True)
             self.body.addWidget(label)
         self.body.addLayout(self.actions)
+        if fit_content:
+            self.height_guard = ContentHeightGuard(self)
+
+
+class WorkspaceCard(SectionCard):
+    """Respect wrapped command/error heights when a splitter sizes the workspace."""
+    def __init__(self):
+        super().__init__(reserve_height=True)
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._fit_minimum)
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.LayoutRequest, QEvent.Type.FontChange):
+            if hasattr(self, "_fit_timer") and not self._fit_timer.isActive():
+                self._fit_timer.start(0)
+        return result
+
+    def _fit_minimum(self):
+        if not self.isVisible():
+            return
+        margins = self.body.contentsMargins()
+        width = max(1, self.width() - margins.left() - margins.right())
+        heights = []
+        for index in range(self.body.count()):
+            item = self.body.itemAt(index)
+            widget = item.widget()
+            if widget:
+                if item.isEmpty():
+                    continue
+                height = max(widget.minimumHeight(), widget.minimumSizeHint().height())
+                if widget.hasHeightForWidth():
+                    height = max(height, widget.heightForWidth(width))
+            else:
+                height = max(0, item.heightForWidth(width) if item.hasHeightForWidth() else item.minimumSize().height())
+            if height > 0:
+                heights.append(height)
+        required = margins.top() + margins.bottom() + sum(heights) + self.body.spacing() * max(0, len(heights) - 1)
+        if self.minimumHeight() != required:
+            self.setMinimumHeight(required)
 
 
 class ActionMenuButton(QPushButton):
@@ -264,8 +430,10 @@ class WorkflowPanel(QFrame):
         self.setObjectName("WorkflowPanel")
         self._key: str | None = None
         self._compact = True
+        self.guidance_enabled = True
+        self._recommendation_visible = True
         self.commands: dict[str, QPushButton | Callable] = {}
-        self.body = QVBoxLayout(self)
+        self.body = ReservedVBoxLayout(self)
         self.body.setContentsMargins(8, 6, 8, 6)
         self.body.setSpacing(4)
         self.steps: list[QLabel] = []
@@ -313,7 +481,7 @@ class WorkflowPanel(QFrame):
         self.primary.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.primary.clicked.connect(self._execute)
         row.addWidget(self.primary)
-        self.help_button = QPushButton("Как продолжить")
+        self.help_button = QPushButton("Подробнее")
         self.help_button.setCheckable(True)
         self.help_button.setObjectName("DisclosureButton")
         self.help_button.toggled.connect(self._show_help)
@@ -323,12 +491,40 @@ class WorkflowPanel(QFrame):
         self.reason.setObjectName("BlockingReason")
         self.reason.setWordWrap(True)
         self.body.addWidget(self.reason)
+        self._text_metrics_timer = QTimer(self)
+        self._text_metrics_timer.setSingleShot(True)
+        self._text_metrics_timer.timeout.connect(self._fit_text_metrics)
+        self.height_guard = ContentHeightGuard(self)
         self.set_compact(True)
+
+    def set_guidance_enabled(self, enabled: bool) -> None:
+        """Hide guidance, including its button when hosted outside this frame."""
+        self.guidance_enabled = bool(enabled)
+        self.help_button.setVisible(self.guidance_enabled)
+        self.setVisible(self.guidance_enabled and self._recommendation_visible)
+
+    def set_recommendation_visible(self, visible: bool) -> None:
+        """Density changes cannot re-enable globally disabled guidance."""
+        self._recommendation_visible = bool(visible)
+        self.setVisible(self.guidance_enabled and self._recommendation_visible)
 
     def _show_help(self, expanded):
         for step in self.step_widgets:
             step.setVisible(expanded)
         self.detail.setVisible(expanded)
+        self._queue_text_metrics()
+
+    def _queue_text_metrics(self):
+        if hasattr(self, "_text_metrics_timer") and not self._text_metrics_timer.isActive():
+            self._text_metrics_timer.start(0)
+
+    def _fit_text_metrics(self):
+        for label in (self.title, self.detail, self.reason):
+            if label.isVisible() and label.width() > 0:
+                required = max(label.fontMetrics().height(), label.heightForWidth(label.width()))
+                if label.minimumHeight() != required:
+                    label.setMinimumHeight(required)
+        self.height_guard.queue()
 
     def place_help_below_actions(self) -> None:
         """Put expanded guidance on its own full-width row for dense monthly pages.
@@ -377,9 +573,10 @@ class WorkflowPanel(QFrame):
         self.title.setText(title)
         self.detail.setText(detail)
         self.primary.setText(text)
+        self.primary.setVisible(key not in getattr(self, "direct_keys", set()))
         command = self.commands.get(key)
         for alternate in self.commands.values():
-            if isinstance(alternate, QPushButton) and alternate.property("workflowAlternate"):
+            if isinstance(alternate, QPushButton) and alternate.property("workflowAlternate") and not hasattr(self, "direct_keys"):
                 alternate.setVisible(alternate is not command)
         enabled = command is not None and (not isinstance(command, QPushButton) or command.isEnabled())
         self.primary.setEnabled(enabled and not reason)
@@ -392,10 +589,12 @@ class WorkflowPanel(QFrame):
         self.primary.setAccessibleName(text)
         self.reason.setText(reason)
         self.reason.setVisible(bool(reason))
+        self._queue_text_metrics()
 
     def resizeEvent(self, event):  # noqa: N802 - Qt API
-        needed = self.title.minimumSizeHint().width() + self.primary.minimumSizeHint().width() + self.help_button.minimumSizeHint().width() + 2 * self.action_row.spacing() + 16
-        if hasattr(self, "compact_scope"):
+        primary_width = 0 if self.primary.isHidden() else self.primary.minimumSizeHint().width()
+        needed = self.title.minimumSizeHint().width() + primary_width + self.help_button.minimumSizeHint().width() + 2 * self.action_row.spacing() + 16
+        if hasattr(self, "compact_scope") and not self.compact_scope.isHidden():
             needed = (self.compact_scope.minimumSizeHint().width() + self.primary.minimumSizeHint().width()
                       + self.help_button.minimumSizeHint().width() + 3 * self.action_row.spacing() + 16)
         direction = (QBoxLayout.Direction.TopToBottom if event.size().width() < needed
@@ -403,6 +602,7 @@ class WorkflowPanel(QFrame):
         if self.action_row.direction() != direction:
             self.action_row.setDirection(direction)
         super().resizeEvent(event)
+        self._queue_text_metrics()
 
     def changeEvent(self, event):  # noqa: N802 - Qt API
         if event.type() == QEvent.Type.FontChange and hasattr(self, "primary"):

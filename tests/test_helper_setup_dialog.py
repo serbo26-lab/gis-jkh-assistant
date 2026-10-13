@@ -377,10 +377,9 @@ def test_browser_shortcuts_explain_address_bar_paste_and_navigation(wizard, tmp_
     dialog.browsers[index] = replace(browser, executable=exe)
     dialog.browser_combo.setCurrentIndex(index)
     assert dialog.open_browser.isEnabled()
-    if index == 0:
-        assert "Открыть настройки расширений" == dialog.open_browser.text()
-    else:
-        assert "Открыть браузер и скопировать адрес" == dialog.open_browser.text()
+    # PR #58 keeps one caption; browser-specific steps still explain the result.
+    assert "Открыть браузер" == dialog.open_browser.text()
+    assert "Копировать адрес расширений" == dialog.copy_url.text()
     instructions = dialog.browser_steps.text()
     assert "Ctrl+L" in instructions and "адресная строка" in instructions
     assert "Ctrl+V" in instructions and "вставится адрес" in instructions

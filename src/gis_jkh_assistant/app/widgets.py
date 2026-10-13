@@ -98,13 +98,24 @@ class SafeSpinBox(QSpinBox):
         self._minus_button.setAutoRepeat(True)
         self._minus_button.clicked.connect(self.stepDown)
 
-        margins = self.lineEdit().textMargins()
-        self.lineEdit().setTextMargins(
-            margins.left(),
-            margins.top(),
-            self.BUTTON_WIDTH * 2 + 4,
-            margins.bottom(),
-        )
+        self._geometry_timer = QTimer(self)
+        self._geometry_timer.setSingleShot(True)
+        self._geometry_timer.timeout.connect(self._refresh_spin_geometry)
+        self._refresh_spin_geometry()
+
+    def _refresh_spin_geometry(self):
+        app = QApplication.instance()
+        scale = float(app.property("uiScale") or 1.0) if app else 1.0
+        width = round(self.BUTTON_WIDTH * scale)
+        self.lineEdit().setTextMargins(0, 0, 0, 0)
+        self.setMinimumWidth(self.fontMetrics().horizontalAdvance(str(max(2100, self.maximum()))) + width * 2 + 24)
+        # QSS + NoButtons may give Qt's internal edit field a width of one pixel.
+        # Lay it out explicitly alongside our own buttons, with no second inset.
+        self.lineEdit().setGeometry(6, 2, max(1, self.width() - width * 2 - 10),
+                                    max(20, self.height() - 4))
+        for index, button in enumerate((self._plus_button, self._minus_button)):
+            button.setGeometry(self.width() - 2 - width * (2 - index), 2,
+                               width, max(20, self.height() - 4))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         self.setFocus(Qt.FocusReason.MouseFocusReason)
@@ -118,21 +129,13 @@ class SafeSpinBox(QSpinBox):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        height = max(20, self.height() - 4)
-        y = 2
-        right = self.width() - 2
-        self._plus_button.setGeometry(
-            right - self.BUTTON_WIDTH * 2,
-            y,
-            self.BUTTON_WIDTH,
-            height,
-        )
-        self._minus_button.setGeometry(
-            right - self.BUTTON_WIDTH,
-            y,
-            self.BUTTON_WIDTH,
-            height,
-        )
+        self._refresh_spin_geometry()
+
+    def changeEvent(self, event):  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            if hasattr(self, "_minus_button"):
+                self._geometry_timer.start(0)
 
 
 class SafeComboBox(QComboBox):
@@ -201,12 +204,6 @@ class ActionToolbar(QFrame):
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(10, 8, 10, 8)
         self.layout.setSpacing(8)
-
-    def add_label(self, text: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("ToolbarGroupLabel")
-        self.layout.addWidget(label)
-        return label
 
     def add_widget(self, widget: QWidget, stretch: int = 0) -> QWidget:
         self.layout.addWidget(widget, stretch)

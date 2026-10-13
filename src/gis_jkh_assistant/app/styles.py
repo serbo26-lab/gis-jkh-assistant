@@ -68,7 +68,7 @@ QWidget#Sidebar { background: @sidebar; border-right: 1px solid @border; }
 QStackedWidget, QLabel, QScrollArea#PageScroll { background: transparent; }
 QScrollArea#PageScroll { border: none; }
 QFrame#Card, QScrollArea#Card, QFrame#ContextBar, QFrame#ActionToolbar,
-QFrame#WorkflowPanel, QFrame#SidebarStatusCard {
+QFrame#WorkflowPanel, QFrame#SidebarStatusCard, QFrame#CommandGroup {
     background: @surface; border: 1px solid @border; border-radius: 5px;
 }
 QFrame#HouseSection { background: transparent; border: none; border-bottom: 1px solid @border; }
@@ -101,6 +101,7 @@ QComboBox::drop-down { width: 24px; border: none; }
 QComboBox::down-arrow { image: none; width: 0; height: 0; }
 QComboBox QAbstractItemView { background: @surface; color: @text; selection-background-color: @selection; selection-color: @selection_text; }
 QSpinBox { min-height: 25px; }
+QSpinBox QLineEdit { border: none; padding: 0; min-height: 0; background: transparent; }
 QToolButton#SpinPlusButton, QToolButton#SpinMinusButton {
     background: @elevated_surface; border: none; border-left: 1px solid @border;
     padding: 0; font-size: 11pt;
@@ -118,7 +119,13 @@ QPushButton#PrimaryButton:disabled { color: @muted_text; background: @readonly; 
 QPushButton:disabled, QToolButton:disabled { color: @muted_text; background: @readonly; border-color: @border; }
 QPushButton#DangerButton { color: @danger; border-color: @danger; }
 QPushButton#DangerButton:hover { background: @danger_surface; border-color: @danger; }
-QPushButton#MonthButton { padding: 6px 5px; min-height: 35px; font-size: 9pt; }
+QPushButton#DangerButton:disabled { color: @muted_text; background: @readonly; border-color: @border; }
+QPushButton#MonthButton { padding: 2px 3px; min-height: 28px; font-size: 9pt; }
+QPushButton[compactCommand="true"], QComboBox[compactCommand="true"] { font-size: 9pt; min-height: 18px; padding: 1px 5px; }
+QLabel#ToolbarGroupLabel { font-size: 9pt; }
+QComboBox[compactCommand="true"] { padding-right: 26px; }
+QTableWidget[compactTable="true"] { font-size: 9pt; }
+QTableWidget[compactTable="true"] QPushButton { font-size: 9pt; min-height: 18px; padding: 1px 5px; }
 QPushButton#MonthButton:checked { background: @selection; border: 2px solid @accent; color: @selection_text; }
 QPushButton#MonthButton[tone="success"] { color: @success; }
 QPushButton#MonthButton[tone="warning"] { color: @warning; }

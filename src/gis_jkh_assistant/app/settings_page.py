@@ -5,23 +5,24 @@ from __future__ import annotations
 import sqlite3
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QButtonGroup, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton, QWidget
+from PySide6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton, QWidget
 
 from gis_jkh_assistant.database import Repository
 
 from .page_layouts import page_root
 from .error_messages import error_text
-from .ui_scale import SCALE_OPTIONS, SCALE_SETTING, scale_percent
 from .workflow_widgets import SectionCard
 
 _SHARED_CONTEXT_KEY = "ui.shared_context_enabled"
 _THEME_KEY = "ui.theme"
+_NEXT_STEP_PANEL_KEY = "ui.next_step_panel_enabled"
 
 
 class SettingsPage(QWidget):
     sharedContextChanged = Signal(bool)
     themeChanged = Signal(str)
     scaleChanged = Signal(int)
+    nextStepPanelChanged = Signal(bool)
     helperSetupRequested = Signal()
 
     def __init__(self, repository: Repository, parent=None) -> None:
@@ -74,27 +75,32 @@ class SettingsPage(QWidget):
         self.light_radio.setChecked(self.theme_name() == "light")
         self.light_radio.toggled.connect(lambda checked: self._theme_toggled("light", checked))
         self.dark_radio.toggled.connect(lambda checked: self._theme_toggled("dark", checked))
-        scale_label = QLabel("Размер текста и элементов")
-        self.scale_combo = QComboBox()
+        # Keep the handle for older integrations, but expose no enlargement UI.
+        # Native Windows DPI remains Qt's responsibility.
+        self.scale_combo = QComboBox(self)
         self.scale_combo.setObjectName("InterfaceScale")
-        scale_label.setBuddy(self.scale_combo)
-        scale_row = QHBoxLayout()
-        scale_row.addWidget(scale_label)
-        for percent, description in zip(SCALE_OPTIONS, ("Обычный", "Крупнее", "Самый крупный")):
-            self.scale_combo.addItem(f"{percent}% — {description}", percent)
-        self.scale_combo.setCurrentIndex(self.scale_combo.findData(self.scale_percent()))
-        self.scale_combo.currentIndexChanged.connect(self._scale_changed)
-        scale_row.addWidget(self.scale_combo)
-        scale_row.addStretch(1)
-        appearance.body.addLayout(scale_row)
-        scale_hint = QLabel(
-            "Масштаб экрана Windows учитывается дополнительно. Выбор объектов и данные сохраняются."
-        )
-        scale_hint.setObjectName("Muted")
-        scale_hint.setWordWrap(True)
-        appearance.body.addWidget(scale_hint)
+        self.scale_combo.addItem("100% — Обычный", 100)
+        self.scale_combo.setEnabled(False)
+        self.scale_combo.hide()
         root.addWidget(appearance)
         appearance.setMaximumWidth(900)
+
+        guidance = SectionCard("Панель следующего шага")
+        self.next_step_panel_checkbox = QCheckBox()
+        self.next_step_panel_checkbox.setAccessibleName("Панель следующего шага")
+        self.next_step_panel_checkbox.setChecked(self.next_step_panel_enabled())
+        self._update_next_step_panel_label()
+        self.next_step_panel_checkbox.toggled.connect(self._next_step_panel_toggled)
+        guidance.body.addWidget(self.next_step_panel_checkbox)
+        guidance_hint = QLabel(
+            "Подсказывает следующий шаг во всех рабочих разделах. "
+            "При выключении панель и её подсказки скрываются; рабочие команды остаются доступны."
+        )
+        guidance_hint.setObjectName("Muted")
+        guidance_hint.setWordWrap(True)
+        guidance.body.addWidget(guidance_hint)
+        root.addWidget(guidance)
+        guidance.setMaximumWidth(900)
 
         connection = SectionCard("Связь с ГИС ЖКХ")
         self.connection_status = QLabel("Проверка подключения…")
@@ -141,17 +147,31 @@ class SettingsPage(QWidget):
         return "dark" if self.repository.get_setting(_THEME_KEY) == "dark" else "light"
 
     def scale_percent(self) -> int:
-        return scale_percent(self.repository.get_setting(SCALE_SETTING))
+        return 100
+
+    def next_step_panel_enabled(self) -> bool:
+        return self.repository.get_setting(_NEXT_STEP_PANEL_KEY) != "0"
+
+    def _update_next_step_panel_label(self) -> None:
+        self.next_step_panel_checkbox.setText(
+            "Включена" if self.next_step_panel_checkbox.isChecked() else "Выключена"
+        )
+
+    def _next_step_panel_toggled(self, checked: bool) -> None:
+        previous = self.next_step_panel_enabled()
+        if not self._save_setting(
+            _NEXT_STEP_PANEL_KEY, "1" if checked else "0", "Панель следующего шага",
+        ):
+            self.next_step_panel_checkbox.blockSignals(True)
+            self.next_step_panel_checkbox.setChecked(previous)
+            self.next_step_panel_checkbox.blockSignals(False)
+            self._update_next_step_panel_label()
+            return
+        self._update_next_step_panel_label()
+        self.nextStepPanelChanged.emit(checked)
 
     def _scale_changed(self, _index: int) -> None:
-        percent = scale_percent(self.scale_combo.currentData())
-        previous = self.scale_percent()
-        if not self._save_setting(SCALE_SETTING, str(percent), "Масштаб интерфейса"):
-            self.scale_combo.blockSignals(True)
-            self.scale_combo.setCurrentIndex(self.scale_combo.findData(previous))
-            self.scale_combo.blockSignals(False)
-            return
-        self.scaleChanged.emit(percent)
+        self.scale_combo.setCurrentIndex(0)
 
     def _shared_toggled(self, checked: bool) -> None:
         previous = self.repository.get_setting(_SHARED_CONTEXT_KEY) == "1"

@@ -76,7 +76,3 @@ def parse_period_date(value: Any, *, boundary: str = "start") -> ParsedPeriodDat
         "Используйте дату в формате ММ.ГГГГ или ДД.ММ.ГГГГ, "
         f"например 08.2025 или 10.08.2025. Получено: {text!r}."
     )
-
-
-def end_of_month(year: int, month: int) -> int:
-    return calendar.monthrange(int(year), int(month))[1]

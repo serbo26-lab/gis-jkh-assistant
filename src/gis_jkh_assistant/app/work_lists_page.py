@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 import base64
 import shutil
 import tempfile
@@ -277,6 +278,8 @@ class WorkListsPage(QWidget):
                 selected_row = row
 
         self.list_count.setText(str(len(lists)))
+        if selected_row < 0 and lists and not selected_id:
+            selected_row = 0
         if selected_row >= 0:
             self.work_lists.setCurrentRow(selected_row)
         self.work_lists.blockSignals(False)
@@ -325,6 +328,7 @@ class WorkListsPage(QWidget):
         on_success,
         *,
         busy_text: str,
+        force: bool = False,
     ) -> None:
         if self._integration_worker is not None and self._integration_worker.isRunning():
             QMessageBox.information(
@@ -332,6 +336,11 @@ class WorkListsPage(QWidget):
                 "Операция уже выполняется",
                 "Дождитесь завершения текущей операции с ГИС ЖКХ.",
             )
+            return
+        organization_id = self.organization_combo.currentData()
+        cache = self._cached_directory()
+        if cache and not force:
+            on_success(cache)
             return
         if not self._directory_ready():
             QMessageBox.information(
@@ -357,7 +366,11 @@ class WorkListsPage(QWidget):
 
         def succeeded(result: dict) -> None:
             options = list(result.get("items") or [])
-            on_success(options)
+            if self.organization_combo.currentData() == organization_id:
+                from datetime import datetime, timezone
+                self.repository.set_setting(f"ui.directory.{organization_id}", json.dumps(options, ensure_ascii=False))
+                self.repository.set_setting(f"ui.directory.updated.{organization_id}", datetime.now(timezone.utc).isoformat())
+                on_success(options)
 
         def failed(message: str) -> None:
             QMessageBox.critical(
@@ -376,6 +389,28 @@ class WorkListsPage(QWidget):
         connect_result(worker, worker.failed, failed)
         worker.finished.connect(finished)
         worker.start()
+
+    def _cached_directory(self):
+        key = self.organization_combo.currentData()
+        try:
+            value = json.loads(self.repository.get_setting(f"ui.directory.{key}") or "[]")
+            return value if isinstance(value, list) and all(isinstance(x, dict) for x in value) else []
+        except (ValueError, TypeError):
+            return []
+
+    def _refresh_directory(self):
+        def loaded(options):
+            stamp = self.repository.get_setting(f"ui.directory.updated.{self.organization_combo.currentData()}")
+            self.operation_status.outcome(f"Справочник работ: {len(options)} позиций • обновлён {stamp}")
+        self._load_organization_directory(loaded, busy_text="Обновление справочника УО", force=True)
+
+    def _save_or_prepare_project(self):
+        selected = self.repository.get_work_list(self._current_work_list_id) if self._current_work_list_id else None
+        if selected and str(selected.gis_status or "").upper() in {"DRAFT", "CANCELLED"}:
+            self._save_editable_work_list_to_gis()
+        else:
+            from .registry_layouts import prepare_project
+            prepare_project(self)
 
     def _create_work_list(self) -> None:
         if self.flush_pending_changes() is False:

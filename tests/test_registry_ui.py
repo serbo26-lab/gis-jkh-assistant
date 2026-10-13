@@ -73,12 +73,12 @@ def select(page, work_list):
     page.refresh_work_lists(select_id=work_list.id)
 
 
-def test_registry_requires_explicit_selection_and_preserves_it(registry):
+def test_registry_previews_existing_list_and_preserves_explicit_selection(registry):
     repository, house, first, page = registry
     second = repository.create_work_list(house_id=house.id, base_year=2027)
     page.refresh_work_lists()
-    assert page._current_work_list_id is None
-    assert page.registry_combo.currentIndex() == -1
+    assert page._current_work_list_id == first.id
+    assert page.registry_combo.currentData() == first.id
     select(page, first)
     assert page.registry_combo.currentData() == first.id
     page.refresh_organizations()

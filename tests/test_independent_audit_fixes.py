@@ -136,7 +136,7 @@ def test_queue_stops_between_months_and_resumes_without_repeating(desktop, messa
 
 def test_plan_name_stays_fixed_and_row_heights_match(desktop):
     p = _select_page(desktop, 2)
-    desktop.window._scale_changed(150)
+    desktop.window.resize(1000, 768)  # Create genuine horizontal overflow at 100%.
     QTest.qWait(30)
     p.table.horizontalScrollBar().setValue(p.table.horizontalScrollBar().maximum())
     _settle(desktop.app)
@@ -155,10 +155,19 @@ def test_frozen_header_updates_after_qt_style_notifications(desktop):
     # Resizing a second view inside Qt's style/header signal is unsafe.
     assert frozen.view.columnWidth(0) == before
     assert frozen._sync_timer.isActive()
-    QTest.qWait(10)
+    # Name sizing and the frozen view deliberately use separate queued passes.
+    # Check convergence, without assuming every Windows runner paints in 10 ms.
+    for _ in range(20):
+        QTest.qWait(10)
+        if frozen.view.columnWidth(0) == p.table.columnWidth(0):
+            break
     assert frozen.view.columnWidth(0) == p.table.columnWidth(0)
     desktop.window.settings_page.dark_radio.click()
-    QTest.qWait(10)
+    for _ in range(20):
+        QTest.qWait(10)
+        if (frozen.view.horizontalHeader().height() == p.table.horizontalHeader().height()
+                and frozen.view.rowHeight(0) == p.table.rowHeight(0)):
+            break
     assert frozen.view.horizontalHeader().height() == p.table.horizontalHeader().height()
     assert frozen.view.rowHeight(0) == p.table.rowHeight(0)
 
@@ -170,6 +179,7 @@ def test_compact_context_retains_visible_labels_and_table_space(desktop):
     QTest.qWait(40)
     assert all(control.isVisible() for control in p.context_card.controls)
     assert p.context_card.height() < 145
+    assert desktop.window._ui_scale == 1.0
     assert p.table.viewport().height() >= 5 * p.table.rowHeight(0)
     assert p.page_scroll.verticalScrollBar().maximum() == 0
 

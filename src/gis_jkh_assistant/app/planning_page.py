@@ -805,6 +805,7 @@ class PlanningPage(QWidget):
 
         def succeeded(result: dict) -> None:
             if not result.get("found"):
+                self.repository.set_setting(f"ui.remote_probe.plan.{plan_id}", "missing")
                 self.operation_status.outcome("План в ГИС не найден. Локальные данные сохранены.")
                 QMessageBox.information(
                     self,

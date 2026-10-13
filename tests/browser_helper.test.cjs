@@ -55,6 +55,16 @@ test("identifies the helper version on the actual command polling request", asyn
   context.fetch = async (url, options) => { requests.push({ url, options }); return { ok: true }; };
   await vm.runInContext('localFetch("/next")', context);
   assert.equal(requests[0].options.headers["X-GIS-JKH-Helper-Version"], manifest.version);
+  assert.ok(requests[0].options.headers["X-GIS-JKH-Helper-Instance"]);
+});
+
+test("a browser without a GIS tab never takes a desktop command", async () => {
+  const { context } = helper([]);
+  const paths = [];
+  context.fetch = async (url) => { paths.push(url); return { ok: true, status: 200, json: async () => ({ idle: true }) }; };
+  await vm.runInContext("pollLoop()", context);
+  assert.ok(paths.some(url => url.endsWith("/hello")));
+  assert.equal(paths.some(url => url.endsWith("/next")), false);
 });
 
 for (const host of ["my.dom.gosuslugi.ru", "lk.dom.gosuslugi.ru"]) {

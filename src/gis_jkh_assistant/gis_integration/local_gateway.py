@@ -21,6 +21,7 @@ from .organization_context import (
 _CLIENT_HEADER = "X-GIS-JKH-Helper"
 _CLIENT_VALUE = "desktop-helper"
 _CLIENT_VERSION_HEADER = "X-GIS-JKH-Helper-Version"
+_CLIENT_INSTANCE_HEADER = "X-GIS-JKH-Helper-Instance"
 
 
 class IntegrationError(RuntimeError):
@@ -53,9 +54,14 @@ class _GatewayState:
         self.session_keep_alive_enabled = False
         self.last_keep_alive_success_at: str | None = None
         self.session_keep_alive_error: str | None = None
+        self.clients: dict[str, tuple[float, dict]] = {}
 
     def update_hello(self, payload: dict[str, Any]) -> None:
         with self.lock:
+            instance = str(payload.get("helperInstance") or "legacy")[:128]
+            self.clients[instance] = (time.monotonic(), dict(payload))
+            self.clients = {key: value for key, value in self.clients.items()
+                            if time.monotonic() - value[0] < 35.0}
             self.last_seen = time.monotonic()
             self.gis_page_ready = bool(payload.get("gisPageReady"))
             self.page_url = _optional_text(payload.get("pageUrl"))
@@ -72,6 +78,20 @@ class _GatewayState:
 
     def status(self, running: bool, error: str | None) -> IntegrationStatus:
         with self.lock:
+            fresh = [(seen, payload) for seen, payload in self.clients.values()
+                     if time.monotonic() - seen < 35.0]
+            if fresh:
+                seen, payload = max(fresh, key=lambda pair: (
+                    bool(pair[1].get("gisPageReady")) and helper_supports_organization_routing(pair[1].get("helperVersion")),
+                    bool(pair[1].get("gisPageReady")), pair[0],
+                ))
+                self.last_seen = seen
+                self.gis_page_ready = bool(payload.get("gisPageReady"))
+                self.page_url = _optional_text(payload.get("pageUrl"))
+                self.helper_version = _optional_text(payload.get("helperVersion"))
+                self.session_keep_alive_enabled = bool(payload.get("sessionKeepAliveEnabled"))
+                self.last_keep_alive_success_at = _optional_text(payload.get("lastKeepAliveSuccessAt"))
+                self.session_keep_alive_error = _optional_text(payload.get("sessionKeepAliveError"))
             age = None if self.last_seen is None else max(0.0, time.monotonic() - self.last_seen)
             connected = age is not None and age < 35.0
             return IntegrationStatus(
@@ -86,6 +106,17 @@ class _GatewayState:
                 last_seen_age=age,
                 error=error,
             )
+
+    def can_poll(self, instance: str | None) -> bool:
+        with self.lock:
+            fresh = {key: value for key, value in self.clients.items()
+                     if time.monotonic() - value[0] < 35.0}
+            if instance:
+                client = fresh.get(instance)
+                return bool(client and client[1].get("gisPageReady"))
+            # Compatibility for an old helper when it is the only participant.
+            # An unidentifiable browser cannot take an identified client's work.
+            return not any(key != "legacy" and value[1].get("gisPageReady") for key, value in fresh.items())
 
 
 class LocalIntegrationGateway:
@@ -117,7 +148,7 @@ class LocalIntegrationGateway:
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header(
                     "Access-Control-Allow-Headers",
-                    f"Content-Type, {_CLIENT_HEADER}, {_CLIENT_VERSION_HEADER}",
+                    f"Content-Type, {_CLIENT_HEADER}, {_CLIENT_VERSION_HEADER}, {_CLIENT_INSTANCE_HEADER}",
                 )
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
@@ -202,10 +233,17 @@ class LocalIntegrationGateway:
                 if not helper_supports_organization_routing(self.headers.get(_CLIENT_VERSION_HEADER)):
                     self._send_json(HTTPStatus.OK, {"idle": True, "error": "helper update required"})
                     return
+                if not state.can_poll(self.headers.get(_CLIENT_INSTANCE_HEADER)):
+                    self._send_json(HTTPStatus.OK, {"idle": True, "error": "GIS tab unavailable in this helper"})
+                    return
 
                 try:
                     command = state.commands.get(timeout=15.0)
                 except queue.Empty:
+                    self._send_json(HTTPStatus.OK, {"idle": True})
+                    return
+                if not state.can_poll(self.headers.get(_CLIENT_INSTANCE_HEADER)):
+                    state.commands.put(command)
                     self._send_json(HTTPStatus.OK, {"idle": True})
                     return
                 self._send_json(HTTPStatus.OK, command)

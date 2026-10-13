@@ -116,9 +116,9 @@ def test_dangerous_registry_commands_remain_named_and_reachable(registry):
             assert len(surface.text().split()) > 1
 
 
-def test_list_composition_and_xlsx_commands_have_separate_named_menus(registry):
+def test_list_composition_commands_are_direct_and_separate_from_xlsx(registry):
     page = registry.lists
-    assert page.composition_actions.isVisibleTo(page)
+    assert not page.composition_actions.isVisibleTo(page)
     assert page.files_actions_button.isVisibleTo(page)
     composition = [button for _action, button, _when in page.composition_actions.entries]
     files = [button for _action, button, _when in page.files_actions_button.entries]
@@ -126,6 +126,8 @@ def test_list_composition_and_xlsx_commands_have_separate_named_menus(registry):
                    page.replace_from_template_button, page.save_as_template_button):
         assert source in composition
         assert source not in files
+        assert source.isVisibleTo(page)
+        assert source.menu() is None
         command_surface(page, source)
     assert page.load_export_template_file_button in files
     assert page.export_button in files
@@ -152,22 +154,23 @@ def test_selected_period_remains_readable_and_new_list_fits_window(registry, app
     assert page.page_scroll.horizontalScrollBar().maximum() == 0
 
 
-def test_period_defaults_compact_and_user_expansion_survives_refresh(registry):
+def test_period_is_visible_and_technical_expansion_survives_refresh(registry):
     page = registry.lists
     assert not page.details_toggle.isChecked()
-    assert not page.details_card.isVisibleTo(page)
+    assert page.details_toggle.isHidden()
+    assert page.details_card.isVisibleTo(page)
     assert registry.work_list.period_label in page.registry_combo.currentText()
-    page.details_toggle.click()
+    page.details_more_toggle.click()
     page.refresh_work_lists(select_id=registry.work_list.id)
     page._refresh_integration_status()
-    assert page.details_toggle.isChecked()
+    assert page.details_more_toggle.isChecked()
     assert page.details_card.isVisibleTo(page)
     assert page.start_year.isVisibleTo(page)
     assert page.end_month.isVisibleTo(page)
-    page.details_toggle.click()
+    page.details_more_toggle.click()
     page._refresh_gis_action_buttons()
-    assert not page.details_toggle.isChecked()
-    assert not page.details_card.isVisibleTo(page)
+    assert not page.details_more_toggle.isChecked()
+    assert page.details_card.isVisibleTo(page)
 
 
 def test_placed_list_cancellation_remains_discoverable_when_offline(registry):
@@ -196,7 +199,8 @@ def test_direct_list_danger_click_keeps_existing_confirmation(registry, monkeypa
     monkeypatch.setattr(QMessageBox, "warning", decline)
     page = registry.lists
     page.items_table.selectRow(0)
-    command_surface(page, getattr(page, command)).trigger()
+    surface = command_surface(page, getattr(page, command))
+    (surface.click if hasattr(surface, "click") else surface.trigger)()
     assert len(prompts) == 1
     assert registry.repository.get_work_list(registry.work_list.id) is not None
     assert len(registry.repository.list_work_list_items(registry.work_list.id)) == 1

@@ -1,4 +1,4 @@
-"""Interface enlargement and native caption regressions with isolated Qt data."""
+"""Fixed-size interface and native caption regressions with isolated Qt data."""
 from __future__ import annotations
 
 import ctypes
@@ -101,38 +101,42 @@ def test_runtime_size_preserves_context_saved_edits_and_busy_queue(desktop, monk
     monkeypatch.setattr(fixation, "_load_table", lambda: pytest.fail("Scaling rebuilt a busy page"))
     initial_font_size = planning.font().pointSizeF()
     for percent in (150, 125, 100):
-        combo = window.settings_page.scale_combo
-        combo.setCurrentIndex(combo.findData(percent))
+        window._scale_changed(percent)
         _settle(desktop.app)
-        assert desktop.repository.get_setting(SCALE_SETTING) == str(percent)
-        assert desktop.app.property("uiScale") == percent / 100
+        assert desktop.repository.get_setting(SCALE_SETTING) is None
+        assert desktop.app.property("uiScale") == 1.0
         assert window._shared_context == snapshot
         assert planning._current_work_list_id == desktop.work_list.id
         assert desktop.repository.get_work_plan_month(plan_item.id, 1).count == 3
         assert planning.table.item(0, 3).text() == "3"
         assert fixation._queue_running and fixation._integration_busy
         assert id(fixation.table) == table_identity
-        assert planning.font().pointSizeF() == pytest.approx(initial_font_size * percent / 100)
+        assert planning.font().pointSizeF() == pytest.approx(initial_font_size)
         assert not window.styleSheet()  # No resize-specific font override hides the chosen size.
     fixation._queue_running = False
     fixation._integration_busy = False
 
 
-def test_ui_size_reopens_from_persisted_preference(qt_app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("old_percent", [125, 150])
+def test_old_enlargement_preference_does_not_reactivate_hidden_setting(qt_app, tmp_path, monkeypatch, old_percent):
     from gis_jkh_assistant.database import Repository
     from test_ui_workflow import FakeGateway
 
     repository = Repository(tmp_path / "scale.db")
-    repository.set_setting(SCALE_SETTING, "150")
+    repository.set_setting(SCALE_SETTING, str(old_percent))
     monkeypatch.setattr(main_window, "LocalIntegrationGateway", FakeGateway)
     window = main_window.MainWindow(repository)
     try:
-        assert window.settings_page.scale_combo.currentData() == 150
-        assert qt_app.property("uiScale") == 1.5
-        assert window._ui_scale == 1.5
+        assert window.settings_page.scale_combo.currentData() == 100
+        assert window.settings_page.scale_combo.count() == 1
+        assert not window.settings_page.scale_combo.isEnabled()
+        assert window.settings_page.scale_combo.isHidden()
+        assert qt_app.property("uiScale") == 1.0
+        assert window._ui_scale == 1.0
+        assert repository.get_setting(SCALE_SETTING) == str(old_percent)
         window.settings_page.dark_radio.click()
         _settle(qt_app)
-        assert qt_app.property("uiScale") == 1.5
+        assert qt_app.property("uiScale") == 1.0
     finally:
         window.close()
         window.deleteLater()
@@ -162,8 +166,7 @@ def test_table_photo_and_delete_controls_resize_without_reloading_busy_period(de
     monkeypatch.setattr(page, "_load_table", lambda: pytest.fail("Scale rebuilt the fixation period"))
     monkeypatch.setattr(page, "_load_unplanned_table", lambda: pytest.fail("Scale rebuilt extra work"))
     for percent in (150, 100):
-        combo = window.settings_page.scale_combo
-        combo.setCurrentIndex(combo.findData(percent))
+        window._scale_changed(percent)
         _settle(desktop.app)
         assert page._current_period_id == period_id
         assert identities == [id(button) for button in controls]
@@ -186,8 +189,7 @@ def test_quality_act_control_resizes_while_current_period_is_busy(desktop, monke
     page._queue_running = True
     monkeypatch.setattr(page, "_load_table", lambda: pytest.fail("Scale rebuilt a busy quality period"))
     for percent in (150, 100):
-        combo = window.settings_page.scale_combo
-        combo.setCurrentIndex(combo.findData(percent))
+        window._scale_changed(percent)
         _settle(desktop.app)
         assert page._current_period_id == period.id
         assert page.table.cellWidget(0, 6) is button
@@ -198,7 +200,7 @@ def test_quality_act_control_resizes_while_current_period_is_busy(desktop, monke
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
-@pytest.mark.parametrize("percent", [100, 125, 150])
+@pytest.mark.parametrize("percent", [100])
 @pytest.mark.parametrize("size", [(1366, 768), (1600, 900), (1920, 1080)])
 def test_pages_fit_desktop_at_selected_ui_size(desktop, theme, percent, size):
     window = desktop.window

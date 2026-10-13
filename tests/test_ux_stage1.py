@@ -32,7 +32,7 @@ def test_quality_expanded_guidance_uses_own_full_width_row_at_150_percent(deskto
     _settle(desktop.app)
 
     assert workflow.help_panel.isVisibleTo(window)
-    assert workflow.title.parentWidget() is workflow.help_panel
+    assert workflow.title.parentWidget() is workflow._summary_widget
     assert workflow.detail.parentWidget() is workflow.help_panel
     assert workflow.title.isVisibleTo(window)
     assert workflow.detail.isVisibleTo(window)
@@ -42,13 +42,13 @@ def test_quality_expanded_guidance_uses_own_full_width_row_at_150_percent(deskto
     assert workflow.detail.height() + 2 >= workflow.detail.heightForWidth(
         workflow.detail.width()
     )
-    assert workflow.primary.isVisibleTo(window)
+    assert page.load_period_button.isVisibleTo(window)
     assert workflow.primary.geometry().right() < workflow.width()
 
     workflow.help_button.click()
     _settle(desktop.app)
     assert workflow.help_panel.isHidden()
-    assert workflow.primary.isVisibleTo(window)
+    assert page.load_period_button.isVisibleTo(window)
 
 
 def test_quality_narrow_actions_wrap_as_groups_but_not_help_text(desktop):
@@ -61,11 +61,11 @@ def test_quality_narrow_actions_wrap_as_groups_but_not_help_text(desktop):
     _settle(desktop.app)
     assert page.workflow.help_panel.width() >= page.workflow.body.contentsRect().width() - 2
     assert page.workflow.detail.isVisibleTo(window)
-    assert not page.workflow.primary.geometry().intersects(
-        page.workflow.help_button.geometry()
-    )
-    assert not page.workflow.primary.geometry().intersects(page.scope_row.geometry())
-    assert page.workflow.primary.geometry().right() < page.workflow.width()
+    assert page.workflow.help_button.geometry().right() < page.workflow.width()
+    if page.workflow.primary.isVisibleTo(window):
+        assert not page.workflow.primary.geometry().intersects(page.workflow.help_button.geometry())
+    assert page.load_period_button.isVisibleTo(window)
+
 
 
 def test_month_fill_first_level_stays_in_month_scope_and_uses_existing_command(desktop, monkeypatch):
