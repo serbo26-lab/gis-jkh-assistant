@@ -397,6 +397,18 @@ def refresh_houses(page) -> None:
         button.setToolTip(connection or "Для всех домов выбранной управляющей организации.")
         action.setEnabled(ready)
     page.sync_management_button.setEnabled(bool(house and house.house_object_guid) and ready)
+    from .portfolio_import import eligible_lists
+    has_lists = bool(organization_id and eligible_lists(page.repository, organization_id))
+    for kind, button in page.portfolio_import_buttons.items():
+        reason = ("Дождитесь завершения операции." if busy else connection
+                  or ("Сначала загрузите размещённые перечни из ГИС ЖКХ." if not has_lists else ""))
+        button.setEnabled(ready and has_lists)
+        button.setToolTip(reason or (
+            "Все периоды размещённых перечней выбранной УО. Существующие локальные данные пропускаются без перезаписи. "
+            + ("Рекомендуемый порядок: планирование → фиксация → оценка; каждый импорт доступен отдельно." if kind != "plan" else "")
+        ))
+    for button in (page.export_house_data_button, page.import_house_data_button):
+        button.setEnabled(bool(organization_id) and not busy)
     page.delete_house_button.setEnabled(bool(house) and not busy)
     if not organization_id:
         from_gis = not organization_reason

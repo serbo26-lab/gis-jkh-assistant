@@ -525,15 +525,25 @@ def adapt_houses(page):
     page.files_actions_button.setParent(page.command_host)
     page.house_download_actions = QWidget()
     flow = ActionFlowLayout(page.house_download_actions)
-    label = QLabel("Все дома выбранной УО:")
+    label = QLabel("Импорт из ГИС ЖКХ:")
     label.setObjectName("ToolbarGroupLabel")
     flow.addWidget(label)
     for button in (page.sync_houses_button, page.sync_all_management_button, page.sync_all_work_lists_button,
-                   page.export_house_data_button, page.import_house_data_button):
+                   *page.portfolio_import_buttons.values()):
         button.setProperty("compactCommand", True)
         flow.addWidget(button)
         button.show()
     root.insertWidget(3, page.house_download_actions)
+    page.house_local_actions = QWidget()
+    local_flow = ActionFlowLayout(page.house_local_actions)
+    local_label = QLabel("Импорт локальный:")
+    local_label.setObjectName("ToolbarGroupLabel")
+    local_flow.addWidget(local_label)
+    for button in (page.export_house_data_button, page.import_house_data_button):
+        button.setProperty("compactCommand", True)
+        local_flow.addWidget(button)
+        button.show()
+    root.insertWidget(4, page.house_local_actions)
     page.export_house_data_button.setText("Экспорт шаблона Excel…")
     page.import_house_data_button.setText("Импорт тарифов и площадей из Excel…")
     page.sync_houses_button.setText("Загрузить дома")

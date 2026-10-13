@@ -93,6 +93,8 @@ class HousesPage(QWidget):
         self._selection_refresh_timer.timeout.connect(self._refresh_after_selection)
 
         self._build_ui()
+        from .portfolio_import import PortfolioImport
+        self.portfolio_import = PortfolioImport(self)
         self.refresh_organizations()
 
     def _build_ui(self) -> None:
@@ -156,6 +158,17 @@ class HousesPage(QWidget):
             "Получить перечни работ и услуг для всех домов выбранной "
             "управляющей организации."
         )
+        self.sync_all_plans_button = QPushButton("Загрузить планирование")
+        self.sync_all_fixations_button = QPushButton("Загрузить фиксацию")
+        self.sync_all_quality_button = QPushButton("Загрузить оценки качества")
+        self.portfolio_import_buttons = {
+            "plan": self.sync_all_plans_button,
+            "fixation": self.sync_all_fixations_button,
+            "quality": self.sync_all_quality_button,
+        }
+        for kind, button in self.portfolio_import_buttons.items():
+            button.setEnabled(False)
+            button.clicked.connect(lambda _checked=False, kind=kind: self.portfolio_import.start(kind))
 
         self.add_org_button.clicked.connect(self._add_organization)
         self.edit_org_button.clicked.connect(self._edit_organization)
@@ -911,6 +924,7 @@ class HousesPage(QWidget):
             self._houses_sync_worker,
             self._management_worker,
             self._work_lists_sync_worker,
+            getattr(getattr(self, "portfolio_import", None), "worker", None),
         )
         return any(worker is not None and worker.isRunning() for worker in workers)
 

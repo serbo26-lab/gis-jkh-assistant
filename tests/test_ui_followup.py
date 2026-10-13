@@ -37,8 +37,15 @@ def test_house_commands_follow_the_registry_and_preparation(desktop):
     flow = page.house_download_actions.layout()
     commands = [flow.itemAt(i).widget() for i in range(1, flow.count())]
     assert commands == [page.sync_houses_button, page.sync_all_management_button,
-                        page.sync_all_work_lists_button, page.export_house_data_button,
-                        page.import_house_data_button]
+                        page.sync_all_work_lists_button, page.sync_all_plans_button,
+                        page.sync_all_fixations_button, page.sync_all_quality_button]
+    assert flow.itemAt(0).widget().text() == "Импорт из ГИС ЖКХ:"
+    local_flow = page.house_local_actions.layout()
+    assert local_flow.itemAt(0).widget().text() == "Импорт локальный:"
+    assert [local_flow.itemAt(i).widget() for i in (1, 2)] == [
+        page.export_house_data_button, page.import_house_data_button,
+    ]
+    assert page.house_local_actions.y() >= page.house_download_actions.geometry().bottom()
     assert page.export_house_data_button.text() == "Экспорт шаблона Excel…"
     assert page.import_house_data_button.text() == "Импорт тарифов и площадей из Excel…"
 
