@@ -155,10 +155,19 @@ def test_frozen_header_updates_after_qt_style_notifications(desktop):
     # Resizing a second view inside Qt's style/header signal is unsafe.
     assert frozen.view.columnWidth(0) == before
     assert frozen._sync_timer.isActive()
-    QTest.qWait(10)
+    # Name sizing and the frozen view deliberately use separate queued passes.
+    # Check convergence, without assuming every Windows runner paints in 10 ms.
+    for _ in range(20):
+        QTest.qWait(10)
+        if frozen.view.columnWidth(0) == p.table.columnWidth(0):
+            break
     assert frozen.view.columnWidth(0) == p.table.columnWidth(0)
     desktop.window.settings_page.dark_radio.click()
-    QTest.qWait(10)
+    for _ in range(20):
+        QTest.qWait(10)
+        if (frozen.view.horizontalHeader().height() == p.table.horizontalHeader().height()
+                and frozen.view.rowHeight(0) == p.table.rowHeight(0)):
+            break
     assert frozen.view.horizontalHeader().height() == p.table.horizontalHeader().height()
     assert frozen.view.rowHeight(0) == p.table.rowHeight(0)
 
