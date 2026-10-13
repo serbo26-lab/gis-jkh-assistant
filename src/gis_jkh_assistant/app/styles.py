@@ -119,6 +119,7 @@ QPushButton#PrimaryButton:disabled { color: @muted_text; background: @readonly; 
 QPushButton:disabled, QToolButton:disabled { color: @muted_text; background: @readonly; border-color: @border; }
 QPushButton#DangerButton { color: @danger; border-color: @danger; }
 QPushButton#DangerButton:hover { background: @danger_surface; border-color: @danger; }
+QPushButton#DangerButton:disabled { color: @muted_text; background: @readonly; border-color: @border; }
 QPushButton#MonthButton { padding: 2px 3px; min-height: 28px; font-size: 9pt; }
 QPushButton[compactCommand="true"], QComboBox[compactCommand="true"] { font-size: 9pt; min-height: 18px; padding: 1px 5px; }
 QLabel#ToolbarGroupLabel { font-size: 9pt; }

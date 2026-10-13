@@ -32,6 +32,8 @@ class AssessmentHeader(ReadableHeader):
             button.setObjectName("AssessmentSelectionButton")
             button.setProperty("compactCommand", True)
             button.setAccessibleName(label)
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            button.installEventFilter(self)
             button.setToolTip(label + ". Акты и значения перерасчёта сохраняются.")
             set_button_icon(button, "check", semantic, 16)
             button.show()
@@ -87,6 +89,17 @@ class AssessmentHeader(ReadableHeader):
     def scrollContentsBy(self, dx, dy):  # noqa: N802
         super().scrollContentsBy(dx, dy)
         self._queue_fit()
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if watched in self.commands and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                # QHeaderView inherits QAbstractItemView's grid navigation,
+                # which consumes Tab from embedded buttons. Traverse the real
+                # window focus chain instead of navigating header cells.
+                backwards = (event.key() == Qt.Key.Key_Backtab
+                             or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+                return self.window().focusNextPrevChild(not backwards)
+        return super().eventFilter(watched, event)
 
     def event(self, event):
         result = super().event(event)

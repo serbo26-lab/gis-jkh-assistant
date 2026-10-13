@@ -493,6 +493,8 @@ def build_monthly(page, kind: str):
              page.month_combo, *page.scope_switcher.buttons.values(), page.workflow.primary,
              page.workflow.help_button, page.month_details_button, *page.month_buttons.values()]
     chain += [page.month_acts_button, page.selection_actions, page.acts_actions, page.data_actions] if quality else [page.plan_reference_checkbox, page.data_actions]
+    if quality:
+        chain += [page.include_all_button, page.exclude_all_button]
     chain += [page.table]
     for before, after in zip(chain, chain[1:]):
         QWidget.setTabOrder(before, after)

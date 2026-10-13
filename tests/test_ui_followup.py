@@ -171,7 +171,8 @@ def test_header_selection_preserves_act_links_and_recalculation(desktop):
         assert command.accessibleName()
         assert not command.icon().isNull()
         assert_inside(command, header)
-        command.click()
+        command.setFocus()
+        QTest.keyClick(command, Qt.Key_Space)
         settle()
         assert replace(page.store.get_item(item.id), included=before.included) == before
         assert page.store.get_item(item.id).included is included
@@ -180,3 +181,18 @@ def test_header_selection_preserves_act_links_and_recalculation(desktop):
         assert page.table.item(0, 0).checkState() == (Qt.Checked if included else Qt.Unchecked)
     # The commands remain real buttons, rather than a clickable painted glyph.
     assert all(isinstance(command, QPushButton) for command in header.commands)
+
+
+def test_header_selection_buttons_have_sequential_keyboard_focus(desktop):
+    page = _select_page(desktop, 4)
+    page.include_all_button.setFocus()
+    settle()
+    assert desktop.app.focusWidget() is page.include_all_button
+    QTest.keyClick(page.include_all_button, Qt.Key_Tab)
+    assert desktop.app.focusWidget() is page.exclude_all_button
+    QTest.keyClick(page.exclude_all_button, Qt.Key_Backtab)
+    assert desktop.app.focusWidget() is page.include_all_button
+    QTest.keyClick(page.include_all_button, Qt.Key_Tab)
+    assert desktop.app.focusWidget() is page.exclude_all_button
+    QTest.keyClick(page.exclude_all_button, Qt.Key_Tab)
+    assert desktop.app.focusWidget() is page.table
