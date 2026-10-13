@@ -39,7 +39,13 @@ class HouseImportPreview(QDialog):
         row = self.table.rowCount()
         self.table.insertRow(row)
         for column, value in enumerate((address, field, "Не указано" if before is None else before, after)):
-            self.table.setItem(row, column, QTableWidgetItem(str(value)))
+            item = QTableWidgetItem(str(value))
+            item.setToolTip(str(value))
+            self.table.setItem(row, column, item)
+
+    def showEvent(self, event):  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self.table.resizeRowsToContents()
 
 
 class HouseMatchDialog(QDialog):
