@@ -205,12 +205,6 @@ class ActionToolbar(QFrame):
         self.layout.setContentsMargins(10, 8, 10, 8)
         self.layout.setSpacing(8)
 
-    def add_label(self, text: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("ToolbarGroupLabel")
-        self.layout.addWidget(label)
-        return label
-
     def add_widget(self, widget: QWidget, stretch: int = 0) -> QWidget:
         self.layout.addWidget(widget, stretch)
         return widget

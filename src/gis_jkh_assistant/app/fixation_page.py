@@ -806,12 +806,6 @@ class FixationPage(QWidget):
         else:
             self._publish_selected_month()
 
-    def _clear_scope(self) -> None:
-        if not self._scope_is_period():
-            self._clear_month()
-            return
-        self._clear_period()
-
     def _clear_period(self) -> None:
         if not self._current_work_list_id or self.year_combo.currentData() is None:
             return

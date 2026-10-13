@@ -350,12 +350,6 @@ class QualityAssessmentPage(QWidget):
         else:
             self._auto_generate_month_act()
 
-    def _clear_scope_values(self) -> None:
-        if self._scope_is_period():
-            self._clear_year_values()
-        else:
-            self._clear_month_values()
-
     def _load_scope_from_gis(self) -> None:
         if self._scope_is_period():
             self._load_year_from_gis()

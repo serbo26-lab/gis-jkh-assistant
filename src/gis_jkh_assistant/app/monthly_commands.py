@@ -1,7 +1,6 @@
 """Explicit month and range commands using the existing operation handlers."""
 from PySide6.QtWidgets import QLabel
 
-from .action_layout import ActionFlowLayout
 from .widgets import SafeComboBox
 from .workflow_widgets import CommandGroup, DangerZone
 
@@ -12,19 +11,6 @@ def period_months(page, active):
     first = int(page.period_from.currentData() or 1)
     last = int(page.period_to.currentData() or 12)
     return tuple(month for month in active if first <= month <= last)
-
-
-def command_row(card, caption, buttons):
-    row = ActionFlowLayout()
-    label = QLabel(caption)
-    label.setObjectName("ToolbarGroupLabel")
-    row.addWidget(label)
-    for button in buttons:
-        button.setProperty("compactCommand", True)
-        row.addWidget(button)
-        button.show()
-    card.body.addLayout(row)
-    return label
 
 
 def build_commands(page, card, *, quality):

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import base64
-import calendar
-import json
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping
 
@@ -47,10 +45,6 @@ def quality_reduction(
     # a JSON number exactly as the web interface does.
     result = cost_value * days / month_days
     return format(result, "f")
-
-
-def days_in_month(year: int, month: int) -> int:
-    return calendar.monthrange(int(year), int(month))[1]
 
 
 def build_quality_command_payload(
@@ -132,15 +126,3 @@ def build_quality_command_payload(
         "month": int(month),
         "items": result_items,
     }
-
-
-def managed_act_guids(raw: str | None) -> list[str]:
-    if not raw:
-        return []
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if str(item).strip()]

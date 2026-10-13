@@ -3444,28 +3444,6 @@ class Repository:
         )
         self.connection.commit()
 
-    def clear_work_list_gis_project_guid(self, work_list_id: str) -> None:
-        self.connection.execute(
-            """
-            UPDATE work_lists
-            SET gis_work_list_guid = NULL, updated_at = ?
-            WHERE id = ?
-            """,
-            (_now(), work_list_id),
-        )
-        self.connection.commit()
-
-    def clear_work_list_gis_error(self, work_list_id: str) -> None:
-        self.connection.execute(
-            """
-            UPDATE work_lists
-            SET gis_last_error = NULL, updated_at = ?
-            WHERE id = ?
-            """,
-            (_now(), work_list_id),
-        )
-        self.connection.commit()
-
     def delete_work_list(self, work_list_id: str) -> None:
         self.connection.execute("DELETE FROM work_lists WHERE id = ?", (work_list_id,))
         self.connection.commit()
@@ -3474,10 +3452,6 @@ class Repository:
 
 def _month_key(year: int, month: int) -> int:
     return int(year) * 12 + (int(month) - 1)
-
-
-def _year_month_from_key(value: int) -> tuple[int, int]:
-    return value // 12, value % 12 + 1
 
 
 def _validate_month_point(year: int, month: int) -> None:
