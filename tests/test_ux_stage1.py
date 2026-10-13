@@ -37,7 +37,7 @@ def test_quality_expanded_guidance_uses_own_full_width_row_at_150_percent(deskto
     assert workflow.title.isVisibleTo(window)
     assert workflow.detail.isVisibleTo(window)
     assert workflow.help_panel.y() >= workflow.action_row.geometry().bottom()
-    assert workflow.help_panel.width() >= workflow.width() - 20
+    assert workflow.help_panel.width() >= workflow.body.contentsRect().width() - 2
     assert workflow.detail.width() >= workflow.help_panel.width() - 2
     assert workflow.detail.height() + 2 >= workflow.detail.heightForWidth(
         workflow.detail.width()
@@ -59,7 +59,7 @@ def test_quality_narrow_actions_wrap_as_groups_but_not_help_text(desktop):
     page.workflow.help_button.setChecked(True)
     window.resize(970, 800)
     _settle(desktop.app)
-    assert page.workflow.help_panel.width() >= page.workflow.width() - 20
+    assert page.workflow.help_panel.width() >= page.workflow.body.contentsRect().width() - 2
     assert page.workflow.detail.isVisibleTo(window)
     assert not page.workflow.primary.geometry().intersects(
         page.workflow.help_button.geometry()

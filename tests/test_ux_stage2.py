@@ -123,7 +123,11 @@ def test_house_uo_commands_live_next_to_org_selector(desktop):
     assert page.add_house_button.text() == "Добавить дом"
     assert page.sync_houses_button.text() == "Загрузить все дома УО"
     assert page.bulk_actions_button.text() == "Обновить все дома УО"
-    text = [a.text() for a in page.files_actions_button.menu_model.actions()]
+    files_menu = page.files_actions_button.menu()
+    assert files_menu is not None
+    actions = files_menu.actions()
+    assert page.import_houses_action in actions
+    text = [action.text() for action in actions if not action.isSeparator()]
     assert any("Экспорт Excel" in name for name in text)
     assert any("Импорт Excel" in name for name in text)
 

@@ -378,7 +378,8 @@ def build_monthly(page, kind: str):
     page.scope_hint.setWordWrap(True)
     from PySide6.QtWidgets import QSizePolicy
     page.scope_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-    scope.addWidget(page.scope_hint)
+    if not quality:
+        scope.addWidget(page.scope_hint)
     scope.addWidget(page.month_details_button)
     page.scope_row = QWidget()
     page.scope_row.setLayout(scope)
@@ -386,6 +387,8 @@ def build_monthly(page, kind: str):
     page.workflow.compact_scope = page.scope_row
     if quality:
         page.workflow.place_help_below_actions()
+        page.workflow.body.setContentsMargins(8, 2, 8, 2)
+        page.workflow.body.setSpacing(2)
     page.workflow.title.hide()
     page.workflow.help_button.toggled.connect(page.workflow.title.setVisible)
     if quality:
@@ -404,7 +407,11 @@ def build_monthly(page, kind: str):
         page.action_months_button.toggled.connect(page.action_months_detail.setVisible)
         action_summary = QVBoxLayout()
         action_summary.setContentsMargins(0, 0, 0, 0)
-        action_summary.addWidget(page.action_scope_hint)
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(8)
+        summary_row.addWidget(page.scope_hint, 1)
+        summary_row.addWidget(page.action_scope_hint, 3)
+        action_summary.addLayout(summary_row)
         action_summary.addWidget(page.action_months_button)
         action_summary.addWidget(page.action_months_detail)
         page.workflow.body.insertLayout(
@@ -514,11 +521,12 @@ def _fixation_commands(page):
 
 def _quality_data(page, root):
     card = workspace_card("Работы в оценке качества")
+    card.body.setContentsMargins(8, 3, 8, 3)
     page.selection_actions = command_menu(
-        "Оценка: включение работ", (page.include_all_button, page.exclude_all_button)
+        "Оценка: работы", (page.include_all_button, page.exclude_all_button)
     )
     page.acts_actions = command_menu(
-        "Документы: подготовка актов",
+        "Документы: акты",
         (page.auto_act_month_button, page.auto_act_period_button,
          page.create_act_button, page.upload_acts_button), name="act",
     )
@@ -531,16 +539,13 @@ def _quality_data(page, root):
         card.actions.addWidget(button)
         button.show()
     page.table = viewport_table(table(["В оценку", "Работа / услуга", "Стоимость в\nежемесячной плате", "Дней ненадлежащего\nкачества", "Дней в\nмесяце", "Уменьшение\nплаты", "Акты"], name_column=1))
+    page.table.setProperty("preferredVisibleRows", 5)
     page.selected_act_button = QPushButton("Акты выбранной работы…")
     page.selected_act_button.setToolTip(
         "Открыть акты выбранной строки без горизонтальной прокрутки таблицы"
     )
     page.selected_act_button.setEnabled(False)
     page.selected_act_button.clicked.connect(page._open_selected_acts)
-    row_tools = QHBoxLayout()
-    row_tools.addWidget(page.selected_act_button)
-    row_tools.addStretch(1)
-    card.body.addLayout(row_tools)
     card.body.addWidget(page.table, 1)
     page.table.currentCellChanged.connect(
         lambda *_: page._update_selected_act_button()
@@ -562,6 +567,7 @@ def _quality_data(page, root):
     page.acts_explanation.hide()
     help_button.toggled.connect(page.acts_explanation.setVisible)
     footer = ActionFlowLayout()
+    footer.addWidget(page.selected_act_button)
     page.month_status.setProperty("flowFullText", True)
     page.month_acts_summary.setProperty("flowFullText", True)
     footer.addWidget(page.month_status)
@@ -648,8 +654,10 @@ def resize_table_rows(widget, max_rows):
     fit_table_rows(widget)
     if widget.property("viewportManaged"):
         widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        row = max([widget.verticalHeader().defaultSectionSize()] + [widget.rowHeight(i) for i in range(min(4, widget.rowCount()))])
-        widget.setMinimumHeight(widget.horizontalHeader().height() + row * 4 + widget.horizontalScrollBar().sizeHint().height() + widget.frameWidth() * 2 + 4)
+        visible_rows = int(widget.property("preferredVisibleRows") or 4)
+        row = max([widget.verticalHeader().defaultSectionSize()] + [widget.rowHeight(i) for i in range(min(visible_rows, widget.rowCount()))])
+        extra = 0 if visible_rows >= 5 else 4
+        widget.setMinimumHeight(widget.horizontalHeader().height() + row * visible_rows + widget.horizontalScrollBar().sizeHint().height() + widget.frameWidth() * 2 + extra)
         widget.setMaximumHeight(16777215)
         return
     widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if widget.rowCount() > max_rows else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
