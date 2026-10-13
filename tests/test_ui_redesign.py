@@ -64,14 +64,14 @@ def test_registry_menu_follows_live_command_state_without_stray_buttons(desktop,
     page._refresh_workflow()
     for menu in (page.gis_actions, page.files_actions_button, page.composition_actions):
         menu.sync()
-        assert menu.isVisibleTo(page) if menu is not page.gis_actions else not menu.isVisibleTo(page)
+        assert menu.isVisibleTo(page) if menu is page.files_actions_button else not menu.isVisibleTo(page)
         for action, source, when in menu.entries:
             assert action.isEnabled() == source.isEnabled()
             if source.toolTip():
                 assert action.toolTip() == source.toolTip()
             assert action.isVisible() == (when is None or bool(when()))
-    assert not page.cancel_gis_button.isVisibleTo(page)
-    assert not page.delete_button.isVisibleTo(page)
+    assert page.cancel_gis_button.isVisibleTo(page) == (state == "APPROVED")
+    assert page.delete_button.isVisibleTo(page)
     cancellation = next(action for action, source, _when in page.gis_actions.entries if source is page.cancel_gis_button)
     assert cancellation.isVisible() == (state == "APPROVED")
     page._integration_busy = False

@@ -106,7 +106,7 @@ def test_settings_separate_reconnection_and_installation(desktop):
 def test_work_list_groups_remain_distinct_and_commands_reachable(desktop):
     page = desktop.window.work_lists_page
     assert page.composition_actions.text() == "Состав и шаблоны"
-    assert page.lazy_fill_button.text() == "Распределить сумму…"
+    assert page.lazy_fill_button.text() == "Распределение суммы…"
     assert page.gis_actions.text() == "Обмен с ГИС ЖКХ"
     assert page.files_actions_button.text() == "Файлы Excel"
     sources = [button for _act, button, _when in page.composition_actions.entries]

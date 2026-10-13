@@ -68,7 +68,7 @@ QWidget#Sidebar { background: @sidebar; border-right: 1px solid @border; }
 QStackedWidget, QLabel, QScrollArea#PageScroll { background: transparent; }
 QScrollArea#PageScroll { border: none; }
 QFrame#Card, QScrollArea#Card, QFrame#ContextBar, QFrame#ActionToolbar,
-QFrame#WorkflowPanel, QFrame#SidebarStatusCard {
+QFrame#WorkflowPanel, QFrame#SidebarStatusCard, QFrame#CommandGroup {
     background: @surface; border: 1px solid @border; border-radius: 5px;
 }
 QFrame#HouseSection { background: transparent; border: none; border-bottom: 1px solid @border; }

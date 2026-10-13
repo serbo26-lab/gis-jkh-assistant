@@ -23,6 +23,7 @@ class ActionFlowLayout(QLayout):
             else:
                 widget.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._items.append(item)
+        self.invalidate()
 
     def addStretch(self, _stretch=0):  # noqa: N802 - compatible action-row API
         # Commands align together; empty flexible spacers cannot divide a group.
@@ -35,7 +36,9 @@ class ActionFlowLayout(QLayout):
         return self._items[index] if 0 <= index < len(self._items) else None
 
     def takeAt(self, index):  # noqa: N802 - Qt API
-        return self._items.pop(index) if 0 <= index < len(self._items) else None
+        item = self._items.pop(index) if 0 <= index < len(self._items) else None
+        self.invalidate()
+        return item
 
     def expandingDirections(self):  # noqa: N802 - Qt API
         return Qt.Orientation(0)
@@ -52,6 +55,10 @@ class ActionFlowLayout(QLayout):
 
     def sizeHint(self):  # noqa: N802 - Qt API
         return self.minimumSize()
+
+    def natural_width(self):
+        items = [item for item in self._items if not item.isEmpty()]
+        return sum(item.sizeHint().width() for item in items) + max(0, len(items) - 1) * max(6, self.spacing())
 
     def minimumSize(self):  # noqa: N802 - Qt API
         result = QSize()
@@ -92,3 +99,83 @@ class ActionFlowLayout(QLayout):
             x += size.width() + gap
             row_height = max(row_height, size.height())
         return y + row_height - rect.y() + margins.bottom()
+
+
+class _PairedFlowLayout(QLayout):
+    """Keep related editing commands left and publication right, or stack them."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(6)
+
+    def addItem(self, item):  # noqa: N802
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation.Horizontal
+
+    def hasHeightForWidth(self):  # noqa: N802
+        return True
+
+    def heightForWidth(self, width):  # noqa: N802
+        return self._arrange(QRect(0, 0, width, 0), measure=True)
+
+    def minimumSize(self):  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def sizeHint(self):  # noqa: N802
+        return QSize(sum(item.widget().layout().natural_width() for item in self._items) + self.spacing(),
+                     self.minimumSize().height())
+
+    def setGeometry(self, rect):  # noqa: N802
+        super().setGeometry(rect)
+        self._arrange(rect)
+
+    def _arrange(self, rect, measure=False):
+        if len(self._items) != 2:
+            return 0
+        left, right = self._items
+        width = max(1, rect.width())
+        right_width = min(width, right.widget().layout().natural_width())
+        inline = left.widget().layout().natural_width() + right_width + self.spacing() <= width
+        left_width = max(1, width - right_width - self.spacing()) if inline else width
+        left_height = left.heightForWidth(left_width)
+        right_height = right.heightForWidth(right_width)
+        if not measure:
+            left.setGeometry(QRect(rect.x(), rect.y(), left_width, left_height))
+            right.setGeometry(QRect(rect.right() - right_width + 1,
+                                   rect.y() if inline else rect.y() + left_height + self.spacing(),
+                                   right_width, right_height))
+        return max(left_height, right_height) if inline else left_height + self.spacing() + right_height
+
+
+class PairedActionBar(QWidget):
+    """One toolbar with independent editing/publication groups and no truncation."""
+
+    def __init__(self, left_commands, right_commands, parent=None):
+        super().__init__(parent)
+        layout = _PairedFlowLayout(self)
+        self.groups = []
+        for commands in (left_commands, right_commands):
+            group = QWidget()
+            flow = ActionFlowLayout(group)
+            for button in commands:
+                button.setProperty("compactCommand", True)
+                flow.addWidget(button)
+                button.show()
+            self.groups.append(group)
+            layout.addWidget(group)

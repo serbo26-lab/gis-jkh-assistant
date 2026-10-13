@@ -120,7 +120,7 @@ def test_act_work_selection_shows_document_and_updates_count(desktop):
 def test_house_uo_commands_live_next_to_org_selector(desktop):
     page = desktop.window.houses_page
     assert page.organization_actions_button.parentWidget() is page.organization_combo.parentWidget()
-    assert page.add_house_button.text() == "Добавить дом"
+    assert page.add_house_button.text() == "Добавить дом вручную"
     assert page.sync_houses_button.text() == "Загрузить дома"
     assert page.sync_all_management_button.isVisibleTo(page)
     assert page.sync_all_work_lists_button.isVisibleTo(page)

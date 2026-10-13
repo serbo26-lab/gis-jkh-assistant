@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, QTimer, Signal, Qt
+from PySide6.QtCore import QEvent, QObject, QTimer, Signal, Qt
 from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
-    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
 from .icons import icon, set_button_icon
@@ -19,6 +19,131 @@ def repolish(widget: QWidget) -> None:
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     widget.update()
+
+
+class ContentHeightGuard(QObject):
+    """Reserve wrapped content height before a splitter compresses the panel.
+
+    Qt's minimumSizeHint does not include height-for-width at the actual width.
+    Calculate it after layout events, never inside a stylesheet/paint callback.
+    The owned timer is cancelled with its widget.
+    """
+
+    def __init__(self, widget):
+        super().__init__(widget)
+        self.widget = widget
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.fit)
+        widget.installEventFilter(self)
+
+    def queue(self):
+        if not self.timer.isActive():
+            self.timer.start(0)
+
+    def fit(self):
+        widget = self.widget
+        layout = widget.layout()
+        if not widget.isVisible() or layout is None:
+            return
+        margins = layout.contentsMargins()
+        width = max(1, widget.contentsRect().width() - margins.left() - margins.right())
+        heights = []
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item.isEmpty():
+                continue
+            child = item.widget()
+            if child is not None:
+                height = max(child.minimumHeight(), child.minimumSizeHint().height())
+                if child.hasHeightForWidth():
+                    height = max(height, child.heightForWidth(width))
+            else:
+                height = max(0, item.minimumSize().height())
+                if item.hasHeightForWidth():
+                    height = max(height, item.heightForWidth(width))
+            if height > 0:
+                heights.append(height)
+        frame = widget.contentsMargins()
+        height = (frame.top() + frame.bottom() + margins.top() + margins.bottom()
+                  + sum(heights) + layout.spacing() * max(0, len(heights) - 1))
+        if widget.minimumHeight() != height:
+            widget.setMinimumHeight(height)
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() in (QEvent.Type.Show, QEvent.Type.Resize, QEvent.Type.LayoutRequest,
+                            QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self.queue()
+        return False
+
+
+class ReservedVBoxLayout(QVBoxLayout):
+    """The guard measures wrapping; a parent box must respect the resulting minimum.
+
+    Qt otherwise substitutes a cached height-for-width smaller than the widget's
+    new minimum, advances its next item by that size and overlaps the panels.
+    Internal heightForWidth remains usable for the deferred measurement.
+    """
+
+    def hasHeightForWidth(self):  # noqa: N802 - Qt API
+        return False
+
+
+class WorkspaceSplitter(QSplitter):
+    """Refresh cached splitter minima when wrapped child panels change height."""
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Vertical, parent)
+        self._minimum_timer = QTimer(self)
+        self._minimum_timer.setSingleShot(True)
+        self._minimum_timer.timeout.connect(self._fit_minimum)
+
+    def addWidget(self, widget):  # noqa: N802 - Qt API
+        super().addWidget(widget)
+        widget.installEventFilter(self)
+        self._queue_minimum()
+
+    def _queue_minimum(self):
+        if not self._minimum_timer.isActive():
+            self._minimum_timer.start(0)
+
+    def _fit_minimum(self):
+        if not self.isVisible():
+            return
+        children = [self.widget(i) for i in range(self.count()) if not self.widget(i).isHidden()]
+        height = sum(max(widget.minimumHeight(), widget.minimumSizeHint().height()) for widget in children)
+        height += max(0, len(children) - 1) * self.handleWidth()
+        if self.minimumHeight() != height:
+            self.setMinimumHeight(height)
+            self.refresh()
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Resize, QEvent.Type.Show,
+                            QEvent.Type.Hide, QEvent.Type.FontChange):
+            self._queue_minimum()
+        return False
+
+    def showEvent(self, event):  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._queue_minimum()
+
+
+class CommandGroup(QFrame):
+    """A compact framed operation scope; commands wrap, captions stay readable."""
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setObjectName("CommandGroup")
+        self.setAccessibleName(title)
+        self.body = ReservedVBoxLayout(self)
+        self.body.setContentsMargins(8, 4, 8, 6)
+        self.body.setSpacing(3)
+        self.caption = QLabel(title)
+        self.caption.setObjectName("SectionTitle")
+        self.body.addWidget(self.caption)
+        self.actions = ActionFlowLayout()
+        self.body.addLayout(self.actions)
+        self.height_guard = ContentHeightGuard(self)
 
 
 class PageHeader(QWidget):
@@ -186,10 +311,10 @@ class ContextBar(QFrame):
 
 
 class SectionCard(QFrame):
-    def __init__(self, title: str = "", parent=None):
+    def __init__(self, title: str = "", parent=None, *, fit_content=False, reserve_height=False):
         super().__init__(parent)
         self.setObjectName("Card")
-        self.body = QVBoxLayout(self)
+        self.body = ReservedVBoxLayout(self) if fit_content or reserve_height else QVBoxLayout(self)
         self.body.setContentsMargins(8, 6, 8, 8)
         self.body.setSpacing(6)
         self.actions = ActionFlowLayout()
@@ -200,12 +325,14 @@ class SectionCard(QFrame):
             label.setWordWrap(True)
             self.body.addWidget(label)
         self.body.addLayout(self.actions)
+        if fit_content:
+            self.height_guard = ContentHeightGuard(self)
 
 
 class WorkspaceCard(SectionCard):
     """Respect wrapped command/error heights when a splitter sizes the workspace."""
     def __init__(self):
-        super().__init__()
+        super().__init__(reserve_height=True)
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
         self._fit_timer.timeout.connect(self._fit_minimum)
@@ -304,7 +431,7 @@ class WorkflowPanel(QFrame):
         self._key: str | None = None
         self._compact = True
         self.commands: dict[str, QPushButton | Callable] = {}
-        self.body = QVBoxLayout(self)
+        self.body = ReservedVBoxLayout(self)
         self.body.setContentsMargins(8, 6, 8, 6)
         self.body.setSpacing(4)
         self.steps: list[QLabel] = []
@@ -365,6 +492,7 @@ class WorkflowPanel(QFrame):
         self._text_metrics_timer = QTimer(self)
         self._text_metrics_timer.setSingleShot(True)
         self._text_metrics_timer.timeout.connect(self._fit_text_metrics)
+        self.height_guard = ContentHeightGuard(self)
         self.set_compact(True)
 
     def _show_help(self, expanded):
@@ -383,6 +511,7 @@ class WorkflowPanel(QFrame):
                 required = max(label.fontMetrics().height(), label.heightForWidth(label.width()))
                 if label.minimumHeight() != required:
                     label.setMinimumHeight(required)
+        self.height_guard.queue()
 
     def place_help_below_actions(self) -> None:
         """Put expanded guidance on its own full-width row for dense monthly pages.

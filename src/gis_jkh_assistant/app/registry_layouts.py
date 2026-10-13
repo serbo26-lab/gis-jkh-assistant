@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .action_layout import ActionFlowLayout
+from .action_layout import ActionFlowLayout, PairedActionBar
 from .page_layouts import command, command_menu, context_for, page_root, table, viewport_table, workspace_card
 from .icons import set_button_icon
 from .registry_workflow import check_work_list, refresh_work_lists, replace_from_template
@@ -36,7 +36,7 @@ class WorkListDetailsCard(SectionCard):
     """Keep the period visible without giving technical metadata the whole page."""
 
     def __init__(self):
-        super().__init__("Период и параметры выбранного перечня")
+        super().__init__("Период и параметры выбранного перечня", fit_content=True)
         self.period_grid = QGridLayout()
         self.summary_grid = QGridLayout()
         self.period_fields = []
@@ -97,6 +97,9 @@ def disclosure(title: str, body: QWidget, root, *, expanded: bool = False) -> QP
         toggle.setText(f"{'Скрыть' if expanded else 'Показать'} {title[:1].lower() + title[1:]}")
         set_button_icon(toggle, "chevron_up" if expanded else "chevron_down")
         toggle.setAccessibleDescription("Разворачивает или скрывает дополнительные поля")
+        body.updateGeometry()
+        if root.parentWidget():
+            root.parentWidget().updateGeometry()
 
     toggle.toggled.connect(change)
     change(expanded)
@@ -310,27 +313,38 @@ def build_work_lists(page):
     page.composition_actions.menu_model.addSection("Выбранные строки перечня")
     for button in (page.remove_works_button, page.clear_works_button, page.delete_button):
         page.composition_actions.add_command(button)
-    for button in (page.add_works_button, page.composition_actions, page.lazy_fill_button):
-        button.show()
-        page.items_card.actions.addWidget(button)
-    local_vs_exchange = QWidget()
-    local_vs_exchange.setFixedWidth(12)
-    page.items_card.actions.addWidget(local_vs_exchange)
+    page.composition_actions.setParent(page.command_host)
+    page.composition_actions.hide()
     page.gis_actions.hide()
     page.gis_actions.setParent(page.command_host)
-    page.items_card.actions.addWidget(page.files_actions_button)
-    from .monthly_commands import command_row
-    command_row(page.items_card, "Подготовка:", (page.directory_button, page.load_export_template_button))
-    command_row(page.items_card, "ГИС ЖКХ:", (page.load_gis_lists_button, page.project_save_button,
-                                              page.approve_gis_button, page.sync_gis_button))
     page.registry_danger = ActionMenuButton("Опасные действия…", "danger")
     page.registry_danger.add_command(page.cancel_gis_button, when=cancellation_visible)
-    page.items_card.actions.addWidget(page.registry_danger)
+    page.registry_danger.setParent(page.command_host)
+    page.registry_danger.hide()
+    page.preparation_bar = PairedActionBar(
+        (page.creation_toggle, page.directory_button, page.load_export_template_button,
+         page.load_gis_lists_button, page.files_actions_button),
+        (page.delete_button, page.cancel_gis_button),
+    )
+    page.preparation_bar.groups[0].setAccessibleName("Подготовка перечня")
+    page.preparation_bar.groups[1].setAccessibleName("Удаление и отмена выбранного перечня")
+    root.insertWidget(root.indexOf(page.context_status) + 1, page.preparation_bar)
+    page.editing_bar = PairedActionBar(
+        (page.add_works_button, page.remove_works_button, page.replace_from_template_button,
+         page.clear_works_button, page.templates_button, page.save_as_template_button,
+         page.lazy_fill_button),
+        (page.project_save_button, page.approve_gis_button, page.sync_gis_button),
+    )
+    page.editing_bar.groups[0].setAccessibleName("Редактирование состава перечня")
+    page.editing_bar.groups[1].setAccessibleName("Размещение перечня в ГИС")
+    page.items_card.body.addWidget(page.editing_bar)
+    page.remove_works_button.setText("Удалить строку")
+    page.replace_from_template_button.setText("Заменить состав по шаблону…")
+    page.lazy_fill_button.setText("Распределение суммы…")
     page.add_works_button.setProperty("workflowAlternate", True)
     root.removeWidget(page.details_toggle)
     root.removeWidget(details)
     page.details_toggle.setText("Параметры перечня")
-    page.lazy_fill_button.setText("Распределить сумму…")
     page.lazy_fill_button.setToolTip("Распределить сумму между работами и услугами выбранного перечня")
     page.details_toggle.hide()
     details.show()
@@ -357,8 +371,7 @@ def build_work_lists(page):
     page._set_editor_enabled(False)
     from .work_list_selector import install_selector
     install_selector(page, root, page.work_lists)
-    page.creation_toggle.setParent(page.page_content)
-    page.page_header.layout().insertWidget(1, page.creation_toggle)
+    # Creation belongs to preparation beside the selected registry, not the title.
 
 
 def mirror_registry(page):
@@ -494,37 +507,35 @@ def adapt_houses(page):
         button.setParent(page.command_host)
     page.organization_sync_card = QWidget(page.command_host)
     page.manual_actions_card = QWidget(page.command_host)
-    toolbar = QWidget()
-    actions = ActionFlowLayout(toolbar)
-    actions.setSpacing(6)
-    actions.addWidget(page.add_house_button)
-    page.add_house_button.show()
-    page.import_button.setText("Дома из XLSX…")
+    page.add_house_button.setText("Добавить дом вручную")
+    page.import_button.setText("Импортировать дома из XLSX…")
     set_button_icon(page.import_button, "files")
-    actions.addWidget(page.import_button)
-    page.import_button.show()
-    portfolio_gap = QWidget()
-    portfolio_gap.setFixedWidth(12)
-    actions.addWidget(portfolio_gap)
+    house_list_actions = QWidget()
+    page.house_list_actions = house_list_actions
+    house_actions = ActionFlowLayout(house_list_actions)
+    for button in (page.add_house_button, page.import_button):
+        button.setProperty("compactCommand", True)
+        house_actions.addWidget(button)
+        button.show()
+    list_layout = page.house_list.parentWidget().layout()
+    list_layout.addWidget(house_list_actions)
     page.bulk_actions_button.hide()
     page.bulk_actions_button.setParent(page.command_host)
     page.files_actions_button.hide()
     page.files_actions_button.setParent(page.command_host)
-    for caption, buttons in (
-        ("ГИС ЖКХ · все дома выбранной УО:", (page.sync_houses_button, page.sync_all_management_button, page.sync_all_work_lists_button)),
-        ("Площади и тарифы:", (page.export_house_data_button, page.import_house_data_button)),
-    ):
-        row = QWidget()
-        flow = ActionFlowLayout(row)
-        label = QLabel(caption)
-        label.setObjectName("ToolbarGroupLabel")
-        flow.addWidget(label)
-        for button in buttons:
-            flow.addWidget(button)
-            button.show()
-        root.insertWidget(3, row)
-    page.export_house_data_button.setText("Экспорт в Excel…")
-    page.import_house_data_button.setText("Импорт из Excel…")
+    page.house_download_actions = QWidget()
+    flow = ActionFlowLayout(page.house_download_actions)
+    label = QLabel("Все дома выбранной УО:")
+    label.setObjectName("ToolbarGroupLabel")
+    flow.addWidget(label)
+    for button in (page.sync_houses_button, page.sync_all_management_button, page.sync_all_work_lists_button,
+                   page.export_house_data_button, page.import_house_data_button):
+        button.setProperty("compactCommand", True)
+        flow.addWidget(button)
+        button.show()
+    root.insertWidget(3, page.house_download_actions)
+    page.export_house_data_button.setText("Экспорт шаблона Excel…")
+    page.import_house_data_button.setText("Импорт тарифов и площадей из Excel…")
     page.sync_houses_button.setText("Загрузить дома")
     page.sync_all_management_button.setText("Загрузить управление")
     page.sync_all_work_lists_button.setText("Загрузить перечни")
@@ -533,7 +544,6 @@ def adapt_houses(page):
     page.workflow.direct_keys = {"organization_load", "load"}
     page.workflow.detail.setText("Управление, перечни и площади можно загрузить отдельно; эти шаги необязательны.")
 
-    root.insertWidget(3, toolbar)
     # Preserve existing autosave widgets and signals while moving deletion to the detail.
     page.delete_house_button.parentWidget().layout().removeWidget(page.delete_house_button)
     page.delete_house_button.hide()

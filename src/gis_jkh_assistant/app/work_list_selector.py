@@ -1,8 +1,8 @@
 """Visible registry using the existing selectors as the single selection source."""
 from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHeaderView, QSizePolicy, QSplitter, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QHeaderView, QSizePolicy, QTableWidget,
+    QTableWidgetItem, QWidget,
 )
 
 
@@ -107,7 +107,18 @@ class WorkListSelector(QTableWidget):
                 preferred = int(saved) if saved and saved.isdigit() else self.maximumHeight()
                 self.page.workspace_splitter.setSizes([preferred, max(100, self.page.height() - preferred)])
                 self._initial_height_applied = True
-            self.verticalScrollBar().setValue(scroll)
+            if owner in self._scroll_positions:
+                self.verticalScrollBar().setValue(scroll)
+            elif current >= 0:
+                self.scrollToItem(self.item(current, 0))
+            # Preserve deliberate browsing, but don't leave a formerly visible
+            # selection cut in half when an expanded panel reduces this viewport.
+            selected = self.item(current, 0) if current >= 0 else None
+            if selected is not None:
+                rect = self.visualItemRect(selected)
+                viewport = self.viewport().rect()
+                if rect.intersects(viewport) and not viewport.contains(rect):
+                    self.scrollToItem(selected)
         finally:
             self.blockSignals(False)
             self._syncing = False
@@ -121,6 +132,11 @@ class WorkListSelector(QTableWidget):
             self.source.setCurrentRow(row)
         self.queue_sync()  # A rejected selection is restored by its controller.
 
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if hasattr(self, "_timer"):
+            self.queue_sync()
+
     def eventFilter(self, watched, event):  # noqa: N802
         if event.type() in (QEvent.Type.EnabledChange, QEvent.Type.FontChange, QEvent.Type.StyleChange):
             self.queue_sync()
@@ -132,7 +148,8 @@ def install_selector(page, root, source, *, start=2):
     source.hide()
     page.list_selector = WorkListSelector(page, source)
     workspace = QWidget()
-    body = QVBoxLayout(workspace)
+    from .workflow_widgets import ContentHeightGuard, ReservedVBoxLayout, WorkspaceSplitter
+    body = ReservedVBoxLayout(workspace)
     body.setContentsMargins(0, 0, 0, 0)
     body.setSpacing(4)
     while root.count() > start:
@@ -141,7 +158,10 @@ def install_selector(page, root, source, *, start=2):
             body.addWidget(item.widget(), 1 if item.widget().property("mainWorkspace") else 0)
         else:
             body.addItem(item)
-    page.workspace_splitter = QSplitter(Qt.Orientation.Vertical)
+    # QSplitter otherwise keeps the old workspace minimum after an inline
+    # disclosure grows, letting child widgets overlap instead of scrolling.
+    workspace.height_guard = ContentHeightGuard(workspace)
+    page.workspace_splitter = WorkspaceSplitter()
     page.workspace_splitter.setChildrenCollapsible(False)
     page.workspace_splitter.addWidget(page.list_selector)
     page.workspace_splitter.addWidget(workspace)

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QLabel
 
 from .action_layout import ActionFlowLayout
 from .widgets import SafeComboBox
-from .workflow_widgets import DangerZone
+from .workflow_widgets import CommandGroup, DangerZone
 
 
 def period_months(page, active):
@@ -30,18 +30,27 @@ def command_row(card, caption, buttons):
 def build_commands(page, card, *, quality):
     current = ((page.load_gis_button, page.form_month_button, page.save_button, page.publish_button)
                if quality else (page.load_month_button, page.fill_month_button, page.publish_month_button))
-    current[0].setText("Загрузить из ГИС")
-    current[1].setText("Сформировать" if quality else "Заполнить по плану")
+    current[0].setText("Загрузить месяц из ГИС")
+    current[1].setText("Сформировать оценку месяца" if quality else "Заполнить месяц по плану")
     if quality:
-        page.save_button.setText("Проект в ГИС")
-    current[-1].setText("Разместить")
-    page.current_commands_label = command_row(card, "Текущий месяц", current)
+        page.save_button.setText("Сохранить проект месяца")
+    current[-1].setText("Разместить месяц")
+    page.month_commands_group = CommandGroup("Действия с выбранным месяцем")
+    page.current_commands_label = QLabel()
+    page.current_commands_label.setObjectName("ToolbarGroupLabel")
+    page.month_commands_group.actions.addWidget(page.current_commands_label)
+    clear_buttons = ((page.clear_values_button, page.cancel_button) if quality else (page.clear_month_button,))
+    for button in (*current, *clear_buttons):
+        button.setProperty("compactCommand", True)
+        page.month_commands_group.actions.addWidget(button)
+        button.show()
+    card.body.addWidget(page.month_commands_group)
+    # Compatibility handles for the presenter, never an additional visible menu.
     page.month_danger = DangerZone("Другие действия…")
-    page.month_danger.setProperty("compactCommand", True)
-    for button in ((page.clear_values_button, page.cancel_button) if quality else (page.clear_month_button,)):
+    for button in clear_buttons:
         page.month_danger.add_command(button)
-    card.body.itemAt(card.body.count() - 1).layout().addWidget(page.month_danger)
-    page.month_danger.show()
+    page.month_danger.setParent(page.command_host)
+    page.month_danger.hide()
 
     from .page_layouts import MONTHS
     page.period_from, page.period_to = SafeComboBox(), SafeComboBox()
@@ -57,20 +66,25 @@ def build_commands(page, card, *, quality):
     page.period_to.currentIndexChanged.connect(lambda: page._refresh_year_status())
     period = ((page.load_period_button, page.form_period_button, page.save_period_button, page.publish_period_button)
               if quality else (page.load_period_button, page.fill_period_button, page.publish_period_button))
-    period[0].setText("Загрузить период")
+    period[0].setText("Загрузить период из ГИС")
     period[1].setText("Сформировать период" if quality else "Заполнить период")
     if quality:
-        page.save_period_button.setText("Проекты в ГИС")
-    period[-1].setText("Разместить период")
-    page.period_commands_label = command_row(
-        card, "Несколько месяцев", (page.period_from, QLabel("—"), page.period_to, *period),
-    )
+        page.save_period_button.setText("Сохранить проекты периода")
+    period[-1].setText("Разместить период в ГИС")
+    page.period_commands_group = CommandGroup("Действия с выбранным периодом")
+    page.period_commands_label = QLabel()
+    page.period_commands_label.setObjectName("ToolbarGroupLabel")
+    page.period_commands_group.actions.addWidget(page.period_commands_label)
+    clear_period = page.clear_period_values_button if quality else page.clear_period_button
+    for widget in (page.period_from, QLabel("—"), page.period_to, *period, clear_period):
+        widget.setProperty("compactCommand", True)
+        page.period_commands_group.actions.addWidget(widget)
+        widget.show()
+    card.body.addWidget(page.period_commands_group)
     page.period_danger = DangerZone("Очистка периода…")
-    page.period_danger.setProperty("compactCommand", True)
-    page.period_danger.add_command(page.clear_period_values_button if quality else page.clear_period_button)
-    # Put destructive range commands beside their range, outside the month group.
-    card.body.itemAt(card.body.count() - 1).layout().addWidget(page.period_danger)
-    page.period_danger.show()
+    page.period_danger.add_command(clear_period)
+    page.period_danger.setParent(page.command_host)
+    page.period_danger.hide()
     page.period_commands_label.setToolTip("Диапазон операций не меняет открытый месяц таблицы")
 
 

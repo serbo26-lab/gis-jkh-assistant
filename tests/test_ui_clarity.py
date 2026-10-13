@@ -157,8 +157,8 @@ def test_work_list_files_and_network_fallback_remain_explicit_and_reachable(page
     assert "Загрузить перечни дома" in menu_text(page.gis_actions)
     assert "Проверить статус" in menu_text(page.gis_actions)
     for button in (page.cancel_gis_button, page.delete_button):
-        assert not button.isVisibleTo(page)
-        assert button.parentWidget() is page.command_host
+        assert button.isVisibleTo(page)
+        assert button.parentWidget() is page.preparation_bar.groups[1]
 
 
 def test_disabled_house_download_explains_missing_gis_identity_inline(pages):

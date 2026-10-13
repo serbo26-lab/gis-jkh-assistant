@@ -116,9 +116,9 @@ def test_dangerous_registry_commands_remain_named_and_reachable(registry):
             assert len(surface.text().split()) > 1
 
 
-def test_list_composition_and_xlsx_commands_have_separate_named_menus(registry):
+def test_list_composition_commands_are_direct_and_separate_from_xlsx(registry):
     page = registry.lists
-    assert page.composition_actions.isVisibleTo(page)
+    assert not page.composition_actions.isVisibleTo(page)
     assert page.files_actions_button.isVisibleTo(page)
     composition = [button for _action, button, _when in page.composition_actions.entries]
     files = [button for _action, button, _when in page.files_actions_button.entries]
@@ -126,6 +126,8 @@ def test_list_composition_and_xlsx_commands_have_separate_named_menus(registry):
                    page.replace_from_template_button, page.save_as_template_button):
         assert source in composition
         assert source not in files
+        assert source.isVisibleTo(page)
+        assert source.menu() is None
         command_surface(page, source)
     assert page.load_export_template_file_button in files
     assert page.export_button in files
@@ -197,7 +199,8 @@ def test_direct_list_danger_click_keeps_existing_confirmation(registry, monkeypa
     monkeypatch.setattr(QMessageBox, "warning", decline)
     page = registry.lists
     page.items_table.selectRow(0)
-    command_surface(page, getattr(page, command)).trigger()
+    surface = command_surface(page, getattr(page, command))
+    (surface.click if hasattr(surface, "click") else surface.trigger)()
     assert len(prompts) == 1
     assert registry.repository.get_work_list(registry.work_list.id) is not None
     assert len(registry.repository.list_work_list_items(registry.work_list.id)) == 1

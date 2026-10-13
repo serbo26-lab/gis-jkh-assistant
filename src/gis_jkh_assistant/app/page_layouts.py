@@ -5,14 +5,15 @@ from PySide6.QtCore import QEvent, QObject, QSize, QTimer, Qt
 from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton,
-    QScrollArea, QSplitter, QTableWidget, QVBoxLayout, QWidget,
+    QScrollArea, QTableWidget, QVBoxLayout, QWidget,
 )
 
 from .widgets import SafeComboBox, ScopeSwitcher
 from .action_layout import ActionFlowLayout
 from .icons import set_button_icon
 from .workflow_widgets import (
-    ActionMenuButton, ContextBar, OperationStatus, PageHeader, SectionCard, WorkflowPanel, WorkspaceCard,
+    ActionMenuButton, CommandGroup, ContextBar, OperationStatus, PageHeader, SectionCard, WorkflowPanel,
+    WorkspaceCard, WorkspaceSplitter,
 )
 
 MONTHS = (
@@ -206,9 +207,9 @@ class ReadableHeader(QHeaderView):
         return QSize(max(size.width(), width), max(size.height(), height))
 
 
-def table(columns, *, name_column: int = 0, table_class=QTableWidget) -> QTableWidget:
+def table(columns, *, name_column: int = 0, table_class=QTableWidget, header_class=ReadableHeader) -> QTableWidget:
     widget = table_class(0, len(columns))
-    widget.setHorizontalHeader(ReadableHeader(Qt.Orientation.Horizontal, widget))
+    widget.setHorizontalHeader(header_class(Qt.Orientation.Horizontal, widget))
     widget.setHorizontalHeaderLabels(columns)
     widget.setAlternatingRowColors(True)
     widget.verticalHeader().setVisible(False)
@@ -538,7 +539,7 @@ def _quality_commands(page):
         ("save_period_button", "Сохранить проекты периода", lambda: page._save_year_projects()),
         ("publish_button", "Разместить месяц", lambda: page._publish()),
         ("publish_period_button", "Разместить период", lambda: page._publish_year()),
-        ("cancel_button", "Аннулировать оценку месяца в ГИС", page._cancel),
+        ("cancel_button", "Аннулировать оценку месяца", page._cancel),
         ("include_all_button", "Включить все", lambda: page._set_all_included(True)),
         ("exclude_all_button", "Снять все", lambda: page._set_all_included(False)),
         ("month_acts_button", "Акты месяца…", page._open_month_acts),
@@ -589,48 +590,42 @@ def _quality_data(page, root):
     page.period_actions = command_menu("Доступные месяцы года", (page.form_period_button, page.load_period_button, page.save_period_button, page.publish_period_button, page.clear_period_values_button), name="sync")
     _monthly_data_menu(page)
     page.data_actions.setText("Данные и обмен с ГИС")
-    from .monthly_commands import build_commands, command_row
-    for hidden in (page.data_actions, page.acts_actions):
+    from .monthly_commands import build_commands
+    for hidden in (page.data_actions, page.acts_actions, page.selection_actions):
         hidden.setParent(page.command_host)
         hidden.hide()
     page.month_acts_button.setText("Акты…")
     page.month_acts_button.setToolTip("Документы и связи месяца: добавить свой акт или подготовить PDF вручную")
-    page.auto_act_month_button.setText("Создать автоакт месяца")
-    page.auto_act_period_button.setText("Создать автоакты периода")
+    page.auto_act_month_button.setText("Сформировать автоматический акт за месяц")
+    page.auto_act_period_button.setText("Сформировать автоматические акты за период")
     page.create_act_button.setText("Подготовить PDF вручную…")
-    page.upload_acts_button.setText("Добавить свой документ…")
-    card.actions.addWidget(page.selection_actions)
-    card.actions.addWidget(page.month_acts_button)
-    page.month_acts_button.show()
+    page.upload_acts_button.setText("Добавить готовый акт…")
     build_commands(page, card, quality=True)
-    page.manual_documents_caption = command_row(card, "Вручную:", (page.create_act_button, page.upload_acts_button))
-    automatic = QLabel("По факту:")
-    automatic.setObjectName("ToolbarGroupLabel")
-    card.actions.addWidget(automatic)
-    page.auto_act_month_button.setProperty("compactCommand", True)
-    card.actions.addWidget(page.auto_act_month_button)
-    page.auto_act_month_button.show()
-    # Range generation belongs beside its range, not beside manual documents.
-    for index in range(card.body.count()):
-        layout = card.body.itemAt(index).layout()
-        if layout and any(layout.itemAt(i).widget() is page.period_from for i in range(layout.count())):
-            layout.addWidget(page.auto_act_period_button)
-            page.auto_act_period_button.show()
-            break
-    page.table = viewport_table(table(["В оценку", "Работа / услуга", "Плата / мес., руб.", "Дни нарушения", "Дней в месяце", "Перерасчёт, руб.", "Акты"], name_column=1))
+    page.acts_commands_group = CommandGroup("Работа с актами")
+    for button in (page.month_acts_button, page.upload_acts_button,
+                   page.auto_act_month_button, page.auto_act_period_button):
+        button.setProperty("compactCommand", True)
+        page.acts_commands_group.actions.addWidget(button)
+        button.show()
+    page.month_acts_button.setMinimumWidth(page.month_acts_button.minimumSizeHint().width())
+    card.body.addWidget(page.acts_commands_group)
+    from .assessment_header import AssessmentHeader
+    page.table = viewport_table(table(["В оценку", "Работа / услуга", "Плата / мес., руб.", "Дни нарушения", "Дней в месяце", "Перерасчёт, руб.", "Акты"], name_column=1, header_class=AssessmentHeader))
+    page.table.horizontalHeader().bind_commands(page.include_all_button, page.exclude_all_button)
     for column, detail in ((2, "Стоимость работы в ежемесячной плате"),
                            (3, "Число дней предоставления работы или услуги ненадлежащего качества"),
                            (5, "Уменьшение платы по результатам оценки качества")):
         page.table.horizontalHeaderItem(column).setToolTip(detail)
     page.table.setProperty("preferredVisibleRows", 5)
     page.table.setProperty("compactTable", True)
-    page.selected_act_button = QPushButton("Акты выбранной работы…")
+    page.selected_act_button = QPushButton("Акт выбранной работы…")
     page.selected_act_button.setProperty("compactCommand", True)
     page.selected_act_button.setToolTip(
         "Открыть акты выбранной строки без горизонтальной прокрутки таблицы"
     )
     page.selected_act_button.setEnabled(False)
     page.selected_act_button.clicked.connect(page._open_selected_acts)
+    page.acts_commands_group.actions.addWidget(page.selected_act_button)
     card.body.addWidget(page.table, 1)
     page.table.currentCellChanged.connect(
         lambda *_: page._update_selected_act_button()
@@ -653,7 +648,6 @@ def _quality_data(page, root):
     page.acts_explanation.hide()
     help_button.toggled.connect(page.acts_explanation.setVisible)
     footer = ActionFlowLayout()
-    footer.addWidget(page.selected_act_button)
     page.month_status.setProperty("flowFullText", True)
     page.month_acts_summary.setProperty("flowFullText", True)
     footer.addWidget(page.month_status)
@@ -695,13 +689,13 @@ def _fixation_data(page, root):
     unplanned_row.addWidget(page.add_unplanned_button)
     page.add_unplanned_button.show()
     unplanned_row.addStretch(1)
-    page.unplanned_card = SectionCard()
+    page.unplanned_card = SectionCard(fit_content=True)
     page.unplanned_card.body.addLayout(unplanned_row)
     page.unplanned_table = table(["Работа / услуга", "Вид работы / услуги", "Ед. изм.", "Цена", "Объем", "Количество", "Стоимость", "Комментарий", "Фото", ""])
     page.unplanned_card.body.addWidget(page.unplanned_table)
     page.unplanned_table.setProperty("preferredVisibleRows", 1)
     viewport_table(page.unplanned_table)
-    page.unplanned_splitter = QSplitter(Qt.Orientation.Vertical)
+    page.unplanned_splitter = WorkspaceSplitter()
     page.unplanned_splitter.setProperty("mainWorkspace", True)
     page.unplanned_splitter.setChildrenCollapsible(False)
     page.unplanned_splitter.addWidget(card)
