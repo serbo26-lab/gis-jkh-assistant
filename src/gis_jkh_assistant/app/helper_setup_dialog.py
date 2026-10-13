@@ -19,6 +19,7 @@ from gis_jkh_assistant.browser.helper_installation import (
     detect_browsers, open_extensions_page, prepare_helper, prepare_helper_near_program,
     read_bundle, reveal_helper_folder, verify_installation,
 )
+from gis_jkh_assistant.browser.extensions_navigation import start_extensions_navigation
 from gis_jkh_assistant.gis_integration.organization_context import (
     MIN_ORGANIZATION_ROUTING_HELPER_VERSION, helper_supports_organization_routing,
 )
@@ -39,7 +40,7 @@ REQUIRED_VERSION = ".".join(map(str, max(
 def connection_message(status, bundle_version: str, *, waited: bool = False) -> str:
     """Only report what the local heartbeat actually proves."""
     if not status.running:
-        return "Связь с программой: локальный шлюз не запущен. " + (
+        return "Служба связи с браузером не запущена. " + (
             status.error or "Закройте мастер и перезапустите программу."
         )
     if not status.helper_connected:
@@ -75,6 +76,7 @@ class HelperSetupDialog(QDialog):
         self.browsers = list(detect_browsers() if browsers is None else browsers)
         self._waiting_since = time.monotonic()
         self._step = 0
+        self._browser_navigation = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 12, 16, 12)
         outer.setSpacing(10)
@@ -125,6 +127,10 @@ class HelperSetupDialog(QDialog):
         self.timer.timeout.connect(self._refresh_connection)
         self.finished.connect(lambda _result: self.timer.stop())
         self.timer.start()
+        self.navigation_timer = QTimer(self)
+        self.navigation_timer.setInterval(120)
+        self.navigation_timer.timeout.connect(self._poll_browser_navigation)
+        self.finished.connect(self._cancel_browser_navigation)
         self._load_bundle()
         self._browser_changed()
         self._show_step(0)
@@ -216,7 +222,7 @@ class HelperSetupDialog(QDialog):
         body.addWidget(self._label(
             "1. Откройте настройки расширений выбранного браузера."
         ))
-        self.open_browser = QPushButton("Открыть браузер")
+        self.open_browser = QPushButton("Открыть страницу расширений")
         self.open_browser.clicked.connect(self._open_browser)
         self.copy_url = QPushButton("Копировать адрес расширений")
         self.copy_url.clicked.connect(lambda: self._copy(
@@ -235,7 +241,7 @@ class HelperSetupDialog(QDialog):
             "2. Включите «Режим разработчика» и нажмите «Загрузить распакованное расширение»."
         ))
         body.addWidget(self._label(
-            "3. Когда браузер попросит выбрать папку, укажите папку помощника рядом с программой."
+            "3. В окне выбора папки вставьте путь кнопками Ctrl+V и Enter, затем подтвердите выбор папки."
         ))
         self.path_edit = QLineEdit()
         self.path_edit.setReadOnly(True)
@@ -306,23 +312,23 @@ class HelperSetupDialog(QDialog):
         self.open_browser.setEnabled(bool(browser and browser.executable))
         self.yandex_notice.setVisible(bool(browser and browser.key == "yandex"))
         advice = {
-            "chrome": "Рекомендуется для dev-помощника: при проверке Chrome сохранял "
+            "chrome": "Рекомендуется для помощника: при проверке Chrome сохранял "
                       "расширение включённым после перезапуска.",
             "edge": "Edge может спросить после перезапуска, оставить ли расширение "
                     "включённым. Подтвердите, если доверяете помощнику.",
-            "yandex": "Не рекомендуется для dev-помощника: Яндекс Браузер может "
+            "yandex": "Не рекомендуется для помощника: Яндекс Браузер может "
                       "принудительно отключать распакованное расширение после перезапуска.",
         }
         self.browser_advice.setText(
             advice.get(browser.key, "") if browser
-            else "Для установки dev-помощника рекомендуем Google Chrome."
+            else "Для установки помощника рекомендуем Google Chrome."
         )
         direct_open = bool(browser and browser.key == "chrome")
-        self.open_browser.setText("Открыть браузер")
+        self.open_browser.setText("Открыть страницу расширений")
         self.browser_steps.setText(
-            ("Если Chrome не открыл страницу расширений, сделайте это вручную:\n"
+            ("Программа откроет расширения в отдельном окне Chrome. Если это не удалось:\n"
              if direct_open else
-             "В открывшемся браузере перейдите на страницу расширений:\n")
+             "Программа откроет расширения в отдельном окне браузера. Если это не удалось:\n")
             + "1. Нажмите Ctrl+L — выделится адресная строка вверху браузера.\n"
             + "2. Нажмите Ctrl+V — вставится адрес настроек, скопированный программой.\n"
             + "3. Нажмите Enter — браузер откроет страницу управления расширениями."
@@ -403,6 +409,7 @@ class HelperSetupDialog(QDialog):
                 self._refresh_connection()
 
     def _show_step(self, step):
+        self._cancel_browser_navigation()
         self._step = max(0, min(2, step))
         self.stack.setCurrentIndex(self._step)
         self.step_title.setText((
@@ -485,7 +492,7 @@ class HelperSetupDialog(QDialog):
         self.feedback.setText(message)
 
     def _copy_path(self):
-        self._copy(self.path_edit.text(), "Путь скопирован. Укажите в браузере именно эту папку целиком.")
+        self._copy(self.path_edit.text(), "Путь скопирован. В окне выбора папки нажмите Ctrl+V и Enter, затем подтвердите выбор папки.")
 
     def _open_folder(self):
         self._clear_error()
@@ -506,10 +513,24 @@ class HelperSetupDialog(QDialog):
 
     def _open_browser(self):
         self._clear_error()
-        # Internal browser URLs may be ignored on process startup. Give the user
-        # a reliable fallback in the *selected* browser without GUI automation.
+        if self._browser_navigation is not None or not self._revalidate_prepared():
+            return
+        browser = self._browser()
+        if browser is None:
+            return
         address = self.extensions_url.text()
         QApplication.clipboard().setText(address)
+        try:
+            self._browser_navigation = start_extensions_navigation(browser)
+        except Exception as exc:
+            self.feedback.setText(f"Не удалось открыть браузер: {exc}. Откройте его вручную и вставьте адрес ниже.")
+            return
+        if self._browser_navigation is not None:
+            self.open_browser.setEnabled(False)
+            self.next.setEnabled(False)
+            self.feedback.setText("Открываем расширения. Не переключайте окно, пока вводится адрес.")
+            self.navigation_timer.start()
+            return
         try:
             open_extensions_page(self._browser())
         except OSError as exc:
@@ -530,6 +551,40 @@ class HelperSetupDialog(QDialog):
                     "Браузер запущен; адрес настроек скопирован. Чтобы открыть страницу "
                     "расширений, выполните три действия выше: Ctrl+L, Ctrl+V, Enter."
                 )
+
+    def _cancel_browser_navigation(self, *_args):
+        if hasattr(self, "navigation_timer"):
+            self.navigation_timer.stop()
+        if self._browser_navigation is not None:
+            self._browser_navigation.cancel()
+            self._browser_navigation = None
+        if hasattr(self, "open_browser"):
+            browser = self._browser()
+            self.open_browser.setEnabled(bool(browser and browser.executable))
+        if hasattr(self, "next"):
+            self.next.setEnabled(self._step != 0 or self._browser() is not None)
+
+    def _poll_browser_navigation(self):
+        if self._browser_navigation is None:
+            return
+        try:
+            result = self._browser_navigation.poll()
+        except Exception as exc:
+            self._cancel_browser_navigation()
+            self.feedback.setText(f"Автоматический переход остановлен: {exc}. Вставьте адрес ниже вручную.")
+            return
+        if result.state == "waiting":
+            return
+        self._cancel_browser_navigation()
+        if result.state == "opened":
+            QApplication.clipboard().setText(str(self.prepared_path))
+            self.feedback.setText(
+                "Страница расширений открыта. Включите «Режим разработчика» и нажмите "
+                "«Загрузить распакованное расширение». Путь к папке уже скопирован: "
+                "вставьте его в окне выбора папки кнопками Ctrl+V и Enter."
+            )
+        else:
+            self.feedback.setText(result.message + " Нажмите «Копировать адрес расширений», затем Ctrl+L, Ctrl+V и Enter в браузере.")
 
     def _refresh_connection(self):
         if self._step != 2 or self.bundle is None:

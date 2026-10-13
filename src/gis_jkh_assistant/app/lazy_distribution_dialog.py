@@ -149,8 +149,7 @@ class LazyDistributionDialog(QDialog):
         layout.addWidget(description)
 
         warning = QLabel(
-            "После применения расчет заменит текущие значения «Цена», «Объем», "
-            "«Количество» и «Стоимость» в этом перечне. Позиции с 0% останутся пустыми."
+            'Кнопка «Применить» заменит текущие цену, объём, количество и стоимость в перечне. Строки с 0% останутся пустыми.'
         )
         warning.setWordWrap(True)
         warning.setObjectName("Muted")
@@ -193,7 +192,7 @@ class LazyDistributionDialog(QDialog):
         self.area_edit = QLineEdit(initial_area)
         self.area_edit.setPlaceholderText("Площадь, м²")
         if not work_list.planned_area and house and house.charge_area:
-            self.area_edit.setToolTip("Подставлено из поля «Площадь к начислению» карточки дома.")
+            self.area_edit.setToolTip("Площадь взята из карточки дома, из поля «Площадь к начислению».")
         area_field = QVBoxLayout()
         area_caption = QLabel("Площадь, м²")
         area_caption.setBuddy(self.area_edit)
@@ -236,8 +235,7 @@ class LazyDistributionDialog(QDialog):
         self.save_template_percentages_button = QPushButton("Сохранить % для шаблона")
         self.load_template_percentages_button = QPushButton("Загрузить % для шаблона")
         template_percentages_tooltip = (
-            "Проценты сохраняются для выбранного шаблона и могут использоваться "
-            "в перечнях других домов с тем же шаблоном."
+            'Сохранённые проценты можно использовать в других перечнях, созданных из этого же шаблона.'
         )
         self.save_template_percentages_button.setToolTip(template_percentages_tooltip)
         self.load_template_percentages_button.setToolTip(template_percentages_tooltip)
@@ -250,9 +248,7 @@ class LazyDistributionDialog(QDialog):
         self.load_template_percentages_button.setEnabled(has_template)
         if not has_template:
             no_template_tip = (
-                "У перечня нет пользовательского шаблона. "
-                "Сохранять и загружать проценты можно только для перечня, "
-                "созданного из шаблона."
+                'Этот перечень создан без шаблона. Чтобы повторно использовать проценты, сохраните состав как шаблон и создайте перечень из него.'
             )
             self.save_template_percentages_button.setToolTip(no_template_tip)
             self.load_template_percentages_button.setToolTip(no_template_tip)
@@ -300,8 +296,7 @@ class LazyDistributionDialog(QDialog):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
             )
             quantity.setToolTip(
-                "Предзаполнено количеством по умолчанию. "
-                "Можно изменить для конкретной работы, например покос травы — 3."
+                'Количество взято из общего поля выше. Для этой работы его можно изменить, например указать 3 для покоса травы.'
             )
             self.table.setItem(row, 3, quantity)
 
@@ -540,8 +535,7 @@ class LazyDistributionDialog(QDialog):
                 quantity_item.setText(quantity)
                 quantity_item.setBackground(QBrush())
                 quantity_item.setToolTip(
-                    "Предзаполнено массово. При необходимости измените количество "
-                    "для этой позиции отдельно."
+                    'Для всех работ задано общее количество. В этой строке его можно изменить.'
                 )
         finally:
             self.table.blockSignals(False)

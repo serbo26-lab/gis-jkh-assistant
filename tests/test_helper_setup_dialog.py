@@ -21,7 +21,9 @@ _settle = workflows._settle
 
 
 @pytest.fixture
-def wizard(qt_app, tmp_path):
+def wizard(qt_app, tmp_path, monkeypatch):
+    # Browser input is tested separately; a fixture never starts real processes.
+    monkeypatch.setattr(setup, "start_extensions_navigation", lambda _browser: None)
     state = SimpleNamespace(status=IntegrationStatus(True, False, False), reads=0)
 
     def status():
@@ -378,7 +380,7 @@ def test_browser_shortcuts_explain_address_bar_paste_and_navigation(wizard, tmp_
     dialog.browser_combo.setCurrentIndex(index)
     assert dialog.open_browser.isEnabled()
     # PR #58 keeps one caption; browser-specific steps still explain the result.
-    assert "Открыть браузер" == dialog.open_browser.text()
+    assert "Открыть страницу расширений" == dialog.open_browser.text()
     assert "Копировать адрес расширений" == dialog.copy_url.text()
     instructions = dialog.browser_steps.text()
     assert "Ctrl+L" in instructions and "адресная строка" in instructions
@@ -403,3 +405,78 @@ def test_copy_address_explains_shortcuts_without_launching_browser(wizard, monke
     assert wizard.app.clipboard().text() == "edge://extensions/"
     assert "адресная строка" in dialog.feedback.text()
     assert "вставить адрес" in dialog.feedback.text()
+
+
+def test_automatic_navigation_copies_folder_only_after_confirmed_open(wizard, tmp_path, monkeypatch):
+    from gis_jkh_assistant.browser.extensions_navigation import NavigationResult
+    exe = tmp_path / "msedge.exe"
+    exe.write_bytes(b"not executed")
+    wizard.dialog.browsers[1] = replace(BROWSERS[1], executable=exe)
+    dialog = select_and_prepare(wizard, 1)
+    states = iter((NavigationResult("waiting"), NavigationResult("opened")))
+    cancelled = []
+    session = SimpleNamespace(poll=lambda: next(states), cancel=lambda: cancelled.append(True))
+    monkeypatch.setattr(setup, "start_extensions_navigation", lambda _browser: session)
+    monkeypatch.setattr(setup, "open_extensions_page", lambda _browser: pytest.fail("No duplicate launch"))
+    QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
+    assert dialog.navigation_timer.isActive()
+    assert not dialog.open_browser.isEnabled() and not dialog.next.isEnabled()
+    assert wizard.app.clipboard().text() == "edge://extensions/"
+    dialog._poll_browser_navigation()
+    assert wizard.app.clipboard().text() == "edge://extensions/"
+    dialog._poll_browser_navigation()
+    assert wizard.app.clipboard().text() == str(dialog.prepared_path)
+    assert "Путь к папке уже скопирован" in dialog.feedback.text()
+    assert not dialog.navigation_timer.isActive() and dialog.open_browser.isEnabled()
+    assert cancelled == [True]
+
+
+def test_closed_wizard_cancels_navigation_without_sending_or_claiming_success(wizard, tmp_path, monkeypatch):
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"not executed")
+    wizard.dialog.browsers[0] = replace(BROWSERS[0], executable=exe)
+    dialog = select_and_prepare(wizard)
+    cancelled = []
+    session = SimpleNamespace(poll=lambda: pytest.fail("No polling after close"),
+                              cancel=lambda: cancelled.append(True))
+    monkeypatch.setattr(setup, "start_extensions_navigation", lambda _browser: session)
+    QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
+    dialog.close()
+    assert cancelled == [True]
+    assert not dialog.navigation_timer.isActive()
+    assert dialog._browser_navigation is None
+
+
+def test_navigation_failure_keeps_manual_address_and_does_not_copy_folder(wizard, tmp_path, monkeypatch):
+    from gis_jkh_assistant.browser.extensions_navigation import NavigationResult
+    exe = tmp_path / "browser.exe"
+    exe.write_bytes(b"not executed")
+    wizard.dialog.browsers[2] = replace(BROWSERS[2], executable=exe)
+    dialog = select_and_prepare(wizard, 2)
+    session = SimpleNamespace(poll=lambda: NavigationResult("manual", "Переход остановлен."), cancel=lambda: None)
+    monkeypatch.setattr(setup, "start_extensions_navigation", lambda _browser: session)
+    QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
+    dialog._poll_browser_navigation()
+    assert "Переход остановлен" in dialog.feedback.text()
+    assert "открыта" not in dialog.feedback.text()
+    assert wizard.app.clipboard().text() == "browser://extensions/"
+    assert dialog.next.isEnabled()
+
+
+def test_native_navigation_exception_stops_timer_and_preserves_manual_route(wizard, tmp_path, monkeypatch):
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"not executed")
+    wizard.dialog.browsers[0] = replace(BROWSERS[0], executable=exe)
+    dialog = select_and_prepare(wizard)
+    cancelled = []
+    def failed_poll():
+        raise RuntimeError("native API unavailable")
+    session = SimpleNamespace(poll=failed_poll, cancel=lambda: cancelled.append(True))
+    monkeypatch.setattr(setup, "start_extensions_navigation", lambda _browser: session)
+    QTest.mouseClick(dialog.open_browser, Qt.MouseButton.LeftButton)
+    dialog._poll_browser_navigation()
+    assert cancelled == [True]
+    assert not dialog.navigation_timer.isActive()
+    assert "Автоматический переход остановлен" in dialog.feedback.text()
+    assert dialog.next.isEnabled()
+    assert wizard.app.clipboard().text() == "chrome://extensions/"

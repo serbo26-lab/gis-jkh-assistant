@@ -337,7 +337,7 @@ class FixationPage(QWidget):
                         cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     if column in (5, 6, 7, 8):
                         cell.setBackground(QBrush(QColor(color("readonly"))))
-                        cell.setToolTip("Плановый показатель для сравнения. Изменяется в перечне или планировании.")
+                        cell.setToolTip("Значение плана для сравнения с фактом. Изменить его можно в перечне или в «Планировании».")
                     self.table.setItem(row, column, cell)
 
                 photos = self.repository.list_work_fixation_photos(
@@ -680,7 +680,7 @@ class FixationPage(QWidget):
             self._refresh_year_status()
 
         def failed(message: str) -> None:
-            QMessageBox.critical(self, "Не удалось получить справочник работ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
+            QMessageBox.critical(self, "Не удалось получить справочник работ", error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."))
 
         def finished() -> None:
             self._integration_worker = None
@@ -1014,7 +1014,7 @@ class FixationPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Не хватает идентификаторов",
-                "Для загрузки фиксации нужны ФИАС GUID дома и GUID размещенного перечня.",
+                "Сначала загрузите дом и размещённый перечень: у них отсутствуют нужные идентификаторы ГИС.",
             )
             return
 
@@ -1133,7 +1133,7 @@ class FixationPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить фиксацию из ГИС ЖКХ",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:
@@ -1234,7 +1234,7 @@ class FixationPage(QWidget):
             QMessageBox.information(
                 self,
                 "Нет заполненных месяцев",
-                "Сначала заполните хотя бы один месяц или примените план к году.",
+                "Заполните хотя бы один месяц вручную или кнопкой «Заполнить по плану». Для нескольких месяцев используйте «Заполнить период».",
             )
             return
 
@@ -1597,7 +1597,7 @@ class FixationPage(QWidget):
                 self.continue_queue_button.setText(f"Продолжить с {label}")
                 self.continue_queue_button.setVisible(True)
             else:
-                QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
+                QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."))
 
         def finished() -> None:
             self._integration_worker = None

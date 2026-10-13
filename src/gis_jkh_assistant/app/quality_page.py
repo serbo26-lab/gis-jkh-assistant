@@ -315,7 +315,7 @@ class QualityAssessmentPage(QWidget):
                 cost_reduction=reduction,
             )
         except (sqlite3.DatabaseError, ValueError) as exc:
-            QMessageBox.warning(self, "Проверьте данные", error_text(exc, context=context_text(self), effect="Правка не подтверждена сохранением. Таблица будет заново прочитана из локальной базы.", recovery="Проверьте значение в строке, устраните причину и повторите ввод."))
+            QMessageBox.warning(self, "Проверьте данные", error_text(exc, context=context_text(self), effect="Изменение не сохранено. Таблица покажет прежние значения из базы.", recovery="Проверьте сообщение об ошибке, затем исправьте значение и повторите ввод."))
             self._load_table()
             return
         self._load_table()
@@ -553,9 +553,7 @@ class QualityAssessmentPage(QWidget):
                 )
         else:
             text = (
-                "Нет строк для автоматического акта. "
-                "Включённые строки уже защищены пользовательскими/импортированными "
-                "актами либо оценка ещё не сформирована."
+                'Нет работ для автоакта. Сформируйте оценку и отметьте работы. Работы с вашим актом или актом из ГИС в автоакт не включаются.'
             )
         QMessageBox.information(self, "Автоматический акт месяца", text)
 
@@ -803,8 +801,7 @@ class QualityAssessmentPage(QWidget):
                 QMessageBox.warning(
                     self,
                     "Не хватает идентификаторов",
-                    "Для обмена с ГИС ЖКХ нужны ФИАС GUID дома, GUID объекта "
-                    "жилищного фонда и GUID размещённого перечня.",
+                    'Сначала загрузите дом и размещённый перечень: для обмена нужны их идентификаторы ГИС.',
                 )
             return None
 
@@ -877,7 +874,7 @@ class QualityAssessmentPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Не хватает идентификаторов",
-                "Для загрузки оценки нужны ФИАС GUID дома и GUID размещенного перечня.",
+                "Сначала загрузите дом и размещённый перечень: у них отсутствуют нужные идентификаторы ГИС.",
             )
             return
 
@@ -985,7 +982,7 @@ class QualityAssessmentPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить оценку качества из ГИС ЖКХ",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:
@@ -1448,7 +1445,7 @@ class QualityAssessmentPage(QWidget):
             self.store.set_error(period_id, message)
             self._refresh_period_status()
             self._refresh_year_status()
-            QMessageBox.critical(self, "Ошибка ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
+            QMessageBox.critical(self, "Ошибка ГИС ЖКХ", error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."))
 
         def finished() -> None:
             self._integration_worker = None

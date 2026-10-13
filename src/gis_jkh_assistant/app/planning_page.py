@@ -753,7 +753,7 @@ class PlanningPage(QWidget):
             )
             if self._current_plan_id == plan_id:
                 self._update_plan_status()
-            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
+            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."))
 
         def finished() -> None:
             self._integration_worker = None
@@ -892,7 +892,7 @@ class PlanningPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить планирование из ГИС ЖКХ",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:

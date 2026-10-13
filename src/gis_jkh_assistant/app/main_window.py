@@ -642,7 +642,7 @@ class MainWindow(QMainWindow):
                     message = (
                         "В этом разделе выполняется операция для прежнего выбора. "
                         "Дождитесь завершения, затем откройте раздел повторно: "
-                        "будет применён общий выбор. Контекст текущей операции сохранён."
+                        "будет применён общий выбор. Текущая операция продолжает работать с прежним выбором."
                     )
                 for field, label in (
                     ("organization_id", "управляющая организация"), ("house_id", "дом"),
@@ -672,7 +672,7 @@ class MainWindow(QMainWindow):
                     elif selected_year and values["year"] is None and name != "work_lists":
                         message = (
                             f"Год {selected_year} вне периода выбранного перечня. "
-                            "Общий выбор сохранён; выберите доступный год в контексте."
+                            "Общий выбор сохранён. Выберите доступный год в поле «Год» этого раздела."
                         )
             page.context_notice.setText(message)
             page.context_notice.setVisible(bool(message))
@@ -762,7 +762,7 @@ class MainWindow(QMainWindow):
         self._reload_pending_page_themes()
         status = self.integration_gateway.status()
         if not status.running:
-            text = "Локальный шлюз не запущен"
+            text = "Служба связи не запущена"
             if status.error:
                 text += f"\n{status.error}"
             tone = "danger"
@@ -800,7 +800,7 @@ class MainWindow(QMainWindow):
                     text += "\nСессия: активна"
                     tone = "success"
 
-        brief = ("Локальный шлюз не запущен" if not status.running else
+        brief = ("Служба связи не запущена" if not status.running else
                  "Помощник не подключён" if not status.helper_connected else
                  "Откройте вкладку ГИС ЖКХ" if not status.gis_page_ready else
                  "Помощник устарел" if "устарел" in text else

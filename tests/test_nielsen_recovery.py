@@ -68,7 +68,7 @@ def test_failed_list_edit_keeps_input_and_gates_refresh_until_retry(desktop, mon
         window.navigation.setCurrentRow(2)
         assert window.pages.currentIndex() == window.navigation.currentRow() == 1
         assert page.flush_pending_changes() is False
-        assert "Ввод сохранён" in messages[0]
+        assert "Изменения остались в таблице, но ещё не сохранены" in messages[0]
         assert page.items_table.isEnabled()
         assert not page.registry_combo.isEnabled()
         page.refresh_work_lists(select_id=desktop.work_list.id)
@@ -190,7 +190,7 @@ def test_transport_success_is_neutral_and_uncaught_apply_error_is_visible(deskto
     worker.succeeded.emit({"items": [{"address": "fixture"}]})
     assert strip.property("tone") == "danger"
     assert "Не удалось применить" in strip.label.text()
-    assert messages and "Состояние ГИС этой ошибкой не отменяется" in messages[0]
+    assert messages and "изменения в ГИС не отменяются автоматически" in messages[0]
     assert desktop.window._result_callbacks == 0
 
 

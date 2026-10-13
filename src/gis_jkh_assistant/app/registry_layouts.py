@@ -404,7 +404,7 @@ def prepare_project(page):
         page._upload_current_work_list_to_gis()
         return
     page._preparing_project = True
-    page.operation_status.set_text("Подготовка проекта • получение основы для сохранения из ГИС")
+    page.operation_status.set_text("Получение файла-шаблона ГИС для подготовки перечня.")
     page.operation_status.show()
     page._download_export_template_from_gis()
     worker = page._integration_worker

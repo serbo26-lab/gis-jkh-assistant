@@ -235,8 +235,7 @@ class GenerateAcceptanceActDialog(QDialog):
             if locked:
                 row.setFlags(row.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                 row.setToolTip(
-                    "Строка исключена из автоматического акта: "
-                    "к ней уже привязан пользовательский или импортированный акт."
+                    'Работа пропущена: к ней уже прикреплён ваш акт или акт из ГИС.'
                 )
                 row.setCheckState(Qt.CheckState.Unchecked)
             else:
@@ -348,9 +347,7 @@ class QualityMonthActsDialog(QDialog):
         context.setObjectName("Muted")
         root.addWidget(context)
         note = QLabel(
-            "Акт хранится в программе как один документ и может быть связан "
-            "с несколькими работами. Это позволяет загрузить PDF один раз и "
-            "применить его сразу ко всем нужным услугам."
+            'Добавьте документ один раз, затем выберите все работы, к которым он относится. Для каждой работы отдельная копия файла не нужна.'
         )
         note.setWordWrap(True)
         root.addWidget(note)
