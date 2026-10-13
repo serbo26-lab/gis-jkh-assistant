@@ -44,7 +44,9 @@ _MAX_FILE_SIZE = 50 * 1024 * 1024
 
 
 class AddQualityActDialog(QDialog):
-    def __init__(self, *, year: int, month: int, parent=None) -> None:
+    def __init__(
+        self, *, year: int, month: int, house_address: str = "", parent=None
+    ) -> None:
         super().__init__(parent)
         self.year = int(year)
         self.month = int(month)
@@ -53,6 +55,12 @@ class AddQualityActDialog(QDialog):
         self.resize(620, 330)
 
         root = QVBoxLayout(self)
+        self.context_label = QLabel(
+            f"{house_address + ' • ' if house_address else ''}{self.month:02d}.{self.year}"
+        )
+        self.context_label.setObjectName("Muted")
+        self.context_label.setWordWrap(True)
+        root.addWidget(self.context_label)
         form = QFormLayout()
 
         self.type_combo = SafeComboBox()
@@ -97,7 +105,7 @@ class AddQualityActDialog(QDialog):
         choose = QPushButton("Выбрать файл…")
         file_row.addWidget(self.file_edit, 1)
         file_row.addWidget(choose)
-        form.addRow("Акт *", file_row)
+        form.addRow("Файл акта *", file_row)
 
         root.addLayout(form)
 
@@ -192,6 +200,7 @@ class QualityActsDialog(QDialog):
         year: int,
         month: int,
         editable: bool,
+        work_name: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -208,6 +217,13 @@ class QualityActsDialog(QDialog):
         context.setWordWrap(True)
         context.setObjectName("Muted")
         root.addWidget(context)
+        self.work_label = QLabel()
+        self.work_label.setObjectName("SectionTitle")
+        self.work_label.setWordWrap(True)
+        self.work_label.setText(
+            work_name or "Название работы не указано"
+        )
+        root.addWidget(self.work_label)
         self.list = QListWidget()
         root.addWidget(self.list, 1)
 

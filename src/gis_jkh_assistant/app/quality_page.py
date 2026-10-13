@@ -706,6 +706,11 @@ class QualityAssessmentPage(QWidget):
             year=int(self.year_combo.currentData()),
             month=int(self._current_month),
             editable=True,
+            work_name=next(
+                (item.work_name for item in self.store.list_items(self._current_period_id)
+                 if item.id == item_id),
+                "",
+            ),
             parent=self,
         )
         dialog.exec()

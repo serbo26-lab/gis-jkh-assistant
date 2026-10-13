@@ -87,7 +87,13 @@ def refresh_monthly(page, kind: str):
     page.table.setEnabled(local)
     if not quality:
         page.unplanned_table.setEnabled(local)
-    page.scope_hint.setText(_scope_label(page, active, year))
+    if quality:
+        table_month = MONTHS[page._current_month - 1] if page._current_month else "—"
+        page.scope_hint.setText(
+            f"Таблица: {table_month} {year}" if year else "Таблица: месяц не выбран"
+        )
+    else:
+        page.scope_hint.setText(_scope_label(page, active, year))
     page.scope_hint.setVisible(bool(page.scope_hint.text()))
     page.empty_hint.setVisible(not has_context)
     supported = helper_supports_quality_assessment if quality else helper_supports_fixations
@@ -308,6 +314,46 @@ def refresh_monthly(page, kind: str):
         month_command, period_command = recommended_commands[key]
         action = getattr(page, period_command if page._scope_is_period() else month_command).text()
     page.workflow.show_step(stage, title, detail, key, action, reason=reason, done=set(done))
+    if quality:
+        # Label the *actual period commands* independently of the displayed
+        # month. The next-step button can recommend a different local action.
+        if page._scope_is_period():
+            if key == "publish":
+                target_months = sorted(s.month for s in eligible_by_scope["period"])
+            elif key == "save":
+                target_months = sorted(
+                    p.month for p in page._periods_with_quality_for_year(
+                        "save_quality_assessment"
+                    )
+                )
+            else:
+                target_months = sorted(active)
+        else:
+            target_months = [page._current_month] if page._current_month else []
+        if not target_months or year is None:
+            page.action_scope_hint.setText("Действие: нет доступных месяцев")
+        elif page._scope_is_period():
+            start, end = target_months[0], target_months[-1]
+            page.action_scope_hint.setText(
+                f"Действие: {start:02d}–{end:02d}.{year} "
+                f"• месяцев: {len(target_months)}"
+            )
+        else:
+            page.action_scope_hint.setText(
+                f"Действие: {MONTHS[target_months[0] - 1]} {year}"
+            )
+        gaps = bool(
+            page._scope_is_period() and target_months
+            and target_months != list(range(target_months[0], target_months[-1] + 1))
+        )
+        page.action_months_button.setVisible(gaps)
+        page.action_months_detail.setText(
+            "Состав: " + ", ".join(MONTHS[m - 1] for m in target_months)
+            if gaps else ""
+        )
+        if not gaps:
+            page.action_months_button.setChecked(False)
+            page.action_months_detail.hide()
 
 
 def plan_fingerprint(page, plan_id: str) -> str:

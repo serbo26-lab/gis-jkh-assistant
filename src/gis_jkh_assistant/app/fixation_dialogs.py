@@ -174,11 +174,16 @@ class FixationPhotoDialog(QDialog):
 
 
 class AddUnplannedWorkDialog(QDialog):
-    def __init__(self, options: list[dict], parent=None) -> None:
+    def __init__(
+        self, options: list[dict], parent=None, *,
+        house_address: str = "", month_label: str = "",
+    ) -> None:
         super().__init__(parent)
         self.options = options
         self._photo_paths: list[Path] = []
         self._syncing_fact_fields = False
+        self._active_mode = "detail"
+        self._manual_cost = ""
         self.setWindowTitle("Добавление внеплановой работы")
         self.resize(700, 500)
 
@@ -192,7 +197,13 @@ class AddUnplannedWorkDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         self.form_scroll.setWidget(self.form_content)
         outer.addWidget(self.form_scroll, 1)
+        if house_address or month_label:
+            context_label = QLabel(" • ".join(filter(None, (house_address, month_label))))
+            context_label.setObjectName("Muted")
+            context_label.setWordWrap(True)
+            root.addWidget(context_label)
         form = QFormLayout()
+        self.fact_form = form
 
         self.work_combo = SafeComboBox()
         self.work_combo.setMinimumWidth(520)
@@ -207,6 +218,15 @@ class AddUnplannedWorkDialog(QDialog):
         self.unit_label = QLabel("—")
         form.addRow("Единица измерения", self.unit_label)
 
+        self.mode_combo = SafeComboBox()
+        self.mode_combo.addItem("Рассчитать по цене и объёму", "detail")
+        self.mode_combo.addItem("Указать стоимость", "total")
+        form.addRow("Способ ввода *", self.mode_combo)
+        self.mode_hint = QLabel()
+        self.mode_hint.setObjectName("Muted")
+        self.mode_hint.setWordWrap(True)
+        form.addRow("", self.mode_hint)
+
         self.price_edit = QLineEdit()
         self.amount_edit = QLineEdit()
         self.count_edit = QLineEdit()
@@ -217,7 +237,7 @@ class AddUnplannedWorkDialog(QDialog):
         form.addRow("Цена", self.price_edit)
         form.addRow("Объем", self.amount_edit)
         form.addRow("Количество", self.count_edit)
-        form.addRow("Стоимость", self.cost_edit)
+        form.addRow("Стоимость (расчёт / ввод)", self.cost_edit)
         form.addRow("Комментарий", self.comment_edit)
         root.addLayout(form)
 
@@ -235,10 +255,8 @@ class AddUnplannedWorkDialog(QDialog):
         root.addWidget(self.photo_list)
 
         hint = QLabel(
-            "Как в ГИС ЖКХ: либо заполните цену + объем + количество — стоимость "
-            "рассчитается автоматически и будет заблокирована, либо укажите "
-            "стоимость + количество — тогда цена и объем будут заблокированы. "
-            "Чтобы сменить вариант, очистите заполненные поля текущего варианта."
+            "При переключении способа ввода предыдущие значения остаются в форме. "
+            "В работу передаются только числа активного способа."
         )
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
@@ -253,6 +271,7 @@ class AddUnplannedWorkDialog(QDialog):
         outer.addWidget(buttons)
 
         self.work_combo.currentIndexChanged.connect(self._update_work_type)
+        self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         self.price_edit.textChanged.connect(self._sync_fact_fields)
         self.amount_edit.textChanged.connect(self._sync_fact_fields)
         self.count_edit.textChanged.connect(self._sync_fact_fields)
@@ -262,7 +281,7 @@ class AddUnplannedWorkDialog(QDialog):
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         self._update_work_type()
-        self._sync_fact_fields()
+        self._mode_changed()
         self.ensurePolished()
         # Preserve the natural field spacing; scroll instead of compressing it.
         self.form_content.setMinimumHeight(root.sizeHint().height())
@@ -276,26 +295,42 @@ class AddUnplannedWorkDialog(QDialog):
             available_height = min(available_height, parent.window().height() - 48)
         self.resize(max(700, self.minimumWidth()), min(preferred_height, available_height))
 
+    def _mode_changed(self, *_args) -> None:
+        mode = self.mode_combo.currentData()
+        if mode == self._active_mode and self.mode_hint.text():
+            return
+        if self._active_mode == "total":
+            self._manual_cost = self.cost_edit.text()
+        self._active_mode = mode
+        detailed = mode == "detail"
+        self.fact_form.setRowVisible(self.price_edit, detailed)
+        self.fact_form.setRowVisible(self.amount_edit, detailed)
+        self.cost_edit.setReadOnly(detailed)
+        self.mode_hint.setText(
+            "Введите цену, объём и количество; стоимость вычисляется автоматически."
+            if detailed else
+            "Введите готовую стоимость и, при необходимости, количество."
+        )
+        if not detailed:
+            self._syncing_fact_fields = True
+            self.cost_edit.setText(self._manual_cost)
+            self._syncing_fact_fields = False
+        self._sync_fact_fields()
+
     def _sync_fact_fields(self, *_args) -> None:
         if self._syncing_fact_fields:
             return
+        if self.mode_combo.currentData() == "total":
+            self._manual_cost = self.cost_edit.text()
+            return
+        calculated = calculate_fact_total_cost(
+            self.price_edit.text().strip(),
+            self.amount_edit.text().strip(),
+            self.count_edit.text().strip(),
+        )
         self._syncing_fact_fields = True
         try:
-            price = self.price_edit.text().strip()
-            amount = self.amount_edit.text().strip()
-            count = self.count_edit.text().strip()
-            cost = self.cost_edit.text().strip()
-
-            detailed_mode = bool(price or amount)
-            total_mode = bool(cost) and not detailed_mode
-
-            self.price_edit.setEnabled(not total_mode)
-            self.amount_edit.setEnabled(not total_mode)
-            self.cost_edit.setEnabled(not detailed_mode)
-
-            if detailed_mode:
-                calculated = calculate_fact_total_cost(price, amount, count)
-                self.cost_edit.setText(calculated or "")
+            self.cost_edit.setText(calculated or "")
         finally:
             self._syncing_fact_fields = False
 
@@ -394,31 +429,24 @@ class AddUnplannedWorkDialog(QDialog):
                 )
                 return
 
-        price_text = self.price_edit.text().strip()
-        amount_text = self.amount_edit.text().strip()
-        if price_text or amount_text:
+        if self.mode_combo.currentData() == "detail":
+            price_text = self.price_edit.text().strip()
+            amount_text = self.amount_edit.text().strip()
             if not price_text or not amount_text or not count_text:
                 QMessageBox.warning(
-                    self,
-                    "Заполните расчетные поля",
-                    "Для варианта «цена × объем × количество» нужно заполнить "
-                    "все три поля.",
+                    self, "Заполните расчётные поля",
+                    "Для расчёта по цене и объёму заполните цену, объём и количество.",
                 )
                 return
-            calculated = calculate_fact_total_cost(
-                price_text,
-                amount_text,
-                count_text,
-            )
+            calculated = calculate_fact_total_cost(price_text, amount_text, count_text)
             if calculated is None:
                 QMessageBox.warning(
-                    self,
-                    "Проверьте расчетные поля",
-                    "Цена, объем и количество должны быть неотрицательными числами, "
+                    self, "Проверьте расчётные поля",
+                    "Цена, объём и количество должны быть неотрицательными числами, "
                     "а количество — целым числом.",
                 )
                 return
-            self.cost_edit.setText(calculated)
+            self._sync_fact_fields()
 
         if not self.cost_edit.text().strip():
             QMessageBox.warning(
@@ -450,6 +478,7 @@ class AddUnplannedWorkDialog(QDialog):
             text = widget.text().strip()
             return text or None
         count_text = self.count_edit.text().strip()
+        detailed = self.mode_combo.currentData() == "detail"
         return {
             "work_code": str(option.get("code") or ""),
             "work_name": str(option.get("name") or ""),
@@ -458,8 +487,8 @@ class AddUnplannedWorkDialog(QDialog):
             "work_type_guid": option.get("workTypeGuid"),
             "work_type_name": option.get("workTypeName"),
             "unit_name": option.get("unitName"),
-            "fact_price": clean(self.price_edit),
-            "fact_amount": clean(self.amount_edit),
+            "fact_price": clean(self.price_edit) if detailed else None,
+            "fact_amount": clean(self.amount_edit) if detailed else None,
             "fact_count": int(count_text) if count_text else None,
             "fact_total_cost": clean(self.cost_edit),
             "comment": self.comment_edit.toPlainText().strip() or None,

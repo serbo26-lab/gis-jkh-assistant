@@ -388,6 +388,28 @@ def build_monthly(page, kind: str):
         page.workflow.place_help_below_actions()
     page.workflow.title.hide()
     page.workflow.help_button.toggled.connect(page.workflow.title.setVisible)
+    if quality:
+        # Show the table month separately from the period-wide action targets.
+        # Place the summary below command controls, not between their buttons.
+        page.action_scope_hint = QLabel()
+        page.action_scope_hint.setObjectName("Muted")
+        page.action_scope_hint.setWordWrap(True)
+        page.action_months_button = QPushButton("Показать состав месяцев…")
+        page.action_months_button.setCheckable(True)
+        page.action_months_button.setVisible(False)
+        page.action_months_detail = QLabel()
+        page.action_months_detail.setObjectName("Muted")
+        page.action_months_detail.setWordWrap(True)
+        page.action_months_detail.setVisible(False)
+        page.action_months_button.toggled.connect(page.action_months_detail.setVisible)
+        action_summary = QVBoxLayout()
+        action_summary.setContentsMargins(0, 0, 0, 0)
+        action_summary.addWidget(page.action_scope_hint)
+        action_summary.addWidget(page.action_months_button)
+        action_summary.addWidget(page.action_months_detail)
+        page.workflow.body.insertLayout(
+            page.workflow.body.indexOf(page.workflow.help_panel), action_summary,
+        )
     page.month_status = QLabel()
     page.month_status.setObjectName("Muted")
     page.month_status.setWordWrap(True)

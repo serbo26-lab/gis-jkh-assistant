@@ -92,6 +92,7 @@ class MonthDatesDialog(QDialog):
         year: int,
         month: int,
         dates: list[str],
+        work_name: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -99,6 +100,13 @@ class MonthDatesDialog(QDialog):
         self.month = int(month)
         self.setWindowTitle(f"Плановые даты — {self.month:02d}.{self.year}")
         self.setMinimumWidth(520)
+
+        self.work_label = QLabel(work_name or "Работа не выбрана")
+        self.work_label.setObjectName("SectionTitle")
+        self.work_label.setWordWrap(True)
+        self.work_label.setToolTip(work_name)
+        self.month_label = QLabel(f"Плановые даты: {self.month:02d}.{self.year}")
+        self.month_label.setObjectName("Muted")
 
         explanation = QLabel(
             "Конкретные даты необязательны. Можно оставить только количество "
@@ -144,6 +152,8 @@ class MonthDatesDialog(QDialog):
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.work_label)
+        layout.addWidget(self.month_label)
         layout.addWidget(explanation)
         layout.addWidget(self.calendar)
         layout.addWidget(QLabel("Выбранные даты"))
@@ -448,6 +458,7 @@ class PlanningPage(QWidget):
             year=year,
             month=month,
             dates=dates,
+            work_name=(self.table.item(row, 0).text() if self.table.item(row, 0) else ""),
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:

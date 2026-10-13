@@ -628,7 +628,11 @@ class FixationPage(QWidget):
                     "В справочнике ГИС ЖКХ нет работ, которые можно добавить как внеплановые.",
                 )
                 return
-            dialog = AddUnplannedWorkDialog(options, parent=self)
+            dialog = AddUnplannedWorkDialog(
+                options, parent=self,
+                house_address=self.house_combo.currentText(),
+                month_label=f"{self.month_combo.currentText()} {self.year_combo.currentData()}",
+            )
             if dialog.exec() != dialog.DialogCode.Accepted:
                 return
             try:
