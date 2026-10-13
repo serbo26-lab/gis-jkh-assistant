@@ -384,6 +384,8 @@ def build_monthly(page, kind: str):
     page.scope_row.setLayout(scope)
     page.workflow.action_row.insertWidget(0, page.scope_row)
     page.workflow.compact_scope = page.scope_row
+    if quality:
+        page.workflow.place_help_below_actions()
     page.workflow.title.hide()
     page.workflow.help_button.toggled.connect(page.workflow.title.setVisible)
     page.month_status = QLabel()
@@ -529,9 +531,9 @@ def _quality_data(page, root):
 
 def _fixation_data(page, root):
     card = workspace_card("Фактические показатели месяца")
-    page.month_actions = command_menu("Открытый месяц", (page.fill_month_button, page.load_month_button, page.publish_month_button, page.clear_month_button), name="fixation")
+    page.month_actions = command_menu("Открытый месяц", (page.load_month_button, page.publish_month_button, page.clear_month_button), name="fixation")
     page.period_actions = command_menu("Доступные месяцы года", (page.fill_period_button, page.load_period_button, page.publish_period_button, page.clear_period_button), name="sync")
-    _monthly_data_menu(page)
+    _monthly_data_menu(page, direct_month_fill=True)
     page.plan_reference_checkbox = QCheckBox("Показать план")
     page.plan_reference_checkbox.setToolTip("Плановые показатели рядом с фактическими для сравнения")
     card.actions.addWidget(page.plan_reference_checkbox)
@@ -573,9 +575,18 @@ def _fixation_data(page, root):
     page.unplanned_table.itemChanged.connect(page._unplanned_item_changed)
 
 
-def _monthly_data_menu(page):
+def _monthly_data_menu(page, *, direct_month_fill=False):
     page.data_actions = ActionMenuButton("Заполнение и обмен", "sync")
     page.data_actions.setToolTip("Выберите область явно: открытый месяц или доступные месяцы выбранного года. Переключатель рекомендаций эту область не меняет.")
+    if direct_month_fill:
+        # A direct first-level action for the selected month, never the whole period.
+        # The original command button retains the existing confirmation and handler.
+        page.data_actions.menu_model.addSection("Подготовка текущего месяца")
+        page.month_fill_menu_action = page.data_actions.add_command(
+            page.fill_month_button, text="Заполнить текущий месяц по плану…",
+        )
+        page.data_actions.menu_model.addSeparator()
+        page.data_actions.menu_model.addSection("Обмен с ГИС и другие операции")
     for submenu in (page.month_actions, page.period_actions):
         submenu.setParent(page.command_host)
         submenu.hide()
