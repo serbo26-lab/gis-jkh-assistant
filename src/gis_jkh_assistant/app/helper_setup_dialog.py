@@ -184,6 +184,8 @@ class HelperSetupDialog(QDialog):
         self.browser_combo.currentIndexChanged.connect(self._browser_changed)
         body.addWidget(browser_label)
         body.addWidget(self.browser_combo)
+        self.browser_advice = self._label("", muted=True)
+        body.addWidget(self.browser_advice)
         self.browser_path = self._label("", muted=True)
         body.addWidget(self.browser_path)
         self.choose_browser = QPushButton("Указать файл браузера…")
@@ -199,7 +201,13 @@ class HelperSetupDialog(QDialog):
 
     @staticmethod
     def _browser_caption(browser):
-        return browser.name + (" — найден" if browser.executable else " — не найден")
+        recommendation = {
+            "chrome": " — рекомендуется",
+            "edge": " — поддерживается",
+            "yandex": " — не рекомендуется",
+        }.get(browser.key, "")
+        found = "найден" if browser.executable else "не найден"
+        return f"{browser.name}{recommendation} · {found}"
 
     def _installation_page(self):
         body = self._page()
@@ -212,17 +220,17 @@ class HelperSetupDialog(QDialog):
         self.open_browser.clicked.connect(self._open_browser)
         self.copy_url = QPushButton("Скопировать адрес")
         self.copy_url.clicked.connect(lambda: self._copy(
-            self.extensions_url.text(), "Адрес скопирован. Перейдите в адресную строку браузера."
+            self.extensions_url.text(),
+            "Адрес скопирован. В браузере нажмите Ctrl+L (адресная строка), "
+            "Ctrl+V (вставить адрес), Enter (открыть настройки).",
         ))
         self._actions(body, self.open_browser, self.copy_url)
         self.extensions_url = QLineEdit()
         self.extensions_url.setReadOnly(True)
         self.extensions_url.setAccessibleName("Адрес страницы расширений")
         body.addWidget(self.extensions_url)
-        body.addWidget(self._label(
-            "Если открылась обычная вкладка, нажмите Ctrl+L, затем Ctrl+V и Enter. "
-            "Адрес настроек копируется автоматически при нажатии кнопки открытия.", muted=True,
-        ))
+        self.browser_steps = self._label("", muted=True)
+        body.addWidget(self.browser_steps)
         body.addWidget(self._label(
             "2. Включите «Режим разработчика» и нажмите «Загрузить распакованное расширение»."
         ))
@@ -297,6 +305,31 @@ class HelperSetupDialog(QDialog):
         self.extensions_url.setText(browser.extensions_url if browser else "")
         self.open_browser.setEnabled(bool(browser and browser.executable))
         self.yandex_notice.setVisible(bool(browser and browser.key == "yandex"))
+        advice = {
+            "chrome": "Рекомендуется для dev-помощника: при проверке Chrome сохранял "
+                      "расширение включённым после перезапуска.",
+            "edge": "Edge может спросить после перезапуска, оставить ли расширение "
+                    "включённым. Подтвердите, если доверяете помощнику.",
+            "yandex": "Не рекомендуется для dev-помощника: Яндекс Браузер может "
+                      "принудительно отключать распакованное расширение после перезапуска.",
+        }
+        self.browser_advice.setText(
+            advice.get(browser.key, "") if browser
+            else "Для установки dev-помощника рекомендуем Google Chrome."
+        )
+        direct_open = bool(browser and browser.key == "chrome")
+        self.open_browser.setText(
+            "Открыть настройки расширений" if direct_open
+            else "Открыть браузер и скопировать адрес"
+        )
+        self.browser_steps.setText(
+            ("Если Chrome не открыл страницу расширений, сделайте это вручную:\n"
+             if direct_open else
+             "В открывшемся браузере перейдите на страницу расширений:\n")
+            + "1. Нажмите Ctrl+L — выделится адресная строка вверху браузера.\n"
+            + "2. Нажмите Ctrl+V — вставится адрес настроек, скопированный программой.\n"
+            + "3. Нажмите Enter — браузер откроет страницу управления расширениями."
+        )
         if hasattr(self, "next") and self._step == 0:
             self.next.setEnabled(browser is not None)
 
@@ -485,13 +518,20 @@ class HelperSetupDialog(QDialog):
         except OSError as exc:
             self._show_error(
                 exc, "Адрес настроек расширений скопирован.",
-                "Откройте нужный браузер, нажмите Ctrl+L, Ctrl+V и Enter.",
+                "Откройте выбранный браузер самостоятельно и выполните три действия, "
+                "описанные выше: Ctrl+L — адресная строка, Ctrl+V — вставка, Enter — переход.",
             )
         else:
-            self.feedback.setText(
-                "Браузеру передана команда открыть настройки. Если появилась обычная "
-                "вкладка, нажмите Ctrl+L, Ctrl+V и Enter: адрес уже скопирован."
-            )
+            if self._browser().key == "chrome":
+                self.feedback.setText(
+                    "Chrome получил запрос открыть настройки расширений. Если открылось "
+                    "обычное окно, выполните три действия выше — адрес уже скопирован."
+                )
+            else:
+                self.feedback.setText(
+                    "Браузер запущен; адрес настроек скопирован. Чтобы открыть страницу "
+                    "расширений, выполните три действия выше: Ctrl+L, Ctrl+V, Enter."
+                )
 
     def _refresh_connection(self):
         if self._step != 2 or self.bundle is None:

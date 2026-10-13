@@ -266,14 +266,23 @@ def detect_browsers(environment=None) -> tuple[Browser, ...]:
 
 
 def open_extensions_page(browser: Browser) -> None:
-    """Explicit user action only. No flags for installing, enabling or changing profiles."""
+    """Start the selected browser for setup without touching its profile.
+
+    Chrome accepts chrome://extensions/ on the command line in our tested setup.
+    Edge and Yandex may silently ignore their internal URLs and open an empty
+    window. Start those browsers normally: the wizard provides a copied address
+    and explains how to enter it in the address bar.
+    """
     executable = browser.executable
     if (
         executable is None or not executable.is_absolute() or not executable.is_file()
         or executable.name.casefold() != browser.executable_name.casefold()
     ):
         raise FileNotFoundError(f"Укажите существующий файл {browser.executable_name}.")
+    arguments = [str(executable)]
+    if browser.key == "chrome":
+        arguments.extend(("--new-tab", browser.extensions_url))
     subprocess.Popen(
-        [str(executable), "--new-tab", browser.extensions_url], shell=False,
+        arguments, shell=False,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
