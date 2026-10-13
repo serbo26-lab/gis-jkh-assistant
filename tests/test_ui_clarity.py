@@ -97,12 +97,9 @@ def menu_text(button):
 def test_all_organization_downloads_are_visible_commands_with_explicit_scope(pages):
     page = pages.houses
     assert page.sync_houses_button.isVisibleTo(page)
-    assert "все дома" in page.sync_houses_button.text()
-    assert page.bulk_actions_button.isVisibleTo(page)
-    assert "все дома УО" in page.bulk_actions_button.text()
-    page.bulk_actions_button.sync()
-    assert menu_text(page.bulk_actions_button) == ["Загрузить управление всеми домами", "Загрузить перечни всех домов"]
-    assert all(action.isEnabled() == button.isEnabled() for action, button, _when in page.bulk_actions_button.entries)
+    for button in (page.sync_all_management_button, page.sync_all_work_lists_button):
+        assert button.isVisibleTo(page)
+    assert not page.bulk_actions_button.isVisibleTo(page)
     assert "Добавить УО из ГИС" in menu_text(page.organization_actions_button)
     assert not page.gis_actions_button.isVisibleTo(page)
 
@@ -115,7 +112,8 @@ def test_manual_organization_actions_and_local_files_are_separate_from_gis(pages
     assert "Изменить реквизиты УО" in commands
     assert "Удалить УО и её данные…" in commands
     assert page.add_house_button.isVisibleTo(page)
-    assert page.files_actions_button.isVisibleTo(page)
+    assert page.export_house_data_button.isVisibleTo(page)
+    assert page.import_house_data_button.isVisibleTo(page)
     assert all("ГИС" not in item for item in menu_text(page.files_actions_button))
     assert not page.delete_org_button.isVisibleTo(page)
     assert page.delete_org_button.parentWidget() is page.command_host
@@ -151,7 +149,7 @@ def test_first_step_offers_import_from_supported_authorized_helper(app, tmp_path
 def test_work_list_files_and_network_fallback_remain_explicit_and_reachable(pages):
     page = pages.lists
     assert page.files_actions_button.isVisibleTo(page)
-    assert menu_text(page.files_actions_button) == ["Выбрать XLSX вручную…", "Сформировать XLSX", "Получить официальный шаблон", "Отправить XLSX в ГИС"]
+    assert menu_text(page.files_actions_button) == ["Выбрать XLSX вручную…", "Сформировать XLSX", "Отправить XLSX в ГИС"]
     assert any(action.isSeparator() for action in page.files_actions_button.menu().actions())
     assert "Шаблоны пользователя…" in menu_text(page.composition_actions)
     assert "Удалить локальный перечень" in menu_text(page.composition_actions)
@@ -176,15 +174,12 @@ def test_disabled_house_download_explains_missing_gis_identity_inline(pages):
 
 def test_disclosures_say_what_will_open_and_use_svg_chevrons(pages):
     page = pages.lists
-    assert not page.details_toggle.isChecked()
-    assert not page.details_card.isVisibleTo(page)
-    assert "Параметры" in page.details_toggle.text()
-    assert not page.details_toggle.icon().isNull()
-    page.details_toggle.click()
     assert page.details_card.isVisibleTo(page)
-    assert page.details_toggle.text().startswith("Скрыть ")
-    page.details_toggle.click()
-    assert page.details_toggle.text().startswith("Показать ")
+    assert page.details_more_toggle.text().startswith("Показать ")
+    page.details_more_toggle.click()
+    assert page.details_more_toggle.text().startswith("Скрыть ")
+    page.details_more_toggle.click()
+    assert page.details_more_toggle.text().startswith("Показать ")
     assert page.context_status.isVisibleTo(page)
     assert "2026" in page.context_status.text()
     assert pages.houses.house_ids_toggle.text() == "Показать идентификаторы"
@@ -192,16 +187,13 @@ def test_disclosures_say_what_will_open_and_use_svg_chevrons(pages):
 
 def test_quality_local_preparation_and_both_network_scopes_are_visible(pages):
     page = pages.quality
-    assert page.data_actions.isVisibleTo(page)
-    for menu in (page.month_actions, page.period_actions, page.acts_actions, page.selection_actions):
-        assert menu in page.data_actions.submenus or menu.isVisibleTo(page)
-        menu.sync()
-        assert all(action.isEnabled() == source.isEnabled() for action, source, _when in menu.entries)
+    assert not page.data_actions.isVisibleTo(page)
+    for button in (page.load_gis_button, page.form_month_button, page.save_button,
+                   page.load_period_button, page.save_period_button, page.auto_act_month_button):
+        assert button.isVisibleTo(page)
     assert page.month_acts_button.isVisibleTo(page)
-    assert "Сохранить проект месяца" in menu_text(page.month_actions)
-    assert "Сохранить проекты периода" in menu_text(page.period_actions)
-    assert "Сформировать оценку месяца" in menu_text(page.month_actions)
-    assert "Автоакт месяца" in menu_text(page.acts_actions)
+    assert page.month_acts_button.text() == "Акты…"
+
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])

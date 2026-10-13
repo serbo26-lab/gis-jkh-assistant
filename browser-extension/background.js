@@ -8,6 +8,9 @@ const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
 const HELPER_CODE_VERSION = "0.1.31";
 const organizationTabs = new Map();
+// Routing identity for this worker, not an authentication credential.
+const HELPER_INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let gisTabAvailable = false;
 
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
@@ -15,7 +18,8 @@ let keepAliveError = null;
 
 async function localFetch(path, options = {}) {
   const headers = Object.assign({}, HELPER_HEADER, {
-    "X-GIS-JKH-Helper-Version": HELPER_CODE_VERSION
+    "X-GIS-JKH-Helper-Version": HELPER_CODE_VERSION,
+    "X-GIS-JKH-Helper-Instance": HELPER_INSTANCE
   }, options.headers || {});
   return fetch(LOCAL_BASE + path, Object.assign({}, options, { headers }));
 }
@@ -85,11 +89,13 @@ async function findGisTab(command = null) {
 async function hello() {
   try {
     const tab = await findGisTab();
+    gisTabAvailable = Boolean(tab && tab.id);
     const response = await localFetch("/hello", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        gisPageReady: Boolean(tab && tab.id),
+        gisPageReady: gisTabAvailable,
+        helperInstance: HELPER_INSTANCE,
         pageUrl: tab?.url || null,
         helperVersion: HELPER_CODE_VERSION,
         sessionKeepAliveEnabled: true,
@@ -246,6 +252,13 @@ async function pollLoop() {
 
   reconnectDelayMs = 1000;
 
+  // An extension in another browser without a GIS tab must never consume a
+  // command intended for the connected browser. Tab changes also wake us below.
+  if (!gisTabAvailable) {
+    setTimeout(pollLoop, 2000);
+    return;
+  }
+
   await maybeKeepSessionAlive();
 
   try {
@@ -269,6 +282,9 @@ async function pollLoop() {
 }
 
 pollLoop();
+for (const event of [chrome.tabs.onUpdated, chrome.tabs.onActivated, chrome.tabs.onRemoved]) {
+  if (event?.addListener) event.addListener(() => { hello(); });
+}
 
 chrome.alarms.create(KEEP_ALIVE_ALARM, {
   delayInMinutes: 4,

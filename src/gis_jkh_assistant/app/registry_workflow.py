@@ -214,7 +214,7 @@ def refresh_work_lists(page) -> None:
         for widget in (page.items_table, page.start_month, page.start_year, page.end_month, page.end_year):
             widget.setEnabled(True)
     for widget in (page.add_works_button, page.replace_from_template_button):
-        widget.setEnabled(editable and not busy and not connection)
+        widget.setEnabled(editable and not busy and (bool(page._cached_directory()) or not connection))
         widget.setToolTip(
             connection or "Работы проверяются по актуальному справочнику УО в ГИС ЖКХ."
         )
@@ -224,6 +224,13 @@ def refresh_work_lists(page) -> None:
         remote_reason or "Отменить размещение выбранного перечня в ГИС ЖКХ. "
         "Перед отменой потребуется подтверждение."
     )
+    page.project_save_button.setEnabled(bool(work_list) and editable and not remote_reason)
+    page.project_save_button.setToolTip(remote_reason or "Сохранить текущий состав как проект в ГИС; размещение выполняется отдельно")
+    page.directory_button.setEnabled(bool(page.organization_combo.currentData()) and not busy and not connection)
+    stamp = page.repository.get_setting(f"ui.directory.updated.{page.organization_combo.currentData()}")
+    page.directory_button.setToolTip(f"Обновлён: {stamp}" if stamp else "Получить справочник работ выбранной УО")
+    if hasattr(page, "list_selector"):
+        page.list_selector.queue_sync()
     page.project_actions.setEnabled(bool(work_list) and not busy)
     page.project_actions.sync()
     page.xlsx_network_actions.sync()
@@ -256,10 +263,10 @@ def refresh_work_lists(page) -> None:
         page.workflow.show_step(
             0,
             "Выберите перечень дома",
-            "Выберите существующий перечень в контексте сверху "
+            "Выберите существующий перечень в списке "
             "или создайте новый. Перечни из ГИС доступны через загрузку.",
-            "new",
-            "Создать новый перечень",
+            None,
+            "Выберите перечень в списке",
             reason=""
             if house and not busy
             else "Сначала выберите управляющую организацию и дом."

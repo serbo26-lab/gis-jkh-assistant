@@ -60,9 +60,9 @@ class WorkDirectorySelectionDialog(QDialog):
         quick.addWidget(self.counter_label)
         root.addLayout(quick)
 
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["", "Код", "Наименование работы / услуги", "Вид работы", "Ед. изм."]
+            ["", "Код", "Наименование работы / услуги", "Вид работы", "Ед. изм.", "Состояние"]
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
@@ -72,6 +72,7 @@ class WorkDirectorySelectionDialog(QDialog):
         self.table.setColumnWidth(2, 430)
         self.table.setColumnWidth(3, 220)
         self.table.setColumnWidth(4, 90)
+        self.table.setColumnWidth(5, 110)
         root.addWidget(self.table, 1)
 
         buttons = QDialogButtonBox(
@@ -118,6 +119,7 @@ class WorkDirectorySelectionDialog(QDialog):
             selector.setCheckState(Qt.CheckState.Unchecked)
             if existing:
                 selector.setFlags(Qt.ItemFlag.ItemIsSelectable)
+                selector.setCheckState(Qt.CheckState.Checked)
                 selector.setToolTip("Уже добавлено в перечень")
             self.table.setItem(row, 0, selector)
 
@@ -126,6 +128,7 @@ class WorkDirectorySelectionDialog(QDialog):
                 option.get("name") or "",
                 option.get("workTypeName") or "",
                 option.get("unitName") or "",
+                "В перечне" if existing else "Доступна",
             )
             for column, value in enumerate(values, start=1):
                 item = QTableWidgetItem(str(value))

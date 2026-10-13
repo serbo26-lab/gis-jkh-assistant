@@ -122,7 +122,7 @@ def test_quality_group_labels_and_selected_work_act_action(desktop, monkeypatch)
     assert page.selection_actions.text().startswith("Оценка:")
     assert page.acts_actions.text().startswith("Документы:")
     assert page.data_actions.text() == "Данные и обмен с ГИС"
-    assert page.month_acts_button.text() == "Акты месяца…"
+    assert page.month_acts_button.text() == "Акты…"
     assert page.table.rowCount() > 0
     page.table.setCurrentCell(0, 1)
     page._update_selected_act_button()

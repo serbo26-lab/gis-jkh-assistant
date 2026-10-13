@@ -16,7 +16,7 @@ from gis_jkh_assistant.work_planning import (
     helper_supports_work_plans,
 )
 
-from .page_layouts import MONTHS
+from .page_layouts import MONTHS, month_button_text
 from .workflow_state import MonthState, fixation_step, quality_step
 from .workflow_widgets import repolish
 
@@ -68,6 +68,7 @@ def refresh_monthly(page, kind: str):
     if not hasattr(page, "workflow"):
         return
     quality = kind == "quality"
+    from .monthly_commands import period_months, refresh_commands
     page.stop_queue_button.setVisible(page._queue_running)
     page.stop_queue_button.setEnabled(not getattr(page, "_stop_queue_requested", False))
     work_list, year, house = _target(page)
@@ -109,6 +110,8 @@ def refresh_monthly(page, kind: str):
         button.setEnabled(local and not load_reason)
         button.setToolTip(load_reason or "Получить данные из ГИС; локальные изменения будут проверены перед заменой.")
     page.load_period_button.setToolTip(load_reason or "Проверить все доступные месяцы в границах перечня; загрузить найденные в ГИС данные.")
+    selected_period_months = period_months(page, active)
+    unloaded = set()
     all_states = []
     periods = (page.store.list_periods(work_list.id, year=year) if quality
                else page.repository.list_work_fixation_periods(work_list.id, year=year)) if work_list and year else []
@@ -131,8 +134,14 @@ def refresh_monthly(page, kind: str):
             validation = ((page._validation_error(period.id, require_acts=True) if quality
                            else page._validation_error(period.id)) if has_data else None)
             cached_states[month] = (has_data, validation)
+        probe = page.repository.get_setting(f"ui.remote_probe.{kind}.{period.id}") if period else None
+        known = bool(period and period.gis_last_sync_at) or probe in {"missing", "found"}
+        if not known and not has_data:
+            unloaded.add(month)
         if month not in active:
             suffix, tone = "вне периода", "muted"
+        elif probe == "missing":
+            suffix, tone = "не найдено", "warning"
         elif error or status == "ERROR":
             suffix, tone = "ошибка", "danger"
         elif status in {"SAVED", "APPROVED"}:
@@ -142,8 +151,10 @@ def refresh_monthly(page, kind: str):
         elif status in {"MODIFIED", "CANCELLED"}:
             suffix, tone = ("изменено" if status == "MODIFIED" else "аннулировано"), "warning"
         else:
-            suffix, tone = ("локально" if has_data else "пусто"), ("accent" if has_data else "muted")
-        button.setText(f"{MONTHS[month - 1]}\n{suffix}")
+            suffix, tone = ("локально" if has_data else "нет в ГИС" if probe == "missing" else "пусто" if known else "не загружено"), ("accent" if has_data else "muted")
+        button.setProperty("monthState", suffix)
+        button.setText(month_button_text(month, suffix, getattr(page, "_dense_monthly", False)))
+        button.setAccessibleName(f"{MONTHS[month - 1]} {year}: {suffix}")
         page.month_combo.setItemText(month - 1, MONTHS[month - 1])
         from PySide6.QtCore import Qt
         page.month_combo.setItemData(month - 1, f"{MONTHS[month - 1]}: {suffix}", Qt.ItemDataRole.ToolTipRole)
@@ -161,7 +172,7 @@ def refresh_monthly(page, kind: str):
     page.month_combo.setEnabled(bool(active) and not locked)
     page.month_combo.blockSignals(False)
     page._workflow_month_snapshot = (snapshot_key, cached_states)
-    states = all_states if page._scope_is_period() else [s for s in all_states if s.month == page._current_month]
+    states = [s for s in all_states if s.month in selected_period_months] if page._scope_is_period() else [s for s in all_states if s.month == page._current_month]
     failed_id = page._queue_failed_period_id
     failed_period = (page.store.get_period(failed_id) if quality else page.repository.get_work_fixation_period(failed_id)) if failed_id else None
     retry_here = bool(failed_period and work_list and failed_period.work_list_id == work_list.id and failed_period.year == year)
@@ -188,7 +199,7 @@ def refresh_monthly(page, kind: str):
         ids_reason = "Получите идентификаторы дома в разделе «Дома»."
     current = by_month.get(page._current_month)
     month_filled = [s for s in all_states if s.month == page._current_month and s.has_data]
-    period_filled = [s for s in all_states if s.has_data]
+    period_filled = [s for s in all_states if s.has_data and s.month in selected_period_months]
     eligible_by_scope = {"month": month_filled, "period": period_filled}
     if quality:
         publish_ids = {p.id for p in page._periods_with_quality_for_year("approve_quality_assessment")}
@@ -296,6 +307,12 @@ def refresh_monthly(page, kind: str):
         if not any(row.month in selected_months and (row.count or row.dates_json) for row in plan_months):
             key, stage, title, action, detail, done = "plan", 0, "Сначала заполните план", "К планированию", "В выбранной области план ещё пуст. Заполните план или внесите фактические показатели вручную в таблице.", frozenset()
             page.workflow.register("plan", lambda: page.workflow.navigateRequested.emit(2))
+    if has_context and any(state.month in unloaded for state in states) and not filled and not retry_here:
+        page.workflow.register("load", page._load_scope_from_gis)
+        key, title, action, detail, stage, done = "load", "Данные из ГИС ещё не загружены", "Загрузить из ГИС", "Пустые локальные поля не означают отсутствие размещённых сведений. Загрузите данные или подготовьте их вручную.", 0, frozenset()
+        reason = load_reason
+    if quality and key == "acts":
+        action = "Акты…"
     if key in {"save", "publish"}:
         reason = net_reason or ids_reason or (publish_reason if key == "publish" else "")
     if locked:
@@ -316,6 +333,12 @@ def refresh_monthly(page, kind: str):
         month_command, period_command = recommended_commands[key]
         action = getattr(page, period_command if page._scope_is_period() else month_command).text()
     page.workflow.show_step(stage, title, detail, key, action, reason=reason, done=set(done))
+    refresh_commands(page, active, locked=locked)
+    if quality and hasattr(page, "current_commands_label"):
+        page.scope_hint.hide()
+        page.action_scope_hint.hide()
+    if hasattr(page, "list_selector"):
+        page.list_selector.queue_sync()
     if quality:
         # Label the *actual period commands* independently of the displayed
         # month. The next-step button can recommend a different local action.
@@ -329,7 +352,7 @@ def refresh_monthly(page, kind: str):
                     )
                 )
             else:
-                target_months = sorted(active)
+                target_months = sorted(selected_period_months)
         else:
             target_months = [page._current_month] if page._current_month else []
         if not target_months or year is None:
@@ -389,6 +412,8 @@ def refresh_planning(page):
     net_reason = connection_reason(page, helper_supports_work_plans)
     page.load_gis_button.setEnabled(local and not net_reason)
     page.load_gis_button.setToolTip(net_reason)
+    if hasattr(page, "list_selector"):
+        page.list_selector.queue_sync()
     reason = ""
     if not plan or not work_list:
         page.publish_button.setEnabled(False)
@@ -416,15 +441,20 @@ def refresh_planning(page):
     page.publish_button.setToolTip(net_reason or reason)
     if placed:
         key, stage, title, action, detail, done = "next", 3, "План размещён в ГИС", "К фиксации", "Следующий этап — фактические показатели по месяцам.", {0, 1, 2, 3}
+    elif not filled and not plan.gis_last_sync_at and not saved and not page.repository.get_setting(f"ui.remote_probe.plan.{plan.id}"):
+        key, stage, title, action, detail, done = "load", 0, "План за этот год не загружен", "Загрузить план года", "Проверьте план в ГИС или подготовьте новый локальный план.", set()
     elif not filled:
         key, stage, title, action, detail, done = "fill", 1, "Заполните план на год", "Автораспределить", "Распределите количество из перечня по месяцам или введите его в таблице.", {0}
     else:
         key, stage, title, action, detail, done = "publish", 2, "Проверьте распределение по месяцам", ("Обновить план в ГИС" if plan.gis_work_plan_guid else "Разместить план"), "План сохранён локально. При размещении ГИС получит текущие значения всего года.", {0, 1}
-    blocking = (net_reason or reason) if key == "publish" else ""
+    blocking = (net_reason or reason) if key == "publish" else net_reason if key == "load" else ""
     if locked:
         blocking = "Дождитесь завершения текущей операции."
     page.workflow.show_step(stage, title, detail, key, action, reason=blocking, done=done)
     if not locked:
         status = "размещён" if placed else ("изменён локально" if plan.gis_work_plan_guid else "локальный")
+        probe = page.repository.get_setting(f"ui.remote_probe.plan.{plan.id}")
+        if not filled:
+            status = "в ГИС не найден" if probe == "missing" else "не загружен" if not plan.gis_last_sync_at else "загружен, без значений"
         page.plan_status.setText(f"План {year} • {status}" + (f" • ошибка: {plan.gis_last_error}" if plan.gis_last_error else ""))
         page.plan_status.setToolTip(f"GUID: {plan.gis_work_plan_guid or '—'}\nПоследний обмен: {plan.gis_last_sync_at or '—'}")

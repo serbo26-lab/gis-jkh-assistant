@@ -38,7 +38,7 @@ from gis_jkh_assistant.database import RecordSource, Repository
 from gis_jkh_assistant.gis_integration import LocalIntegrationGateway
 from gis_jkh_assistant.gis_files.house_data import (
     HouseDataImportError,
-    normalize_positive_decimal,
+    normalize_positive_decimal, normalize_area, resolve_house_row, area_values_for_house,
     parse_house_data_template,
     write_house_data_template,
 )
@@ -379,8 +379,8 @@ class HousesPage(QWidget):
         self.non_residential_spin.setRange(0, 100000)
         self.total_label = QLabel("0")
         premises_form = QFormLayout()
-        premises_form.addRow("Жилых", self.residential_spin)
-        premises_form.addRow("Нежилых", self.non_residential_spin)
+        premises_form.addRow("Жилых помещений, шт.", self.residential_spin)
+        premises_form.addRow("Нежилых помещений, шт.", self.non_residential_spin)
         premises_form.addRow("Итого", self.total_label)
         self.card_layout.addLayout(premises_form)
 
@@ -391,6 +391,10 @@ class HousesPage(QWidget):
         self.charge_area_edit = QLineEdit()
         self.charge_area_edit.setPlaceholderText("Например: 395,6")
         billing_form = QFormLayout()
+        self.residential_area_edit = QLineEdit()
+        self.non_residential_area_edit = QLineEdit()
+        billing_form.addRow("Площадь жилых помещений, м²", self.residential_area_edit)
+        billing_form.addRow("Площадь нежилых помещений, м²", self.non_residential_area_edit)
         billing_form.addRow("Площадь к начислению, м²", self.charge_area_edit)
         self.card_layout.addLayout(billing_form)
 
@@ -465,6 +469,8 @@ class HousesPage(QWidget):
             self.unique_number_edit: "gis_unique_house_number",
             self.cadastral_edit: "cadastral_number",
             self.charge_area_edit: "charge_area",
+            self.residential_area_edit: "residential_area",
+            self.non_residential_area_edit: "non_residential_area",
             self.management_agreement_number_edit: "management_agreement_number",
         }
         for widget, field in field_bindings.items():
@@ -655,6 +661,8 @@ class HousesPage(QWidget):
             self.unique_number_edit.setText(house.gis_unique_house_number or "")
             self.cadastral_edit.setText(house.cadastral_number or "")
             self.charge_area_edit.setText(house.charge_area or "")
+            self.residential_area_edit.setText(house.residential_area or "")
+            self.non_residential_area_edit.setText(house.non_residential_area or "")
             self.management_start_edit.setText(
                 house.management_start_date or ""
             )
@@ -795,7 +803,7 @@ class HousesPage(QWidget):
         try:
             for name in (
                 "address_edit", "object_guid_edit", "gis_guid_edit", "fias_guid_edit",
-                "unique_number_edit", "cadastral_edit", "charge_area_edit",
+                "unique_number_edit", "cadastral_edit", "charge_area_edit", "residential_area_edit", "non_residential_area_edit",
                 "management_start_edit", "management_end_edit", "management_agreement_number_edit",
                 "management_agreement_date_edit", "comment_edit",
             ):
@@ -820,6 +828,8 @@ class HousesPage(QWidget):
             self.unique_number_edit,
             self.cadastral_edit,
             self.charge_area_edit,
+            self.residential_area_edit,
+            self.non_residential_area_edit,
             self.management_start_edit,
             self.management_end_edit,
             self.management_agreement_number_edit,
@@ -1934,59 +1944,61 @@ class HousesPage(QWidget):
             return
 
         houses = self.repository.list_houses(str(organization_id))
-        houses_by_id = {house.id: house for house in houses}
-        houses_by_address: dict[str, list[object]] = defaultdict(list)
-        for house in houses:
-            key = " ".join(house.address.split()).casefold()
-            houses_by_address[key].append(house)
+        explicit = {}
+        unresolved_rows = []
+        for row in (*result.areas, *result.tariffs):
+            try:
+                resolve_house_row(row, houses)
+            except ValueError as exc:
+                unresolved_rows.append((row, str(exc)))
+        if unresolved_rows:
+            from .house_import_preview import HouseMatchDialog
+            matching = HouseMatchDialog(unresolved_rows, houses, self)
+            if matching.exec() != QDialog.DialogCode.Accepted:
+                return
+            by_id = {house.id: house for house in houses}
+            explicit = {key: by_id[value] for key, value in matching.mapping().items()}
+        def resolve(row, label):
+            try:
+                return explicit.get(id(row)) or resolve_house_row(row, houses)
+            except ValueError as exc:
+                raise ValueError(f"{label}: {exc}") from exc
 
-        def resolve(house_id: str | None, address: str, row_label: str):
-            if house_id:
-                house = houses_by_id.get(house_id)
-                if house is not None:
-                    return house
-                raise ValueError(
-                    f"{row_label}: служебный идентификатор дома не относится "
-                    "к выбранной УО. Сформируйте шаблон для нужной УО заново."
-                )
-            key = " ".join(address.split()).casefold()
-            matches = houses_by_address.get(key, [])
-            if len(matches) == 1:
-                return matches[0]
-            if not matches:
-                raise ValueError(f"{row_label}: дом «{address}» не найден у выбранной УО.")
-            raise ValueError(f"{row_label}: адрес «{address}» встречается несколько раз.")
-
-        area_changes: list[tuple[object, str, str | None]] = []
+        area_changes: list[tuple[object, dict, dict]] = []
         tariff_changes: list[tuple[object, object, object | None]] = []
         unresolved: list[str] = []
 
         for row in result.areas:
             try:
                 house = resolve(
-                    row.house_id,
-                    row.address,
-                    f"Площади, строка {row.row_number}",
+                    row, f"Площади, строка {row.row_number}",
                 )
             except ValueError as exc:
                 unresolved.append(str(exc))
                 continue
-            current = house.charge_area
+            changes, previous = {}, {}
             try:
-                current_normalized = (
-                    normalize_positive_decimal(current) if current else None
-                )
-            except ValueError:
-                current_normalized = current
-            if current_normalized != row.area:
-                area_changes.append((house, row.area, current))
+                values = area_values_for_house(row, house)
+            except ValueError as exc:
+                unresolved.append(f"Площади, строка {row.row_number}: {exc}")
+                continue
+            for field, value in values.items():
+                if value is None:
+                    continue
+                current = getattr(house, field)
+                try:
+                    normalized = normalize_area(current) if current is not None else None
+                except ValueError:
+                    normalized = current
+                if normalized != value:
+                    changes[field], previous[field] = value, current
+            if changes:
+                area_changes.append((house, changes, previous))
 
         for row in result.tariffs:
             try:
                 house = resolve(
-                    row.house_id,
-                    row.address,
-                    f"Тарифы, строка {row.row_number}",
+                    row, f"Тарифы, строка {row.row_number}",
                 )
             except ValueError as exc:
                 unresolved.append(str(exc))
@@ -2013,6 +2025,20 @@ class HousesPage(QWidget):
             if not same:
                 tariff_changes.append((house, row, existing))
 
+        seen = {}
+        for house, changes, _previous in area_changes:
+            for field, value in changes.items():
+                key = (house.id, field)
+                if key in seen and seen[key] != value:
+                    unresolved.append(f"Для одного дома указаны разные значения поля {field}.")
+                seen[key] = value
+        tariff_keys = set()
+        for house, row, _existing in tariff_changes:
+            key = (house.id, row.start.value)
+            if key in tariff_keys:
+                unresolved.append("Повторное изменение тарифа одного дома на одну дату.")
+            tariff_keys.add(key)
+
         if unresolved:
             message = (
                 "Импорт не выполнен: не удалось однозначно сопоставить некоторые строки.\n\n"
@@ -2037,12 +2063,7 @@ class HousesPage(QWidget):
         )
         if result.warnings:
             preview += "\n\n" + "\n".join(result.warnings)
-        if area_changes:
-            preview += "\n\nПримеры изменений площади:\n"
-            for house, area, old_area in area_changes[:6]:
-                preview += (
-                    f"• {house.address}: {old_area or 'не указана'} → {area} м²\n"
-                )
+        # Full row-level preview is shown below; no silent positional matching.
         if tariff_conflicts:
             preview += "\n\nПримеры изменений тарифа:\n"
             for house, row, existing in tariff_conflicts[:6]:
@@ -2059,26 +2080,23 @@ class HousesPage(QWidget):
             )
             return
 
-        answer = QMessageBox.question(
-            self,
-            "Применить импорт?",
-            preview + "\n\nПрименить эти изменения?",
-        )
-        if answer != QMessageBox.Yes:
+        from .house_import_preview import HouseImportPreview
+        dialog = HouseImportPreview(area_changes, tariff_changes, preview, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-
-        for house, area, _old in area_changes:
-            self.repository.update_house(house.id, charge_area=area)
-
-        for house, row, _existing in tariff_changes:
-            self.repository.upsert_house_tariff_change(
-                house_id=house.id,
-                amount=row.amount,
-                start_year=row.start.value.year,
-                start_month=row.start.value.month,
-                start_day=row.start.value.day,
-                start_precision=row.start.precision,
-            )
+        try:
+            with self.repository.connection.atomic():
+                for house, fields, _old in area_changes:
+                    self.repository.update_house(house.id, **fields)
+                for house, row, _existing in tariff_changes:
+                    self.repository.upsert_house_tariff_change(
+                        house_id=house.id, amount=row.amount,
+                        start_year=row.start.value.year, start_month=row.start.value.month,
+                        start_day=row.start.value.day, start_precision=row.start.precision,
+                    )
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.critical(self, "Импорт отменён", error_text(exc, effect="Изменения площадей и тарифов отменены целиком."))
+            return
 
         self.refresh_houses()
         QMessageBox.information(

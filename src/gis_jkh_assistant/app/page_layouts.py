@@ -5,14 +5,14 @@ from PySide6.QtCore import QEvent, QObject, QSize, QTimer, Qt
 from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton,
-    QScrollArea, QTableWidget, QVBoxLayout, QWidget,
+    QScrollArea, QSplitter, QTableWidget, QVBoxLayout, QWidget,
 )
 
 from .widgets import SafeComboBox, ScopeSwitcher
 from .action_layout import ActionFlowLayout
 from .icons import set_button_icon
 from .workflow_widgets import (
-    ActionMenuButton, ContextBar, OperationStatus, PageHeader, SectionCard, WorkflowPanel,
+    ActionMenuButton, ContextBar, OperationStatus, PageHeader, SectionCard, WorkflowPanel, WorkspaceCard,
 )
 
 MONTHS = (
@@ -21,11 +21,23 @@ MONTHS = (
 )
 
 
+def month_button_text(month, state, compact=False):
+    if not compact:
+        return f"{MONTHS[month - 1]}\n{state}"
+    names = ("Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек")
+    states = {"не загружено": "не загр", "вне периода": "—", "проект в ГИС": "проект",
+              "размещено": "в ГИС", "аннулировано": "отмен.", "не найдено": "нет",
+              "локально": "лок.", "изменено": "измен."}
+    return f"{names[month - 1]}\n{states.get(state, state)}"
+
+
 class MonthSelectorCard(SectionCard):
     """Choose rows from real month-label widths, including larger UI text."""
 
     def __init__(self, page):
         super().__init__()
+        self.body.setContentsMargins(6, 2, 6, 2)
+        self.body.setSpacing(2)
         self.page = page
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
@@ -48,6 +60,11 @@ class MonthSelectorCard(SectionCard):
             for column in range(12):
                 self.page.month_buttons_layout.setColumnStretch(column, 0)
             self.page._relayout_month_buttons(columns)
+        rows = (12 + columns - 1) // columns
+        button_height = max(button.minimumSizeHint().height() for button in self.page.month_buttons.values())
+        height = rows * button_height + (rows - 1) * spacing + margins.top() + margins.bottom() + self.body.spacing()
+        if self.height() != height:
+            self.setFixedHeight(height)
 
     def resizeEvent(self, event):  # noqa: N802 - Qt API
         super().resizeEvent(event)
@@ -90,10 +107,10 @@ def context_for(page, *, downstream: bool = True) -> ContextBar:
     context.add_field("Управляющая организация", page.organization_combo)
     context.add_field("Дом", page.house_combo)
     if downstream:
-        page.work_list_combo = SafeComboBox()
+        page.work_list_combo = SafeComboBox(page)
+        page.work_list_combo.hide()
         page.work_list_combo.setPlaceholderText("Выберите размещённый перечень")
         page.year_combo = SafeComboBox()
-        context.add_field("Размещённый перечень", page.work_list_combo)
         context.add_field("Год", page.year_combo)
     page.context_card = context
     return context
@@ -131,7 +148,8 @@ def viewport_table(widget):
 
 
 def workspace_card(title):
-    card = SectionCard()
+    card = WorkspaceCard()
+    card.setProperty("mainWorkspace", True)
     card.setAccessibleName(title)
     return card
 
@@ -142,21 +160,30 @@ class NameColumnSizer(QObject):
         super().__init__(widget)
         self.widget = widget
         self.column = column
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.resize_name)
         widget.viewport().installEventFilter(self)
         widget.horizontalHeader().sectionResized.connect(self._section_resized)
 
     def _section_resized(self, column, _old, _new):
         if column != self.column:
-            self.resize_name()
+            self.queue()
+
+    def queue(self):
+        if not self.timer.isActive():
+            self.timer.start(0)
 
     def resize_name(self):
         other = sum(self.widget.columnWidth(i) for i in range(self.widget.columnCount())
                     if i != self.column and not self.widget.isColumnHidden(i))
-        self.widget.setColumnWidth(self.column, max(320, self.widget.viewport().width() - other))
+        width = max(320, self.widget.viewport().width() - other)
+        if self.widget.columnWidth(self.column) != width:
+            self.widget.setColumnWidth(self.column, width)
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt API
         if event.type() == QEvent.Type.Resize:
-            self.resize_name()
+            self.queue()
         return super().eventFilter(watched, event)
 
 
@@ -198,6 +225,7 @@ def table(columns, *, name_column: int = 0, table_class=QTableWidget) -> QTableW
     widget.row_metrics_observer = TableHeightObserver(widget, lambda: resize_table_rows(widget, 4) if widget.property("viewportManaged") else fit_table_rows(widget))
     widget.model().rowsInserted.connect(widget.row_metrics_observer.queue)
     widget.model().modelReset.connect(widget.row_metrics_observer.queue)
+    widget.model().dataChanged.connect(widget.row_metrics_observer.queue)
     return widget
 
 
@@ -230,14 +258,16 @@ def fit_table_rows(widget):
                 # font changes. Measure both text and embedded controls once,
                 # so queued geometry updates converge to the same width.
                 width = max(header.sectionSizeFromContents(column).width(), widget.sizeHintForColumn(column), control_widths.get(column, 0))
-                header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+                if header.sectionResizeMode(column) != QHeaderView.ResizeMode.Interactive:
+                    header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
                 if widget.columnWidth(column) != width:
                     widget.setColumnWidth(column, width)
         widget._measured_header_columns = measured
     for column, width in control_widths.items():
         # ResizeToContents is deferred for a collapsed secondary table. Keep
         # its photo/delete controls readable even during a busy scale change.
-        widget.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        if widget.horizontalHeader().sectionResizeMode(column) != QHeaderView.ResizeMode.Interactive:
+            widget.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
         if widget.columnWidth(column) < width:
             widget.setColumnWidth(column, width)
 
@@ -261,6 +291,8 @@ def build_planning(page, table_class):
     page.workflow.register("fill", page.distribute_button)
     page.workflow.register("publish", page.publish_button)
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(3))
+    page.workflow.register("load", page.load_gis_button)
+    page.workflow.direct_keys = {"fill", "publish", "load"}
     page.operation_status = OperationStatus()
     page.operation_status.hide()
     page.plan_status_strip = page.operation_status
@@ -274,14 +306,15 @@ def build_planning(page, table_class):
     page.empty_hint.setObjectName("Muted")
     root.addWidget(page.empty_hint)
     card = workspace_card("План по месяцам")
-    card.actions.addWidget(page.distribute_button)
-    page.distribute_button.setProperty("workflowAlternate", True)
-    page.distribute_button.show()
     page.plan_actions = command_menu("Операции с планом", (page.load_gis_button, page.publish_button, page.clear_button), name="planning")
-    card.actions.addWidget(page.plan_actions)
+    page.plan_actions.setParent(page.command_host)
+    page.plan_actions.hide()
     page.dates_button = QPushButton("Даты выбранной ячейки…")
     page.dates_button.setToolTip("Открыть конкретные даты выбранного месяца: Alt+D или двойной щелчок")
-    card.actions.addWidget(page.dates_button)
+    for button in (page.distribute_button, page.dates_button, page.clear_button):
+        card.actions.addWidget(button)
+        button.show()
+    _action_row(card, (page.load_gis_button, page.publish_button))
     hint = QLabel("Количество сохраняется сразу. Alt+D или двойной щелчок — даты; Del — очистить выделенные ячейки.")
     hint.setWordWrap(True)
     hint.setObjectName("Muted")
@@ -324,6 +357,8 @@ def build_planning(page, table_class):
     page.table.customContextMenuRequested.connect(show_cell_menu)
     page.table.context_menu_requested.connect(show_cell_menu)
     dates_available()
+    from .work_list_selector import install_selector
+    install_selector(page, root, page.work_list_combo)
     page._set_plan_enabled(False)
 
 
@@ -340,7 +375,7 @@ def build_monthly(page, kind: str):
     root.addWidget(context)
     months = MonthSelectorCard(page)
     page.months_card = months
-    page.month_details_button = QPushButton("Все месяцы…")
+    page.month_details_button = QPushButton("Все месяцы…", page)
     page.month_details_button.setCheckable(True)
     page.month_details_button.setAccessibleDescription("Показывает месяцы и их состояния; выбор месяца не меняет область команды периода")
     page.compact_month_row = QWidget(page)
@@ -361,7 +396,8 @@ def build_monthly(page, kind: str):
         page.month_buttons[month] = button
         page.month_buttons_layout.addWidget(button, (month - 1) // 6, (month - 1) % 6)
     months.body.addWidget(page.month_grid)
-    months.hide()
+    page.month_details_button.setChecked(True)
+    page.month_details_button.hide()
     page.month_details_button.toggled.connect(months.setVisible)
     root.addWidget(months)
     steps = ("Сформировать", "Акты", "Проект в ГИС", "Разместить") if quality else ("План готов", "Заполнить факт", "Проверить", "Разместить")
@@ -380,7 +416,6 @@ def build_monthly(page, kind: str):
     page.scope_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     if not quality:
         scope.addWidget(page.scope_hint)
-    scope.addWidget(page.month_details_button)
     page.scope_row = QWidget()
     page.scope_row.setLayout(scope)
     page.workflow.action_row.insertWidget(0, page.scope_row)
@@ -460,6 +495,25 @@ def build_monthly(page, kind: str):
     chain += [page.table]
     for before, after in zip(chain, chain[1:]):
         QWidget.setTabOrder(before, after)
+    # Month/period commands are explicit; the old recommendation switch remains
+    # available to controller compatibility, not as a second scope selector.
+    page.scope_row.hide()
+    page.workflow.title.show()
+    page.workflow.help_button.toggled.disconnect(page.workflow.title.setVisible)
+    page.workflow.help_button.toggled.connect(
+        lambda expanded: page.workflow.setVisible(expanded or not getattr(page, "_dense_monthly", False))
+    )
+    page.workflow.direct_keys = {"fill", "form", "acts", "review_acts", "save", "publish", "load"}
+    page.workflow.register("load", page.load_gis_button if quality else page.load_month_button)
+    if quality:
+        page.workflow.register("acts", page.month_acts_button)
+        page.workflow.title.setParent(page.workflow._summary_widget)
+        page.workflow._summary_widget.layout().insertWidget(0, page.workflow.title)
+        page.workflow._summary_widget.show()
+        page.scope_hint.hide()
+        page.action_scope_hint.hide()
+    from .work_list_selector import install_selector
+    install_selector(page, root, page.work_list_combo)
 
 
 def _action_row(card, buttons):
@@ -521,6 +575,7 @@ def _fixation_commands(page):
 
 def _quality_data(page, root):
     card = workspace_card("Работы в оценке качества")
+    page.data_card = card
     card.body.setContentsMargins(8, 3, 8, 3)
     page.selection_actions = command_menu(
         "Оценка: работы", (page.include_all_button, page.exclude_all_button)
@@ -534,13 +589,43 @@ def _quality_data(page, root):
     page.period_actions = command_menu("Доступные месяцы года", (page.form_period_button, page.load_period_button, page.save_period_button, page.publish_period_button, page.clear_period_values_button), name="sync")
     _monthly_data_menu(page)
     page.data_actions.setText("Данные и обмен с ГИС")
-    for button in (page.selection_actions, page.month_acts_button,
-                   page.acts_actions, page.data_actions):
-        card.actions.addWidget(button)
-        button.show()
-    page.table = viewport_table(table(["В оценку", "Работа / услуга", "Стоимость в\nежемесячной плате", "Дней ненадлежащего\nкачества", "Дней в\nмесяце", "Уменьшение\nплаты", "Акты"], name_column=1))
+    from .monthly_commands import build_commands, command_row
+    for hidden in (page.data_actions, page.acts_actions):
+        hidden.setParent(page.command_host)
+        hidden.hide()
+    page.month_acts_button.setText("Акты…")
+    page.month_acts_button.setToolTip("Документы и связи месяца: добавить свой акт или подготовить PDF вручную")
+    page.auto_act_month_button.setText("Создать автоакт месяца")
+    page.auto_act_period_button.setText("Создать автоакты периода")
+    page.create_act_button.setText("Подготовить PDF вручную…")
+    page.upload_acts_button.setText("Добавить свой документ…")
+    card.actions.addWidget(page.selection_actions)
+    card.actions.addWidget(page.month_acts_button)
+    page.month_acts_button.show()
+    build_commands(page, card, quality=True)
+    page.manual_documents_caption = command_row(card, "Вручную:", (page.create_act_button, page.upload_acts_button))
+    automatic = QLabel("По факту:")
+    automatic.setObjectName("ToolbarGroupLabel")
+    card.actions.addWidget(automatic)
+    page.auto_act_month_button.setProperty("compactCommand", True)
+    card.actions.addWidget(page.auto_act_month_button)
+    page.auto_act_month_button.show()
+    # Range generation belongs beside its range, not beside manual documents.
+    for index in range(card.body.count()):
+        layout = card.body.itemAt(index).layout()
+        if layout and any(layout.itemAt(i).widget() is page.period_from for i in range(layout.count())):
+            layout.addWidget(page.auto_act_period_button)
+            page.auto_act_period_button.show()
+            break
+    page.table = viewport_table(table(["В оценку", "Работа / услуга", "Плата / мес., руб.", "Дни нарушения", "Дней в месяце", "Перерасчёт, руб.", "Акты"], name_column=1))
+    for column, detail in ((2, "Стоимость работы в ежемесячной плате"),
+                           (3, "Число дней предоставления работы или услуги ненадлежащего качества"),
+                           (5, "Уменьшение платы по результатам оценки качества")):
+        page.table.horizontalHeaderItem(column).setToolTip(detail)
     page.table.setProperty("preferredVisibleRows", 5)
+    page.table.setProperty("compactTable", True)
     page.selected_act_button = QPushButton("Акты выбранной работы…")
+    page.selected_act_button.setProperty("compactCommand", True)
     page.selected_act_button.setToolTip(
         "Открыть акты выбранной строки без горизонтальной прокрутки таблицы"
     )
@@ -554,6 +639,7 @@ def _quality_data(page, root):
     page.month_acts_summary.setObjectName("Muted")
     page.month_acts_summary.setWordWrap(True)
     help_button = QPushButton("Об актах…")
+    help_button.setProperty("compactCommand", True)
     help_button.setToolTip("Акты и перерасчёт: правила подготовки документов")
     help_button.setCheckable(True)
     page.acts_explanation = QLabel(
@@ -580,14 +666,19 @@ def _quality_data(page, root):
 
 def _fixation_data(page, root):
     card = workspace_card("Фактические показатели месяца")
+    page.data_card = card
     page.month_actions = command_menu("Открытый месяц", (page.load_month_button, page.publish_month_button, page.clear_month_button), name="fixation")
     page.period_actions = command_menu("Доступные месяцы года", (page.fill_period_button, page.load_period_button, page.publish_period_button, page.clear_period_button), name="sync")
     _monthly_data_menu(page, direct_month_fill=True)
-    page.plan_reference_checkbox = QCheckBox("Показать план")
+    page.plan_reference_checkbox = QCheckBox("Плановые значения рядом с фактом")
     page.plan_reference_checkbox.setToolTip("Плановые показатели рядом с фактическими для сравнения")
     card.actions.addWidget(page.plan_reference_checkbox)
-    card.actions.addWidget(page.data_actions)
+    page.data_actions.setParent(page.command_host)
+    page.data_actions.hide()
+    from .monthly_commands import build_commands
+    build_commands(page, card, quality=False)
     page.table = viewport_table(table(["Работа / услуга", "Цена факт", "Объём факт", "Кол-во факт", "Стоимость факт", "Цена план", "Объём план", "Кол-во план", "Стоимость план", "Фото", "Статус"]))
+    page.table.setProperty("compactTable", True)
     page.plan_reference_checkbox.toggled.connect(page._show_plan_reference)
     page._show_plan_reference(False)
     card.body.addWidget(page.table, 1)
@@ -596,28 +687,36 @@ def _fixation_data(page, root):
     note.setObjectName("Muted")
     page.table.setToolTip(note.text())
     card.body.addWidget(page.month_status)
-    root.addWidget(card, 1)
     unplanned_row = QHBoxLayout()
     page.unplanned_toggle = QPushButton("Внеплановые работы: 0")
-    page.unplanned_toggle.setCheckable(True)
+    page.unplanned_toggle.setFlat(True)
+    page.unplanned_toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     unplanned_row.addWidget(page.unplanned_toggle)
     unplanned_row.addWidget(page.add_unplanned_button)
     page.add_unplanned_button.show()
     unplanned_row.addStretch(1)
-    root.addLayout(unplanned_row)
     page.unplanned_card = SectionCard()
+    page.unplanned_card.body.addLayout(unplanned_row)
     page.unplanned_table = table(["Работа / услуга", "Вид работы / услуги", "Ед. изм.", "Цена", "Объем", "Количество", "Стоимость", "Комментарий", "Фото", ""])
     page.unplanned_card.body.addWidget(page.unplanned_table)
-    page.unplanned_card.hide()
-    page.unplanned_toggle.toggled.connect(page.unplanned_card.setVisible)
-    root.addWidget(page.unplanned_card)
+    page.unplanned_table.setProperty("preferredVisibleRows", 1)
+    viewport_table(page.unplanned_table)
+    page.unplanned_splitter = QSplitter(Qt.Orientation.Vertical)
+    page.unplanned_splitter.setProperty("mainWorkspace", True)
+    page.unplanned_splitter.setChildrenCollapsible(False)
+    page.unplanned_splitter.addWidget(card)
+    page.unplanned_splitter.addWidget(page.unplanned_card)
+    page.unplanned_splitter.setStretchFactor(0, 4)
+    page.unplanned_splitter.setStretchFactor(1, 1)
+    page.unplanned_splitter.setSizes([420, 90])
+    root.addWidget(page.unplanned_splitter, 1)
     def update_count(*_args):
         from shiboken6 import isValid
         if not isValid(page.unplanned_table):
             return
         count = page.unplanned_table.rowCount()
         page.unplanned_toggle.setText(f"Внеплановые работы: {count}")
-        page.unplanned_toggle.setAccessibleDescription(f"{count} строк выбранного месяца. Развернуть или свернуть таблицу.")
+        page.unplanned_toggle.setAccessibleDescription(f"{count} строк выбранного месяца. Внеплановые работы видны под основной таблицей.")
     page.unplanned_table.model().rowsInserted.connect(update_count)
     page.unplanned_table.model().rowsRemoved.connect(update_count)
     page.unplanned_table.model().modelReset.connect(update_count)
@@ -645,8 +744,26 @@ def _monthly_data_menu(page, *, direct_month_fill=False):
 def compact_monthly(page, compact):
     page.context_card.set_compact(False)
     page.workflow.set_compact(True)
-    page.scope_row.show()
-    page.months_card.setVisible(page.month_details_button.isChecked())
+    page.scope_row.hide()
+    page.months_card.show()
+    if compact != getattr(page, "_dense_monthly", False):
+        if compact:
+            page.workflow.action_row.removeWidget(page.workflow.help_button)
+            page.data_card.actions.addWidget(page.workflow.help_button)
+        else:
+            page.data_card.actions.removeWidget(page.workflow.help_button)
+            page.workflow.action_row.addWidget(page.workflow.help_button)
+        page.workflow.help_button.show()
+    page._dense_monthly = compact
+    for month, button in page.month_buttons.items():
+        state = button.property("monthState")
+        if state:
+            button.setText(month_button_text(month, state, compact))
+    page.months_card._queue_fit()
+    page.workflow.setVisible(not compact or page.workflow.help_button.isChecked())
+    if hasattr(page, "manual_documents_caption"):
+        for widget in (page.manual_documents_caption, page.create_act_button, page.upload_acts_button):
+            widget.setVisible(not compact)
 
 
 def resize_table_rows(widget, max_rows):
@@ -655,9 +772,16 @@ def resize_table_rows(widget, max_rows):
     if widget.property("viewportManaged"):
         widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         visible_rows = int(widget.property("preferredVisibleRows") or 4)
+        from PySide6.QtWidgets import QApplication
+        scale = float(QApplication.instance().property("uiScale") or 1.0)
+        if widget.property("compactTable") and scale >= 1.25:
+            visible_rows = min(visible_rows, 2)
         row = max([widget.verticalHeader().defaultSectionSize()] + [widget.rowHeight(i) for i in range(min(visible_rows, widget.rowCount()))])
         extra = 0 if visible_rows >= 5 else 4
-        widget.setMinimumHeight(widget.horizontalHeader().height() + row * visible_rows + widget.horizontalScrollBar().sizeHint().height() + widget.frameWidth() * 2 + extra)
+        extent = sum(widget.columnWidth(i) for i in range(widget.columnCount()) if not widget.isColumnHidden(i))
+        scrollbar = widget.horizontalScrollBar().sizeHint().height() if extent > widget.viewport().width() else 0
+        header_height = max(widget.horizontalHeader().height(), widget.horizontalHeader().sizeHint().height())
+        widget.setMinimumHeight(header_height + row * visible_rows + scrollbar + widget.frameWidth() * 2 + extra)
         widget.setMaximumHeight(16777215)
         return
     widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if widget.rowCount() > max_rows else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -681,7 +805,10 @@ class TableHeightObserver(QObject):
         self.widget = widget
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
-        self.timer.timeout.connect(callback)
+        self.callback = callback
+        self._header_pending = False
+        self._refreshing = False
+        self.timer.timeout.connect(self._refresh)
         widget.installEventFilter(self)
         widget.horizontalHeader().installEventFilter(self)
         widget.horizontalScrollBar().rangeChanged.connect(self.queue)
@@ -689,14 +816,24 @@ class TableHeightObserver(QObject):
         widget.verticalHeader().sectionResized.connect(self.queue)
 
     def queue(self, *_args):
-        if not self.timer.isActive():
+        if not self._refreshing and not self.timer.isActive():
             self.timer.start(0)
+
+    def _refresh(self):
+        self._refreshing = True
+        try:
+            if self._header_pending:
+                self._header_pending = False
+                header = self.widget.horizontalHeader()
+                if header.count():
+                    header.model().headerDataChanged.emit(Qt.Orientation.Horizontal, 0, header.count() - 1)
+            self.callback()
+        finally:
+            self._refreshing = False
 
     def eventFilter(self, watched, event):  # noqa: N802
         if event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange, QEvent.Type.StyleChange):
             if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
-                header = self.widget.horizontalHeader()
-                if header.count():
-                    header.model().headerDataChanged.emit(Qt.Orientation.Horizontal, 0, header.count() - 1)
+                self._header_pending = True
             self.queue()
         return super().eventFilter(watched, event)

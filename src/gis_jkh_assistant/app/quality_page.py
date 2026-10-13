@@ -31,6 +31,7 @@ from gis_jkh_assistant.quality_assessment import (
     helper_supports_quality_assessment,
     quality_reduction,
 )
+from .monthly_commands import operation_months
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .gis_integration_worker import GisIntegrationWorker, connect_result
@@ -439,7 +440,7 @@ class QualityAssessmentPage(QWidget):
         work_list = self.repository.get_work_list(self._current_work_list_id)
         if work_list is None:
             return ()
-        return active_months_for_work_list(
+        return operation_months(self,
             work_list,
             int(self.year_combo.currentData()),
         )
@@ -909,6 +910,7 @@ class QualityAssessmentPage(QWidget):
 
         def succeeded(result: dict) -> None:
             if not result.get("found"):
+                self.repository.set_setting(f"ui.remote_probe.quality.{period.id}", "missing")
                 self.operation_status.outcome("Оценка качества в ГИС не найдена. Локальные данные сохранены.")
                 QMessageBox.information(
                     self,
@@ -964,6 +966,7 @@ class QualityAssessmentPage(QWidget):
                 )
                 return
 
+            self.repository.set_setting(f"ui.remote_probe.quality.{period.id}", "found")
             self._load_table()
             self._refresh_act_summary()
             self._refresh_period_status()
@@ -1090,7 +1093,7 @@ class QualityAssessmentPage(QWidget):
         work_list = self.repository.get_work_list(self._current_work_list_id)
         if work_list is None:
             return []
-        active_months = set(active_months_for_work_list(work_list, year))
+        active_months = set(operation_months(self, work_list, year))
         result = []
         for period in self.store.list_periods(
             self._current_work_list_id,
@@ -1350,8 +1353,10 @@ class QualityAssessmentPage(QWidget):
                         command_succeeded["value"] = False
                         failed(str(exc))
                         return
+                    self.repository.set_setting(f"ui.remote_probe.quality.{period.id}", "found")
                     self._queue_successes += 1
                 else:
+                    self.repository.set_setting(f"ui.remote_probe.quality.{period.id}", "missing")
                     self._queue_skipped += 1
             else:
                 self._apply_gis_result(period_id, result, acknowledged_deletions)

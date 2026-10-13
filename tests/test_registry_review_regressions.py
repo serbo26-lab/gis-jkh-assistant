@@ -152,22 +152,23 @@ def test_selected_period_remains_readable_and_new_list_fits_window(registry, app
     assert page.page_scroll.horizontalScrollBar().maximum() == 0
 
 
-def test_period_defaults_compact_and_user_expansion_survives_refresh(registry):
+def test_period_is_visible_and_technical_expansion_survives_refresh(registry):
     page = registry.lists
     assert not page.details_toggle.isChecked()
-    assert not page.details_card.isVisibleTo(page)
+    assert page.details_toggle.isHidden()
+    assert page.details_card.isVisibleTo(page)
     assert registry.work_list.period_label in page.registry_combo.currentText()
-    page.details_toggle.click()
+    page.details_more_toggle.click()
     page.refresh_work_lists(select_id=registry.work_list.id)
     page._refresh_integration_status()
-    assert page.details_toggle.isChecked()
+    assert page.details_more_toggle.isChecked()
     assert page.details_card.isVisibleTo(page)
     assert page.start_year.isVisibleTo(page)
     assert page.end_month.isVisibleTo(page)
-    page.details_toggle.click()
+    page.details_more_toggle.click()
     page._refresh_gis_action_buttons()
-    assert not page.details_toggle.isChecked()
-    assert not page.details_card.isVisibleTo(page)
+    assert not page.details_more_toggle.isChecked()
+    assert page.details_card.isVisibleTo(page)
 
 
 def test_placed_list_cancellation_remains_discoverable_when_offline(registry):

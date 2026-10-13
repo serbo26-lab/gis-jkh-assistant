@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QMainWindow,
+    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -34,7 +35,7 @@ from .planning_page import PlanningPage
 from .quality_page import QualityAssessmentPage
 from .settings_page import SettingsPage
 from .styles import apply_theme, color
-from .ui_scale import SCALE_SETTING, apply_layout_scale, scale_factor, scaled
+from .ui_scale import apply_layout_scale, scaled
 from .window_chrome import apply_window_theme
 from .work_lists_page import WorkListsPage
 
@@ -43,7 +44,7 @@ class MainWindow(QMainWindow):
     def __init__(self, repository: Repository) -> None:
         super().__init__()
         self.repository = repository
-        self._ui_scale = scale_factor(repository.get_setting(SCALE_SETTING))
+        self._ui_scale = 1.0
         app = QApplication.instance()
         if app is not None:
             from .russian_buttons import install
@@ -199,6 +200,24 @@ class MainWindow(QMainWindow):
                 self._capture_shared_context("houses", "house")
             self._apply_shared_context()
         self.navigation.setCurrentRow(0)
+        if not repository.get_setting("ui.helper.intro_seen"):
+            self.helper_intro = QWidget()
+            intro = QHBoxLayout(self.helper_intro)
+            intro.setContentsMargins(4, 2, 4, 2)
+            label = QLabel("Для обмена с ГИС настройте браузерный помощник. Локальная работа доступна сразу.")
+            label.setWordWrap(True)
+            label.setObjectName("Muted")
+            intro.addWidget(label, 1)
+            setup = QPushButton("Настроить помощник…")
+            setup.clicked.connect(self._open_helper_setup)
+            intro.addWidget(setup)
+            dismiss = QPushButton("Продолжить локально")
+            def dismiss_intro():
+                repository.set_setting("ui.helper.intro_seen", "1")
+                self.helper_intro.hide()
+            dismiss.clicked.connect(dismiss_intro)
+            intro.addWidget(dismiss)
+            self.houses_page.page_content.layout().insertWidget(1, self.helper_intro)
         self._update_context_summary()
         self._update_display_layout(force=True)
 
@@ -683,8 +702,10 @@ class MainWindow(QMainWindow):
                 self._reload_page_theme(page)
 
     def _scale_changed(self, percent: int) -> None:
-        """Only change presentation; keep edits, selected objects and queues intact."""
-        self._ui_scale = scale_factor(percent)
+        """Enlargement is suspended; old preferences must not reactivate it."""
+        if self._ui_scale == 1.0:
+            return
+        self._ui_scale = 1.0
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, self.settings_page.theme_name(), self._ui_scale)

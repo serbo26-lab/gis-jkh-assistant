@@ -64,7 +64,7 @@ def test_registry_menu_follows_live_command_state_without_stray_buttons(desktop,
     page._refresh_workflow()
     for menu in (page.gis_actions, page.files_actions_button, page.composition_actions):
         menu.sync()
-        assert menu.isVisibleTo(page)
+        assert menu.isVisibleTo(page) if menu is not page.gis_actions else not menu.isVisibleTo(page)
         for action, source, when in menu.entries:
             assert action.isEnabled() == source.isEnabled()
             if source.toolTip():
@@ -109,8 +109,10 @@ def test_month_context_and_recommendation_remain_visible_without_month_matrix(de
         page = window.pages.currentWidget()
         page._select_month(9)
         settle(desktop.app)
-        assert not page.month_details_button.isChecked()
-        assert page.scope_switcher.isVisibleTo(page)
+        assert page.month_details_button.isChecked()
+        assert page.months_card.isVisibleTo(page)
+        assert page.current_commands_label.isVisibleTo(page)
+        assert page.period_commands_label.isVisibleTo(page)
         assert page.month_combo.currentText() == "Сентябрь"
         assert page.month_combo.width() >= page.month_combo.fontMetrics().horizontalAdvance("Сентябрь") + 45
         option = QStyleOptionComboBox()
@@ -122,5 +124,6 @@ def test_month_context_and_recommendation_remain_visible_without_month_matrix(de
             rect = field.rect().translated(field.mapTo(page.page_scroll.viewport(), QPoint(0, 0)))
             assert page.page_scroll.viewport().rect().contains(rect)
         page.scope_switcher.set_scope("period")
-        assert page.scope_switcher.isVisibleTo(page)
+        assert page.current_commands_label.isVisibleTo(page)
+        assert page.period_commands_label.isVisibleTo(page)
         assert "2026" in page.scope_hint.text()

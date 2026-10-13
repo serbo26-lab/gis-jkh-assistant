@@ -36,6 +36,7 @@ from gis_jkh_assistant.work_fixation import (
     fact_validation_error,
     validate_fact_numbers,
 )
+from .monthly_commands import operation_months
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .fixation_dialogs import AddUnplannedWorkDialog, FixationPhotoDialog
@@ -273,16 +274,21 @@ class FixationPage(QWidget):
         self._resize_table_to_rows(self.table, max_rows=15)
 
     def _resize_unplanned_table(self) -> None:
-        self._resize_table_to_rows(self.unplanned_table, max_rows=8)
         # Auxiliary columns should not consume the working name and numbers.
         # Keep every column available by horizontal scrolling when necessary.
         scale = float(QApplication.instance().property("uiScale") or 1.0)
         header = self.unplanned_table.horizontalHeader()
+        # These columns are authored widths. The generic content measurement
+        # must not restore another width on its next queued pass (and oscillate).
+        measured = getattr(self.unplanned_table, "_measured_header_columns", set())
+        measured.difference_update({1, 2, 7})
         for column, width in ((1, 150), (2, 85), (7, 185)):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            if header.sectionResizeMode(column) != QHeaderView.ResizeMode.Interactive:
+                header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
             target = round(width * scale)
             if self.unplanned_table.columnWidth(column) != target:
                 self.unplanned_table.setColumnWidth(column, target)
+        self._resize_table_to_rows(self.unplanned_table, max_rows=8)
         self.unplanned_table.name_column_sizer.resize_name()
 
 
@@ -822,7 +828,7 @@ class FixationPage(QWidget):
         }
         targets = [
             periods[month]
-            for month in active_months_for_work_list(work_list, year)
+            for month in operation_months(self, work_list, year)
             if month in periods and self._period_has_data(periods[month].id)
         ]
         if not targets:
@@ -893,7 +899,7 @@ class FixationPage(QWidget):
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        for month in active_months_for_work_list(work_list, year):
+        for month in operation_months(self, work_list, year):
             period = self.repository.get_or_create_work_fixation_period(
                 work_list_id=work_list.id,
                 year=year,
@@ -985,7 +991,7 @@ class FixationPage(QWidget):
         if work_list is None:
             return []
         year = int(self.year_combo.currentData())
-        active_months = set(active_months_for_work_list(work_list, year))
+        active_months = set(operation_months(self, work_list, year))
         periods = self.repository.list_work_fixation_periods(
             self._current_work_list_id,
             year=year,
@@ -1041,6 +1047,7 @@ class FixationPage(QWidget):
 
         def succeeded(result: dict) -> None:
             if not result.get("found"):
+                self.repository.set_setting(f"ui.remote_probe.fixation.{period.id}", "missing")
                 self.operation_status.outcome("Фиксация в ГИС не найдена. Локальные данные сохранены.")
                 QMessageBox.information(
                     self,
@@ -1106,6 +1113,7 @@ class FixationPage(QWidget):
                 )
                 return
 
+            self.repository.set_setting(f"ui.remote_probe.fixation.{period.id}", "found")
             self._load_table()
             self._load_unplanned_table()
             self._refresh_period_status()
@@ -1155,7 +1163,7 @@ class FixationPage(QWidget):
         work_list = self.repository.get_work_list(self._current_work_list_id)
         if work_list is None:
             return
-        months = active_months_for_work_list(
+        months = operation_months(self,
             work_list,
             int(self.year_combo.currentData()),
         )
@@ -1380,8 +1388,10 @@ class FixationPage(QWidget):
                     command_succeeded["value"] = False
                     failed(str(exc))
                     return
+                self.repository.set_setting(f"ui.remote_probe.fixation.{period.id}", "found")
                 self._queue_successes += 1
             else:
+                self.repository.set_setting(f"ui.remote_probe.fixation.{period.id}", "missing")
                 self._queue_skipped += 1
 
             self._queue_index += 1

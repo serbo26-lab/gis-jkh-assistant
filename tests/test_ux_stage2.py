@@ -121,7 +121,9 @@ def test_house_uo_commands_live_next_to_org_selector(desktop):
     page = desktop.window.houses_page
     assert page.organization_actions_button.parentWidget() is page.organization_combo.parentWidget()
     assert page.add_house_button.text() == "Добавить дом"
-    assert page.sync_houses_button.text() == "Загрузить все дома УО"
+    assert page.sync_houses_button.text() == "Загрузить дома"
+    assert page.sync_all_management_button.isVisibleTo(page)
+    assert page.sync_all_work_lists_button.isVisibleTo(page)
     assert page.bulk_actions_button.text() == "Обновить все дома УО"
     files_menu = page.files_actions_button.menu()
     assert files_menu is not None

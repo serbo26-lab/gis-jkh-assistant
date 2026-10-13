@@ -25,6 +25,12 @@ class ImportedAreaRow:
     address: str
     area: str
     row_number: int
+    residential_area: str | None = None
+    non_residential_area: str | None = None
+    house_object_guid: str | None = None
+    fias_house_guid: str | None = None
+    gis_unique_house_number: str | None = None
+    charge_explicit: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +40,9 @@ class ImportedTariffRow:
     start: ParsedPeriodDate
     amount: str
     row_number: int
+    house_object_guid: str | None = None
+    fias_house_guid: str | None = None
+    gis_unique_house_number: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +56,8 @@ AREA_SHEET = "Площади"
 TARIFF_SHEET = "Тарифы"
 INSTRUCTION_SHEET = "Инструкция"
 MIN_TARIFF_PAIRS = 10
+IDENTITY_HEADERS = ["_house_object_guid", "_fias_house_guid", "_gis_unique_house_number"]
+AREA_HEADERS = ["Площадь жилых помещений, м²", "Площадь нежилых помещений, м²"]
 
 
 def write_house_data_template(
@@ -63,7 +74,7 @@ def write_house_data_template(
     instruction.append(["Импорт площадей и тарифов"])
     instruction["A1"].font = Font(bold=True, size=14)
     instructions = [
-        "Лист «Площади»: заполните площадь к начислению для нужных домов.",
+        "Лист «Площади»: заполните жилую, нежилую и/или начисляемую площадь. Если начисляемая не указана, используется сумма указанных жилой и нежилой; ноль сохраняется как значение.",
         "Лист «Тарифы»: один дом занимает одну строку, история идет вправо парами "
         "«Действует с» / «Тариф». Пустые пары можно пропускать.",
         "Дата «08.2025» означает начало с 01.08.2025.",
@@ -71,14 +82,14 @@ def write_house_data_template(
         "Конечную дату тарифа вводить не нужно: она определяется следующим изменением.",
         "Если тариф не менялся, повторять его каждый год не обязательно.",
         "Старый вертикальный формат (одна строка = одна точка тарифа) тоже поддерживается.",
-        "Столбец _house_id служебный и скрыт. Адрес можно использовать для проверки.",
+        "Служебные идентификаторы скрыты. Адрес используется для проверки соответствия строк; после пересоздания базы проверьте сопоставление перед применением.",
     ]
     for line in instructions:
         instruction.append([line])
     instruction.column_dimensions["A"].width = 105
 
     areas = workbook.create_sheet(AREA_SHEET)
-    areas.append(["_house_id", "Адрес", "Площадь к начислению, м²"])
+    areas.append(["_house_id", "Адрес", "Площадь к начислению, м²", *AREA_HEADERS, *IDENTITY_HEADERS])
     _style_header(areas)
 
     sorted_houses = sorted(houses, key=lambda item: item.address.casefold())
@@ -98,11 +109,12 @@ def write_house_data_template(
     tariff_header = ["_house_id", "Адрес"]
     for _ in range(pair_count):
         tariff_header.extend(["Действует с", "Тариф, руб./м² в месяц"])
-    tariffs.append(tariff_header)
+    tariffs.append([*tariff_header, *IDENTITY_HEADERS])
     _style_header(tariffs)
 
     for house in sorted_houses:
-        areas.append([house.id, house.address, house.charge_area or ""])
+        identity = [house.house_object_guid, house.fias_house_guid, house.gis_unique_house_number]
+        areas.append([house.id, house.address, house.charge_area or "", house.residential_area or "", house.non_residential_area or "", *identity])
 
         tariff_row: list[object] = [house.id, house.address]
         existing = histories[house.id]
@@ -112,20 +124,25 @@ def write_house_data_template(
                 tariff_row.extend([tariff.effective_from_label, tariff.amount])
             else:
                 tariff_row.extend(["", ""])
-        tariffs.append(tariff_row)
+        tariffs.append([*tariff_row, *identity])
 
     for row in range(2, areas.max_row + 1):
-        areas.cell(row, 3).number_format = "@"
+        for column in (3, 4, 5):
+            areas.cell(row, column).number_format = "@"
     for row in range(2, tariffs.max_row + 1):
         for column in range(3, tariffs.max_column + 1):
             tariffs.cell(row, column).number_format = "@"
 
     for sheet in (areas, tariffs):
         sheet.column_dimensions["A"].hidden = True
+        for cell in sheet[1]:
+            if cell.value in IDENTITY_HEADERS:
+                sheet.column_dimensions[cell.column_letter].hidden = True
         sheet.freeze_panes = "B2"
         sheet.auto_filter.ref = sheet.dimensions
     areas.column_dimensions["B"].width = 70
-    areas.column_dimensions["C"].width = 28
+    for column in ("C", "D", "E"):
+        areas.column_dimensions[column].width = 28
     tariffs.column_dimensions["B"].width = 70
     for column in range(3, tariffs.max_column + 1):
         tariffs.column_dimensions[
@@ -154,6 +171,11 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
         )
         tariff_pairs = _tariff_column_pairs(tariffs_sheet)
 
+        area_headers = [str(c.value or "").strip() for c in areas_sheet[1]]
+        tariff_headers = [str(c.value or "").strip() for c in tariffs_sheet[1]]
+        def identity_fields(values, headers):
+            return {header[1:]: _text(_at(values, headers.index(header)))
+                    for header in IDENTITY_HEADERS if header in headers}
         area_rows: list[ImportedAreaRow] = []
         tariff_rows: list[ImportedTariffRow] = []
         warnings: list[str] = []
@@ -165,19 +187,25 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
             house_id = _text(_at(values, 0))
             address = _text(_at(values, 1)) or ""
             raw_area = _at(values, 2)
-            if raw_area is None or not str(raw_area).strip():
+            raw_components = [_at(values, area_headers.index(header)) if header in area_headers else None
+                              for header in AREA_HEADERS]
+            supplied = [v is not None and str(v).strip() != "" for v in (raw_area, *raw_components)]
+            if not any(supplied):
                 continue
             if not house_id and not address:
                 raise HouseDataImportError(
                     f"Лист «{AREA_SHEET}», строка {row_number}: не указан дом."
                 )
             try:
-                area = normalize_positive_decimal(raw_area)
+                components = [normalize_area(v) if present else None for v, present in zip(raw_components, supplied[1:])]
+                area = normalize_area(raw_area) if supplied[0] else normalize_area(sum(
+                    (Decimal(v.replace(",", ".")) for v in components if v is not None), Decimal(0)))
             except ValueError as exc:
                 raise HouseDataImportError(
                     f"Лист «{AREA_SHEET}», строка {row_number}: {exc}"
                 ) from exc
-            area_rows.append(ImportedAreaRow(house_id, address, area, row_number))
+            area_rows.append(ImportedAreaRow(house_id, address, area, row_number, *components,
+                                           **identity_fields(values, area_headers), charge_explicit=supplied[0]))
 
         seen_tariffs: set[tuple[str, str]] = set()
         for row_number, cells in enumerate(
@@ -230,7 +258,7 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
                     )
                 seen_tariffs.add(duplicate_key)
                 tariff_rows.append(
-                    ImportedTariffRow(house_id, address, start, amount, row_number)
+                    ImportedTariffRow(house_id, address, start, amount, row_number, **identity_fields(tuple(c.value for c in cells), tariff_headers))
                 )
 
         if not area_rows and not tariff_rows:
@@ -270,7 +298,8 @@ def _tariff_column_pairs(sheet) -> list[tuple[int, int]]:  # noqa: ANN001
             "Сформируйте новый шаблон в приложении."
         )
 
-    tariff_headers = headers[2:]
+    identity_start = next((i for i, header in enumerate(headers) if header in IDENTITY_HEADERS), len(headers))
+    tariff_headers = headers[2:identity_start]
     if len(tariff_headers) % 2:
         raise HouseDataImportError(
             f"Лист «{sheet.title}»: после адреса должны идти пары "
@@ -355,3 +384,54 @@ def _text(value: object) -> str | None:
 
 def _normalize_address(value: str) -> str:
     return " ".join(value.split()).casefold()
+
+
+def normalize_area(value):
+    text = str(value).replace("\u00a0", "").replace(" ", "").replace(",", ".").strip()
+    try:
+        number = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f"некорректная площадь: {value!r}.") from exc
+    if not number.is_finite() or number < 0:
+        raise ValueError("площадь должна быть конечным неотрицательным числом.")
+    return "0" if number == 0 else normalize_positive_decimal(number)
+
+
+def resolve_house_row(row, houses):
+    """Require all supplied identity evidence to agree; never match row numbers."""
+    houses = list(houses)
+    by_id = {h.id: h for h in houses}
+    address = _normalize_address(row.address)
+    identities = {key: str(getattr(row, key, None) or "").strip().casefold()
+                  for key in ("house_object_guid", "fias_house_guid", "gis_unique_house_number")}
+    identities = {key: value for key, value in identities.items() if value}
+    if row.house_id in by_id:
+        house = by_id[row.house_id]
+        if address and _normalize_address(house.address) != address:
+            raise ValueError("служебный идентификатор и адрес указывают на разные дома")
+        if any(str(getattr(house, key) or "").casefold() != value for key, value in identities.items()):
+            raise ValueError("идентификаторы дома противоречат друг другу")
+        return house
+    # Portable GIS identifiers take precedence after local IDs have changed.
+    if identities:
+        matches = [h for h in houses if all(str(getattr(h, key) or "").casefold() == value
+                                            for key, value in identities.items())]
+        if len(matches) == 1 and (not address or _normalize_address(matches[0].address) == address):
+            return matches[0]
+        raise ValueError("идентификаторы ГИС не удалось однозначно сопоставить с адресом у выбранной УО")
+    matches = [h for h in houses if address and _normalize_address(h.address) == address]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError("адрес отсутствует у выбранной УО или встречается несколько раз; выберите дом вручную")
+
+
+def area_values_for_house(row, house):
+    """Blank component cells retain existing values before deriving charge area."""
+    fields = {name: getattr(row, name) for name in ("residential_area", "non_residential_area")
+              if getattr(row, name) is not None}
+    area = row.area
+    if not row.charge_explicit:
+        effective = [fields.get(name, getattr(house, name)) for name in ("residential_area", "non_residential_area")]
+        area = normalize_area(sum((Decimal(normalize_area(v).replace(",", "."))
+                                   for v in effective if v is not None and str(v).strip()), Decimal(0)))
+    return {"charge_area": area, **fields}

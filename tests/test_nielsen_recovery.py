@@ -32,8 +32,11 @@ def test_failed_setting_restores_selection_without_applying(desktop, monkeypatch
             page.dark_radio.click()
             assert page.light_radio.isChecked() and not page.dark_radio.isChecked()
         elif setting == "scale":
-            page.scale_combo.setCurrentIndex(page.scale_combo.findData(150))
+            page._scale_changed(150)
             assert page.scale_combo.currentData() == 100
+            assert page.scale_combo.isHidden() and not page.scale_combo.isEnabled()
+            assert not applied and not messages
+            return  # Suspended scale has no persistence operation to fail.
         else:
             page.independent_radio.click()
             assert page.shared_radio.isChecked() and not page.independent_radio.isChecked()

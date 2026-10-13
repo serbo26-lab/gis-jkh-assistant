@@ -208,9 +208,9 @@ class HelperSetupDialog(QDialog):
         body.addWidget(self._label(
             "1. Откройте настройки расширений выбранного браузера."
         ))
-        self.open_browser = QPushButton("Открыть настройки расширений")
+        self.open_browser = QPushButton("Открыть браузер")
         self.open_browser.clicked.connect(self._open_browser)
-        self.copy_url = QPushButton("Скопировать адрес")
+        self.copy_url = QPushButton("Копировать адрес расширений")
         self.copy_url.clicked.connect(lambda: self._copy(
             self.extensions_url.text(), "Адрес скопирован. Перейдите в адресную строку браузера."
         ))
@@ -220,8 +220,8 @@ class HelperSetupDialog(QDialog):
         self.extensions_url.setAccessibleName("Адрес страницы расширений")
         body.addWidget(self.extensions_url)
         body.addWidget(self._label(
-            "Если открылась обычная вкладка, нажмите Ctrl+L, затем Ctrl+V и Enter. "
-            "Адрес настроек копируется автоматически при нажатии кнопки открытия.", muted=True,
+            "Откройте браузер. Если настройки не появились, скопируйте адрес ниже, "
+            "вставьте его в адресную строку и нажмите Enter.", muted=True,
         ))
         body.addWidget(self._label(
             "2. Включите «Режим разработчика» и нажмите «Загрузить распакованное расширение»."

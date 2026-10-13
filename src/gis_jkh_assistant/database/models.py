@@ -56,6 +56,8 @@ class House:
     gis_unique_house_number: str | None = None
     cadastral_number: str | None = None
     charge_area: str | None = None
+    residential_area: str | None = None
+    non_residential_area: str | None = None
     management_start_date: str | None = None
     management_end_date: str | None = None
     management_agreement_number: str | None = None
