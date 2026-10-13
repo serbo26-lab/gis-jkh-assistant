@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QButtonGroup, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton, QWidget
+from PySide6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton, QWidget
 
 from gis_jkh_assistant.database import Repository
 
@@ -15,12 +15,14 @@ from .workflow_widgets import SectionCard
 
 _SHARED_CONTEXT_KEY = "ui.shared_context_enabled"
 _THEME_KEY = "ui.theme"
+_NEXT_STEP_PANEL_KEY = "ui.next_step_panel_enabled"
 
 
 class SettingsPage(QWidget):
     sharedContextChanged = Signal(bool)
     themeChanged = Signal(str)
     scaleChanged = Signal(int)
+    nextStepPanelChanged = Signal(bool)
     helperSetupRequested = Signal()
 
     def __init__(self, repository: Repository, parent=None) -> None:
@@ -83,6 +85,23 @@ class SettingsPage(QWidget):
         root.addWidget(appearance)
         appearance.setMaximumWidth(900)
 
+        guidance = SectionCard("Панель следующего шага")
+        self.next_step_panel_checkbox = QCheckBox()
+        self.next_step_panel_checkbox.setAccessibleName("Панель следующего шага")
+        self.next_step_panel_checkbox.setChecked(self.next_step_panel_enabled())
+        self._update_next_step_panel_label()
+        self.next_step_panel_checkbox.toggled.connect(self._next_step_panel_toggled)
+        guidance.body.addWidget(self.next_step_panel_checkbox)
+        guidance_hint = QLabel(
+            "Подсказывает следующий шаг во всех рабочих разделах. "
+            "При выключении панель и её подсказки скрываются; рабочие команды остаются доступны."
+        )
+        guidance_hint.setObjectName("Muted")
+        guidance_hint.setWordWrap(True)
+        guidance.body.addWidget(guidance_hint)
+        root.addWidget(guidance)
+        guidance.setMaximumWidth(900)
+
         connection = SectionCard("Связь с ГИС ЖКХ")
         self.connection_status = QLabel("Проверка подключения…")
         self.connection_status.setWordWrap(True)
@@ -129,6 +148,27 @@ class SettingsPage(QWidget):
 
     def scale_percent(self) -> int:
         return 100
+
+    def next_step_panel_enabled(self) -> bool:
+        return self.repository.get_setting(_NEXT_STEP_PANEL_KEY) != "0"
+
+    def _update_next_step_panel_label(self) -> None:
+        self.next_step_panel_checkbox.setText(
+            "Включена" if self.next_step_panel_checkbox.isChecked() else "Выключена"
+        )
+
+    def _next_step_panel_toggled(self, checked: bool) -> None:
+        previous = self.next_step_panel_enabled()
+        if not self._save_setting(
+            _NEXT_STEP_PANEL_KEY, "1" if checked else "0", "Панель следующего шага",
+        ):
+            self.next_step_panel_checkbox.blockSignals(True)
+            self.next_step_panel_checkbox.setChecked(previous)
+            self.next_step_panel_checkbox.blockSignals(False)
+            self._update_next_step_panel_label()
+            return
+        self._update_next_step_panel_label()
+        self.nextStepPanelChanged.emit(checked)
 
     def _scale_changed(self, _index: int) -> None:
         self.scale_combo.setCurrentIndex(0)

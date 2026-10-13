@@ -430,6 +430,8 @@ class WorkflowPanel(QFrame):
         self.setObjectName("WorkflowPanel")
         self._key: str | None = None
         self._compact = True
+        self.guidance_enabled = True
+        self._recommendation_visible = True
         self.commands: dict[str, QPushButton | Callable] = {}
         self.body = ReservedVBoxLayout(self)
         self.body.setContentsMargins(8, 6, 8, 6)
@@ -479,7 +481,7 @@ class WorkflowPanel(QFrame):
         self.primary.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.primary.clicked.connect(self._execute)
         row.addWidget(self.primary)
-        self.help_button = QPushButton("Как продолжить")
+        self.help_button = QPushButton("Подробнее")
         self.help_button.setCheckable(True)
         self.help_button.setObjectName("DisclosureButton")
         self.help_button.toggled.connect(self._show_help)
@@ -494,6 +496,17 @@ class WorkflowPanel(QFrame):
         self._text_metrics_timer.timeout.connect(self._fit_text_metrics)
         self.height_guard = ContentHeightGuard(self)
         self.set_compact(True)
+
+    def set_guidance_enabled(self, enabled: bool) -> None:
+        """Hide guidance, including its button when hosted outside this frame."""
+        self.guidance_enabled = bool(enabled)
+        self.help_button.setVisible(self.guidance_enabled)
+        self.setVisible(self.guidance_enabled and self._recommendation_visible)
+
+    def set_recommendation_visible(self, visible: bool) -> None:
+        """Density changes cannot re-enable globally disabled guidance."""
+        self._recommendation_visible = bool(visible)
+        self.setVisible(self.guidance_enabled and self._recommendation_visible)
 
     def _show_help(self, expanded):
         for step in self.step_widgets:

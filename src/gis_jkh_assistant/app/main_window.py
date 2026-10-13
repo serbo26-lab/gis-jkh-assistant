@@ -38,6 +38,7 @@ from .styles import apply_theme, color
 from .ui_scale import apply_layout_scale, scaled
 from .window_chrome import apply_window_theme
 from .work_lists_page import WorkListsPage
+from .workflow_widgets import WorkflowPanel
 
 
 class MainWindow(QMainWindow):
@@ -173,6 +174,7 @@ class MainWindow(QMainWindow):
         )
         self.settings_page.themeChanged.connect(self._theme_changed)
         self.settings_page.scaleChanged.connect(self._scale_changed)
+        self.settings_page.nextStepPanelChanged.connect(self._next_step_panel_changed)
         self.settings_page.helperSetupRequested.connect(self._open_helper_setup)
         for name in ("houses", "work_lists", "planning", "fixation", "quality"):
             page = self._page_by_context_name(name)
@@ -188,6 +190,7 @@ class MainWindow(QMainWindow):
                     lambda index, source=name: self._workflow_navigation_requested(source, index)
                 )
         self._connect_shared_context_sources()
+        self._next_step_panel_changed(self.settings_page.next_step_panel_enabled())
 
         self.integration_status_timer = QTimer(self)
         self.integration_status_timer.setInterval(1500)
@@ -673,6 +676,10 @@ class MainWindow(QMainWindow):
                         )
             page.context_notice.setText(message)
             page.context_notice.setVisible(bool(message))
+
+    def _next_step_panel_changed(self, enabled: bool) -> None:
+        for panel in self.pages.findChildren(WorkflowPanel):
+            panel.set_guidance_enabled(enabled)
 
     def _theme_changed(self, theme: str) -> None:
         app = QApplication.instance()
