@@ -30,10 +30,14 @@ from .workflow_widgets import style_danger_button
 
 
 class WorkTemplatesDialog(QDialog):
-    def __init__(self, repository: Repository, organization_id: str, parent=None) -> None:
+    def __init__(
+        self, repository: Repository, organization_id: str, parent=None,
+        *, save_current=None, current_ready: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.repository = repository
         self.organization_id = organization_id
+        self._save_current = save_current
         self.setWindowTitle("Шаблоны перечней")
         self.resize(760, 520)
 
@@ -56,15 +60,25 @@ class WorkTemplatesDialog(QDialog):
         self.list_widget = QListWidget()
         self.list_widget.setWordWrap(True)
         layout.addWidget(self.list_widget, 1)
+        self.empty_guidance = QLabel()
+        self.empty_guidance.setObjectName("Muted")
+        self.empty_guidance.setWordWrap(True)
+        layout.addWidget(self.empty_guidance)
 
         buttons = ActionFlowLayout()
         self.import_button = QPushButton("Импортировать состав из Excel")
         self.import_button.setObjectName("PrimaryButton")
+        self.save_current_button = QPushButton("Сохранить текущий перечень как шаблон…")
+        self.save_current_button.setEnabled(current_ready and callable(save_current))
+        self.save_current_button.setToolTip(
+            "Доступно, если выбран локальный перечень с работами этой УО."
+        )
         self.rename_button = QPushButton("Переименовать")
         self.delete_button = style_danger_button(QPushButton("Удалить шаблон"))
         self.close_button = QPushButton("Закрыть")
 
         self.import_button.clicked.connect(self._import_excel)
+        self.save_current_button.clicked.connect(self._save_from_current)
         self.rename_button.clicked.connect(self._rename)
         self.delete_button.clicked.connect(self._delete)
         self.close_button.clicked.connect(self.accept)
@@ -72,6 +86,7 @@ class WorkTemplatesDialog(QDialog):
 
         for button in (
             self.import_button,
+            self.save_current_button,
             self.rename_button,
             self.delete_button,
         ):
@@ -81,7 +96,24 @@ class WorkTemplatesDialog(QDialog):
 
         self.refresh()
 
+    def _save_from_current(self) -> None:
+        if not self.save_current_button.isEnabled() or self._save_current is None:
+            return
+        self._save_current()
+        self.refresh()
+
     def _update_actions(self, *_args):
+        empty = self.list_widget.count() == 0
+        self.empty_guidance.setText(
+            "Шаблонов пока нет. Импортируйте состав из Excel либо "
+            "сохраните состав выбранного локального перечня."
+            if self.save_current_button.isEnabled() else
+            "Шаблонов пока нет. Импортируйте состав из Excel. "
+            "Чтобы создать шаблон из перечня, выберите в разделе «Перечни» "
+            "локальный перечень с работами этой УО."
+        )
+        self.empty_guidance.setVisible(empty)
+        self.save_current_button.setVisible(empty)
         selected = bool(self._selected_template_id())
         self.rename_button.setEnabled(selected)
         self.delete_button.setEnabled(selected)

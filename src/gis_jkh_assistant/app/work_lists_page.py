@@ -2273,7 +2273,20 @@ class WorkListsPage(QWidget):
                 "Сначала выберите управляющую организацию.",
             )
             return
-        dialog = WorkTemplatesDialog(self.repository, organization_id, self)
+        current = (
+            self.repository.get_work_list(self._current_work_list_id)
+            if self._current_work_list_id else None
+        )
+        house = self.repository.get_house(current.house_id) if current else None
+        ready = bool(
+            current and house and house.organization_id == organization_id
+            and self.repository.list_work_list_items(current.id)
+        )
+        dialog = WorkTemplatesDialog(
+            self.repository, organization_id, self,
+            save_current=self._save_current_as_template,
+            current_ready=ready,
+        )
         dialog.exec()
         self._refresh_templates()
         self.refresh_work_lists(select_id=self._current_work_list_id)

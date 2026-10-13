@@ -297,8 +297,22 @@ def build_work_lists(page):
     )
     page.templates_card = QWidget(page.command_host)
     page.items_card = workspace_card("Состав работ и услуг")
-    page.composition_actions = command_menu("Изменить состав", (page.templates_button, page.replace_from_template_button, page.save_as_template_button, page.remove_works_button, page.clear_works_button, page.delete_button))
-    for button in (page.add_works_button, page.lazy_fill_button, page.composition_actions, page.gis_actions, page.files_actions_button):
+    page.composition_actions = ActionMenuButton("Состав и шаблоны", "lists")
+    page.composition_actions.menu_model.addSection("Шаблоны")
+    for button in (page.templates_button, page.replace_from_template_button,
+                   page.save_as_template_button):
+        page.composition_actions.add_command(button)
+    page.composition_actions.menu_model.addSeparator()
+    page.composition_actions.menu_model.addSection("Выбранные строки перечня")
+    for button in (page.remove_works_button, page.clear_works_button, page.delete_button):
+        page.composition_actions.add_command(button)
+    for button in (page.add_works_button, page.composition_actions, page.lazy_fill_button):
+        button.show()
+        page.items_card.actions.addWidget(button)
+    local_vs_exchange = QWidget()
+    local_vs_exchange.setFixedWidth(12)
+    page.items_card.actions.addWidget(local_vs_exchange)
+    for button in (page.gis_actions, page.files_actions_button):
         button.show()
         page.items_card.actions.addWidget(button)
     page.add_works_button.setProperty("workflowAlternate", True)

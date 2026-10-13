@@ -12,6 +12,8 @@ import mimetypes
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QApplication,
+    QHeaderView,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -272,6 +274,16 @@ class FixationPage(QWidget):
 
     def _resize_unplanned_table(self) -> None:
         self._resize_table_to_rows(self.unplanned_table, max_rows=8)
+        # Auxiliary columns should not consume the working name and numbers.
+        # Keep every column available by horizontal scrolling when necessary.
+        scale = float(QApplication.instance().property("uiScale") or 1.0)
+        header = self.unplanned_table.horizontalHeader()
+        for column, width in ((1, 150), (2, 85), (7, 185)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            target = round(width * scale)
+            if self.unplanned_table.columnWidth(column) != target:
+                self.unplanned_table.setColumnWidth(column, target)
+        self.unplanned_table.name_column_sizer.resize_name()
 
 
     def _load_table(self) -> None:
@@ -304,6 +316,8 @@ class FixationPage(QWidget):
                 )
                 for column, value in enumerate(values[:9]):
                     cell = QTableWidgetItem(value or "")
+                    if column in (0, 1, 2, 7):
+                        cell.setToolTip(str(value or ""))
                     if column == 0:
                         cell.setToolTip(item.work_name)
                         cell.setData(_ITEM_ID_ROLE, item.id)
