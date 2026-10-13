@@ -148,7 +148,7 @@ class LocalIntegrationGateway:
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header(
                     "Access-Control-Allow-Headers",
-                    f"Content-Type, {_CLIENT_HEADER}, {_CLIENT_VERSION_HEADER}",
+                    f"Content-Type, {_CLIENT_HEADER}, {_CLIENT_VERSION_HEADER}, {_CLIENT_INSTANCE_HEADER}",
                 )
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 

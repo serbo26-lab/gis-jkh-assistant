@@ -118,3 +118,33 @@ def test_http_poll_from_an_older_helper_cannot_consume_a_new_command():
                 assert gateway._state.commands.empty()
     finally:
         gateway.stop()
+
+
+def test_browser_instance_header_preflight_and_inactive_poll_are_supported():
+    gateway = LocalIntegrationGateway(port=0)
+    gateway.start()
+    try:
+        url = f"http://127.0.0.1:{gateway._server.server_port}/api/integration/next"
+        with urlopen(Request(url, method="OPTIONS", headers={
+            "Origin": "chrome-extension://isolated-test",
+            "Access-Control-Request-Headers": "X-GIS-JKH-Helper-Instance",
+        }), timeout=2) as response:
+            assert "X-GIS-JKH-Helper-Instance" in response.headers["Access-Control-Allow-Headers"]
+        for instance, ready in (("active", True), ("inactive", False)):
+            gateway._state.update_hello({"helperInstance": instance,
+                                        "gisPageReady": ready, "helperVersion": "0.1.31"})
+        command = {"id": "isolated-read", "type": "list_houses", "payload": {}}
+        gateway._state.commands.put(command)
+        for instance in ("inactive", "active"):
+            with urlopen(Request(url, headers={
+                "X-GIS-JKH-Helper": "desktop-helper", "X-GIS-JKH-Helper-Version": "0.1.31",
+                "X-GIS-JKH-Helper-Instance": instance,
+            }), timeout=2) as response:
+                reply = json.load(response)
+            if instance == "inactive":
+                assert reply["idle"] and gateway._state.commands.qsize() == 1
+                assert gateway.status().gis_page_ready
+            else:
+                assert reply == command and gateway._state.commands.empty()
+    finally:
+        gateway.stop()
