@@ -8,6 +8,7 @@ import pytest
 from gis_jkh_assistant.browser.helper_installation import read_bundle, verify_prepared
 
 
+# The pytest CLI does not add the repository root to sys.path.
 _spec = importlib.util.spec_from_file_location(
     "package_windows", Path(__file__).resolve().parents[1] / "tools" / "package_windows.py")
 package_windows = importlib.util.module_from_spec(_spec)
