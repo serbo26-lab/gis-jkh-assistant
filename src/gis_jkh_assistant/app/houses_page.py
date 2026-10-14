@@ -133,7 +133,7 @@ class HousesPage(QWidget):
         self.delete_org_button = QPushButton("Удалить УО")
         self.import_button = QPushButton("Импорт домов из XLSX…")
         self.import_button.setToolTip(
-            "Резервный импорт домов из ранее выгруженного XLSX-файла ГИС ЖКХ."
+            "Добавить дома из Excel-файла, который вы выгрузили из ГИС ЖКХ."
         )
         self.sync_houses_button = QPushButton(
             "Загрузить сведения о МКД из ГИС ЖКХ"
@@ -240,9 +240,7 @@ class HousesPage(QWidget):
         root.addWidget(actions)
 
         house_data_hint = QLabel(
-            "XLSX-операции для домов, площадей и тарифов собраны в меню "
-            "«Импорт / Экспорт». Массовые операции с ГИС ЖКХ запускаются "
-            "последовательно и блокируют повторный запуск до завершения."
+            'Импорт из ГИС относится к выбранной УО. Площади и тарифы загружаются из Excel в строке «Импорт локальный». Дождитесь завершения одной загрузки перед следующей.'
         )
         house_data_hint.setWordWrap(True)
         house_data_hint.setObjectName("Muted")
@@ -1190,7 +1188,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить сведения о МКД",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:
@@ -1357,7 +1355,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить перечни МКД",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def progressed(progress: dict) -> None:
@@ -1430,7 +1428,7 @@ class HousesPage(QWidget):
             QMessageBox.information(
                 self,
                 "Нет домов",
-                "У выбранной управляющей организации нет домов для обновления.",
+                "У выбранной УО пока нет домов. Нажмите «Загрузить дома» или добавьте дом вручную.",
             )
             return
 
@@ -1491,8 +1489,7 @@ class HousesPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Недостаточно идентификаторов",
-                "Не удалось определить GUID организации: ни у одного дома нет "
-                "GUID объекта жилищного фонда.",
+                'Не удалось определить организацию в ГИС. Сначала нажмите «Загрузить дома», чтобы получить идентификаторы домов.',
             )
             return
 
@@ -1608,7 +1605,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось обновить дома",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:
@@ -1627,7 +1624,7 @@ class HousesPage(QWidget):
             QMessageBox.information(
                 self,
                 "Выполняется массовая операция",
-                "Дождитесь завершения массовой загрузки перед точечным запросом.",
+                "Сначала дождитесь завершения загрузки по всей УО, затем обновите выбранный дом.",
             )
             return
         if not self._current_house_id or self.integration_gateway is None:
@@ -1639,7 +1636,7 @@ class HousesPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Нет GUID дома",
-                "Для получения сведений нужен GUID объекта жилищного фонда.",
+                "Сначала нажмите «Загрузить дома»: у выбранного дома отсутствует идентификатор объекта ГИС.",
             )
             return
         if (
@@ -1705,7 +1702,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось получить сведения",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:
@@ -1767,7 +1764,7 @@ class HousesPage(QWidget):
         except (sqlite3.DatabaseError, ValueError) as exc:
             self._set_save_status("Ошибка сохранения")
             self.retry_save_button.show()
-            QMessageBox.critical(self, "Ошибка сохранения", error_text(exc, context=context_text(self), effect="Ввод сохранён в карточке дома. Переход и закрытие заблокированы до сохранения.", recovery="Устраните причину и нажмите «Повторить сохранение»."))
+            QMessageBox.critical(self, "Ошибка сохранения", error_text(exc, context=context_text(self), effect="Изменения остались в карточке, но ещё не сохранены. Повторите сохранение перед переходом или закрытием.", recovery="Устраните причину и нажмите «Повторить сохранение»."))
             return False
         return True
 

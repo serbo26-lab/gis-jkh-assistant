@@ -42,15 +42,15 @@ def error_text(error, *, context: str = "", effect: str = "", recovery: str = ""
         reason = "Не удалось прочитать или записать файл."
         default_recovery = "Проверьте доступ к файлу и свободное место на диске, затем повторите действие."
     elif any(value in lowered for value in ("timeout", "timed out", "connection refused", "disconnected")):
-        reason = "Связь с браузерным помощником прервана или ответ не получен вовремя."
-        default_recovery = "Проверьте подключение в настройках и открытую вкладку ГИС. Перед повторной отправкой проверьте состояние сведений в ГИС."
+        reason = "Помощник не ответил вовремя или связь с браузером прервалась."
+        default_recovery = "Проверьте помощник в «Настройках» и обновите вкладку ГИС. Перед повторной отправкой проверьте, сохранились ли сведения в ГИС."
     else:
         reason = detail or "Операция не завершена."
         default_recovery = "Проверьте указанные данные и повторите действие. При ошибке обмена проверьте соединение с помощником."
     parts = [reason]
     if context:
         parts.append("Данные: " + context)
-    parts.append(effect or "Операция не завершена. Проверьте её результат перед повтором.")
+    parts.append(effect or "Операция не завершилась. Проверьте результат перед повторным запуском.")
     parts.append(recovery or default_recovery)
     if detail and reason != detail:
         parts.append("Технические сведения: " + detail)

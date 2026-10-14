@@ -255,8 +255,7 @@ class AddUnplannedWorkDialog(QDialog):
         root.addWidget(self.photo_list)
 
         hint = QLabel(
-            "При переключении способа ввода предыдущие значения остаются в форме. "
-            "В работу передаются только числа активного способа."
+            'При смене способа заполнения числа остаются в форме. Сохраняются только значения выбранного способа.'
         )
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
@@ -435,7 +434,7 @@ class AddUnplannedWorkDialog(QDialog):
             if not price_text or not amount_text or not count_text:
                 QMessageBox.warning(
                     self, "Заполните расчётные поля",
-                    "Для расчёта по цене и объёму заполните цену, объём и количество.",
+                    "Введите цену, объём и количество: программа рассчитает стоимость.",
                 )
                 return
             calculated = calculate_fact_total_cost(price_text, amount_text, count_text)

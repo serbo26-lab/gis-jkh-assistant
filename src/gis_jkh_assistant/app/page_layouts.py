@@ -378,7 +378,7 @@ def build_monthly(page, kind: str):
     page.months_card = months
     page.month_details_button = QPushButton("Все месяцы…", page)
     page.month_details_button.setCheckable(True)
-    page.month_details_button.setAccessibleDescription("Показывает месяцы и их состояния; выбор месяца не меняет область команды периода")
+    page.month_details_button.setAccessibleDescription("Показывает состояние каждого месяца. Выбор месяца открывает его таблицу; диапазон массовых операций остаётся прежним.")
     page.compact_month_row = QWidget(page)
     page.compact_month_row.hide()
     page.month_grid = QWidget()
@@ -407,8 +407,8 @@ def build_monthly(page, kind: str):
     scope = QHBoxLayout()
     scope.setContentsMargins(0, 0, 0, 0)
     page.scope_switcher = ScopeSwitcher("month", "Месяц", "period", "Период")
-    page.scope_switcher.setAccessibleName("Область основной команды: открытый месяц или доступный период")
-    page.scope_switcher.setToolTip("Меняет только рекомендацию и её основную кнопку. Команды «Заполнение и обмен» отдельно указывают свою область; месяц таблицы не меняется.")
+    page.scope_switcher.setAccessibleName("Выберите, для чего показать следующий шаг: одного месяца или периода.")
+    page.scope_switcher.setToolTip("Переключатель меняет подсказку следующего шага. Таблица остаётся на открытом месяце; команды месяца и периода находятся в отдельных блоках.")
     scope.addWidget(page.scope_switcher)
     page.scope_hint = QLabel()
     page.scope_hint.setObjectName("Muted")
@@ -599,7 +599,7 @@ def _quality_data(page, root):
         hidden.setParent(page.command_host)
         hidden.hide()
     page.month_acts_button.setText("Акты…")
-    page.month_acts_button.setToolTip("Документы и связи месяца: добавить свой акт или подготовить PDF вручную")
+    page.month_acts_button.setToolTip("Открыть акты этого месяца: добавить документ, создать PDF или выбрать работы для акта.")
     page.auto_act_month_button.setText("Сформировать автоматический акт за месяц")
     page.auto_act_period_button.setText("Сформировать автоматические акты за период")
     page.create_act_button.setText("Подготовить PDF вручную…")
@@ -625,7 +625,7 @@ def _quality_data(page, root):
     page.selected_act_button = QPushButton("Акт выбранной работы…")
     page.selected_act_button.setProperty("compactCommand", True)
     page.selected_act_button.setToolTip(
-        "Открыть акты выбранной строки без горизонтальной прокрутки таблицы"
+        "Открыть документы, связанные с выбранной работой."
     )
     page.selected_act_button.setEnabled(False)
     page.selected_act_button.clicked.connect(page._open_selected_acts)
@@ -642,10 +642,7 @@ def _quality_data(page, root):
     help_button.setToolTip("Акты и перерасчёт: правила подготовки документов")
     help_button.setCheckable(True)
     page.acts_explanation = QLabel(
-        "Обычный акт подтверждает выполнение: поля перерасчёта оставьте пустыми. Автоакт создаётся по фактическим показателям. "
-        "PDF акта можно подготовить вручную; «Акты месяца» управляет документами и связями.\n"
-        "Акт нарушения качества автоматически не формируется: загрузите свой документ и укажите дни ненадлежащего качества. "
-        "Проект сохраняется без актов; для размещения акты обязательны."
+        'Для акта выполненных работ оставьте поля перерасчёта пустыми. Автоакт создаётся по фактическим показателям. PDF можно подготовить вручную в окне «Акты». Там же выберите работы, к которым относится документ.\nДля нарушения качества добавьте готовый документ и укажите число дней нарушения. Проект можно сохранить без актов; для размещения нужны акты.'
     )
     page.acts_explanation.setWordWrap(True)
     page.acts_explanation.setObjectName("Muted")
@@ -723,7 +720,7 @@ def _fixation_data(page, root):
 
 def _monthly_data_menu(page, *, direct_month_fill=False):
     page.data_actions = ActionMenuButton("Заполнение и обмен", "sync")
-    page.data_actions.setToolTip("Выберите область явно: открытый месяц или доступные месяцы выбранного года. Переключатель рекомендаций эту область не меняет.")
+    page.data_actions.setToolTip("Команды месяца относятся к открытой таблице. Для массовой операции выберите диапазон в блоке «Период».")
     if direct_month_fill:
         # A direct first-level action for the selected month, never the whole period.
         # The original command button retains the existing confirmation and handler.

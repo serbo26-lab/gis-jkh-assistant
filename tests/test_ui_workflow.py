@@ -312,7 +312,7 @@ def test_period_publication_validates_only_months_that_will_be_sent(desktop):
     assert all(page._validation_error(period.id, require_acts=True) is None for period in candidates)
     assert not page.publish_button.isEnabled(), "The month action still targets completed January"
     assert page.publish_period_button.isEnabled()
-    assert page.workflow.primary.text() == "Разместить период"
+    assert page.workflow.primary.text() == "Разместить период в ГИС"
     assert page.workflow.primary.isEnabled()
     page.scope_switcher.set_scope("month")
     assert not page.publish_button.isEnabled(), "Completed January is not a new publication candidate"
@@ -682,7 +682,8 @@ def test_quality_without_fixation_guides_to_the_prerequisite(desktop):
     desktop.repository.set_setting(f"ui.remote_probe.quality.{page._current_period_id}", "missing")
     page._refresh_year_status()
     assert page.workflow.primary.text() == "К фиксации"
-    assert "фактические показатели" in page.workflow.detail.text()
+    assert "Сначала заполните факт" in page.workflow.detail.text()
+    assert "Фиксации работ и услуг" in page.workflow.detail.text()
     page.workflow.primary.click()
     assert desktop.window.navigation.currentRow() == 3
     assert desktop.window.fixation_page._current_work_list_id == desktop.work_list.id

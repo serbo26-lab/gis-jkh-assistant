@@ -112,7 +112,7 @@ def prepare_jobs(repository, store, organization_id, kind):
             if reason:
                 job.state, job.detail = "protected", reason
             elif month is not None and not job.fias:
-                job.state, job.detail = "error", "У дома нет ФИАС GUID. Сначала загрузите сведения о доме."
+                job.state, job.detail = "error", "У дома нет идентификатора ФИАС. В разделе «Дома» нажмите «Загрузить дома»."
             jobs.append(job)
     return jobs
 
@@ -328,7 +328,7 @@ class PortfolioImport(QObject):
                 self._timer.start(0)
                 return
             if job.month is not None and not job.fias:
-                raise ValueError("У дома нет ФИАС GUID. Сначала загрузите сведения о доме.")
+                raise ValueError("У дома нет идентификатора ФИАС. В разделе «Дома» нажмите «Загрузить дома».")
             if self.page.organization_combo.currentData() != self.organization_id:
                 raise ValueError("Выбранная УО изменилась; запрос не отправлен.")
             _, command, timeout = KINDS[job.kind]

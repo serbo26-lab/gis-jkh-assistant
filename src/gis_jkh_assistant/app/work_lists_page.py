@@ -376,7 +376,7 @@ class WorkListsPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось получить справочник",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:
@@ -860,7 +860,7 @@ class WorkListsPage(QWidget):
         self._refresh_gis_action_buttons()
         QMessageBox.warning(self, "Изменение не сохранено", error_text(
             exc, context=context_text(self) + " • " + field,
-            effect="Ввод сохранён в редакторе. Переход и закрытие заблокированы до успешного сохранения.",
+            effect="Изменения остались в таблице, но ещё не сохранены. Нажмите «Повторить сохранение» перед переходом или закрытием.",
             recovery="Устраните причину и нажмите «Повторить сохранение». Можно исправить введённое значение.",
         ))
 
@@ -1035,8 +1035,7 @@ class WorkListsPage(QWidget):
             return
 
         self.export_template_status.setText(
-            "Шаблон экспорта ГИС ЖКХ: не загружен. "
-            "Он нужен один раз как техническая основа для формирования XLSX."
+            'Файл-шаблон ГИС не загружен. Нажмите «Получить официальный шаблон»: он нужен для подготовки Excel-файла перечня.'
         )
 
     def _install_export_template(
@@ -1080,10 +1079,7 @@ class WorkListsPage(QWidget):
         message.setIcon(QMessageBox.Icon.Information)
         message.setText("Выбрать официальный XLSX-шаблон вручную?")
         message.setInformativeText(
-            "Это резервный способ. Обычно шаблон можно получить автоматически "
-            "кнопкой «Получить / обновить шаблон из ГИС ЖКХ».\n\n"
-            "Выберите официальный файл «Экспорт перечня работ …xlsx», "
-            "ранее выгруженный из ГИС ЖКХ."
+            'Обычно файл получает кнопка «Получить официальный шаблон». Здесь можно выбрать файл, ранее выгруженный из ГИС.\n\nВыберите официальный файл «Экспорт перечня работ …xlsx», ранее выгруженный из ГИС ЖКХ.'
         )
         message.setStandardButtons(
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
@@ -1133,8 +1129,7 @@ class WorkListsPage(QWidget):
             QMessageBox.information(
                 self,
                 "Не выбран дом",
-                "Сначала выберите дом. ГИС ЖКХ формирует технический шаблон "
-                "в контексте конкретного МКД.",
+                'Сначала выберите дом: ГИС готовит файл-шаблон для конкретного дома.',
             )
             return
         if not house.house_object_guid:
@@ -1237,8 +1232,7 @@ class WorkListsPage(QWidget):
                 details.append(f"VERSION: {imported.version}")
 
             text = (
-                "Официальный шаблон получен напрямую из ГИС ЖКХ и сохранен "
-                "как техническая основа для формирования XLSX."
+                'Файл-шаблон получен из ГИС и сохранён. Программа будет использовать его при подготовке Excel-файла перечня.'
             )
             if details:
                 text += "\n\n" + "\n".join(details)
@@ -1265,7 +1259,7 @@ class WorkListsPage(QWidget):
                 self,
                 "Не удалось получить шаблон из ГИС ЖКХ",
                 message
-                + "\n\nРезервный путь: «Файлы и шаблоны» → «Выбрать XLSX вручную…».",
+                + "\n\nРезервный путь: «Файлы Excel» → «Выбрать XLSX вручную…».",
             )
 
         def finished() -> None:
@@ -1304,8 +1298,7 @@ class WorkListsPage(QWidget):
             QMessageBox.information(
                 self,
                 "Не загружен шаблон экспорта",
-                "В меню «Файлы и шаблоны» выберите «Получить официальный шаблон». "
-                "Резервный путь в этом же меню: «Выбрать XLSX вручную…».",
+                'Нажмите «Получить официальный шаблон» рядом со списком перечней. Если файл уже есть, выберите «Файлы Excel» → «Выбрать XLSX вручную…».',
             )
             self._refresh_export_template_status()
             return
@@ -1326,7 +1319,7 @@ class WorkListsPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Нет GUID дома",
-                "Для формирования файла нужен GUID объекта жилищного фонда.",
+                "Для подготовки файла нужен идентификатор дома из ГИС. Откройте «Дома» и нажмите «Загрузить дома».",
             )
             return
 
@@ -1426,7 +1419,7 @@ class WorkListsPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Нет GUID дома",
-                "Для обмена с ГИС ЖКХ нужен GUID объекта жилищного фонда.",
+                "У дома нет идентификатора ГИС. Откройте «Дома» и нажмите «Загрузить дома».",
             )
             return None
 
@@ -1543,7 +1536,7 @@ class WorkListsPage(QWidget):
             )
             if self._current_work_list_id == work_list_id:
                 self._load_work_list(work_list_id)
-            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."))
+            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."))
 
         def finished() -> None:
             self._integration_worker = None
@@ -1744,7 +1737,7 @@ class WorkListsPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Ошибка загрузки перечней выбранного МКД",
-                error_text(message, context=context_text(self), effect="Обмен не завершён. Состояние сведений в ГИС может отличаться от локального; проверьте его перед повторной отправкой."),
+                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
             )
 
         def finished() -> None:

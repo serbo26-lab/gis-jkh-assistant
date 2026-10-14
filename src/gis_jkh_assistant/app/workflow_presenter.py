@@ -24,13 +24,13 @@ from .workflow_widgets import repolish
 def connection_reason(page, supports) -> str:
     status = page.integration_gateway.status()
     if not status.running:
-        return "Локальный шлюз не запущен. Перезапустите приложение и проверьте подключение в настройках."
+        return "Служба связи с браузером не запущена. Перезапустите программу и проверьте подключение в «Настройках»."
     if not status.helper_connected:
-        return "Подключите браузерный помощник к шлюзу."
+        return "Включите помощник в браузере. Если он ещё не установлен, откройте «Настройки» → «Установить / настроить помощник…»."
     if not status.gis_page_ready:
         return "Откройте ГИС ЖКХ в браузере и войдите в систему."
     if not supports(status.helper_version):
-        return "Обновите браузерный помощник для этого сценария."
+        return "Для этого действия нужен обновлённый помощник. Откройте «Настройки» → «Настроить / обновить помощник…»."
     if not helper_supports_organization_routing(status.helper_version):
         minimum = ".".join(map(str, MIN_ORGANIZATION_ROUTING_HELPER_VERSION))
         return f"Для безопасного выбора вкладки УО требуется браузерный помощник {minimum}+."
@@ -105,11 +105,11 @@ def refresh_monthly(page, kind: str):
     load = page.load_gis_button if quality else page.load_month_button
     load_reason = net_reason
     if work_list and (not house or not (house.fias_house_guid or house.gis_house_guid)):
-        load_reason = "Получите идентификаторы дома в разделе «Дома»."
+        load_reason = "В разделе «Дома» нажмите «Загрузить дома»: для обмена нужны идентификаторы дома из ГИС."
     for button in (load, page.load_period_button):
         button.setEnabled(local and not load_reason)
-        button.setToolTip(load_reason or "Получить данные из ГИС; локальные изменения будут проверены перед заменой.")
-    page.load_period_button.setToolTip(load_reason or "Проверить все доступные месяцы в границах перечня; загрузить найденные в ГИС данные.")
+        button.setToolTip(load_reason or "Загрузить данные месяца из ГИС. Если в программе уже есть данные, перед заменой появится подтверждение.")
+    page.load_period_button.setToolTip(load_reason or "Загрузить данные за выбранный диапазон месяцев. Месяцы без сведений в ГИС будут пропущены.")
     selected_period_months = period_months(page, active)
     unloaded = set()
     all_states = []
@@ -192,11 +192,11 @@ def refresh_monthly(page, kind: str):
     filled = [s for s in states if s.has_data]
     ids_reason = ""
     if work_list and not work_list.gis_work_list_guid:
-        ids_reason = "Сначала получите статус размещённого перечня."
+        ids_reason = "В разделе «Перечни работ и услуг» нажмите «Проверить статус» для выбранного перечня."
     if quality and work_list and (not house or not house.fias_house_guid or not house.house_object_guid):
-        ids_reason = "Для обмена нужны ФИАС GUID и GUID объекта дома. Получите их в разделе «Дома»."
+        ids_reason = "В карточке дома нет нужных идентификаторов ГИС (ФИАС GUID и GUID объекта). Откройте «Дома» и нажмите «Загрузить дома»."
     if not quality and work_list and (not house or not (house.fias_house_guid or house.gis_house_guid)):
-        ids_reason = "Получите идентификаторы дома в разделе «Дома»."
+        ids_reason = "В разделе «Дома» нажмите «Загрузить дома»: для обмена нужны идентификаторы дома из ГИС."
     current = by_month.get(page._current_month)
     month_filled = [s for s in all_states if s.month == page._current_month and s.has_data]
     period_filled = [s for s in all_states if s.has_data and s.month in selected_period_months]
@@ -280,7 +280,7 @@ def refresh_monthly(page, kind: str):
         source_months = {p.month for p in fixation if any(item_has_fact(i) for i in page.repository.list_work_fixation_items(p.id))}
         missing = [s.month for s in states if not s.has_data and s.month in source_months]
         if not missing and not filled:
-            key, title, action, detail = "fixation", "Сначала заполните фиксацию", "К фиксации", "Для автоматического формирования нужны фактические показатели этого месяца/периода. Работы можно также включить вручную в таблице."
+            key, title, action, detail = "fixation", "Сначала заполните фиксацию", "К фиксации", "Сначала заполните факт в «Фиксации работ и услуг». Работы для оценки также можно отметить вручную."
             page.workflow.register("fixation", lambda: page.workflow.navigateRequested.emit(3))
         elif not missing and filled:
             applicable = [s for s in states if s.has_data]
@@ -305,18 +305,18 @@ def refresh_monthly(page, kind: str):
         plan_months = page.repository.list_work_plan_months(plan.id) if plan else []
         selected_months = {s.month for s in states}
         if not any(row.month in selected_months and (row.count or row.dates_json) for row in plan_months):
-            key, stage, title, action, detail, done = "plan", 0, "Сначала заполните план", "К планированию", "В выбранной области план ещё пуст. Заполните план или внесите фактические показатели вручную в таблице.", frozenset()
+            key, stage, title, action, detail, done = "plan", 0, "Сначала заполните план", "К планированию", "В выбранном периоде нет заполненного плана. Заполните его в «Планировании» или внесите факт вручную.", frozenset()
             page.workflow.register("plan", lambda: page.workflow.navigateRequested.emit(2))
     if has_context and any(state.month in unloaded for state in states) and not filled and not retry_here:
         page.workflow.register("load", page._load_scope_from_gis)
-        key, title, action, detail, stage, done = "load", "Данные из ГИС ещё не загружены", "Загрузить из ГИС", "Пустые локальные поля не означают отсутствие размещённых сведений. Загрузите данные или подготовьте их вручную.", 0, frozenset()
+        key, title, action, detail, stage, done = "load", "Данные из ГИС ещё не загружены", "Загрузить из ГИС", "Таблица ещё не загружена из ГИС. Там уже могут быть размещённые сведения: загрузите их перед заполнением.", 0, frozenset()
         reason = load_reason
     if quality and key == "acts":
         action = "Акты…"
     if key in {"save", "publish"}:
         reason = net_reason or ids_reason or (publish_reason if key == "publish" else "")
     if locked:
-        reason = "Операция выполняется. Контекст и данные доступны после её завершения."
+        reason = "Дождитесь завершения операции. Затем можно будет менять дом, период и данные."
     elif retry_here:
         page.operation_status.setProperty("tone", "danger")
         page.operation_status.hide_progress()
@@ -446,7 +446,7 @@ def refresh_planning(page):
     elif not filled:
         key, stage, title, action, detail, done = "fill", 1, "Заполните план на год", "Автораспределить", "Распределите количество из перечня по месяцам или введите его в таблице.", {0}
     else:
-        key, stage, title, action, detail, done = "publish", 2, "Проверьте распределение по месяцам", ("Обновить план в ГИС" if plan.gis_work_plan_guid else "Разместить план"), "План сохранён локально. При размещении ГИС получит текущие значения всего года.", {0, 1}
+        key, stage, title, action, detail, done = "publish", 2, "Проверьте распределение по месяцам", ("Обновить план в ГИС" if plan.gis_work_plan_guid else "Разместить план"), "План сохранён на компьютере. При размещении текущие значения заменят план этого года в ГИС.", {0, 1}
     blocking = (net_reason or reason) if key == "publish" else net_reason if key == "load" else ""
     if locked:
         blocking = "Дождитесь завершения текущей операции."

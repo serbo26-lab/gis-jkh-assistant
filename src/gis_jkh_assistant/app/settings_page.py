@@ -30,7 +30,7 @@ class SettingsPage(QWidget):
         self.repository = repository
 
         root = page_root(self, "Настройки", "Рабочий контекст, оформление и связь с ГИС ЖКХ")
-        self.save_status.setText("Настройки сохраняются сразу")
+        self.save_status.setText("Изменения настроек сохраняются автоматически")
         context = SectionCard("Рабочий контекст")
         hint = QLabel(
             "Общий выбор сохраняет УО, дом, перечень и год при переходах между разделами."
@@ -47,7 +47,7 @@ class SettingsPage(QWidget):
         context.body.addWidget(self.shared_radio)
         context.body.addWidget(self.independent_radio)
         self.context_explanation = QLabel(
-            "Общий выбор сохраняет объект при переходах. Независимый — запоминает выбор каждого раздела отдельно."
+            "В общем режиме выбор переносится между разделами. В независимом каждый раздел запоминает собственный дом и период."
         )
         self.context_explanation.setWordWrap(True)
         self.context_explanation.setObjectName("Muted")
@@ -116,14 +116,10 @@ class SettingsPage(QWidget):
         self.recover_connection_button = QPushButton("Как восстановить подключение…")
         self.recover_connection_button.setCheckable(True)
         self.recover_connection_button.setAccessibleDescription(
-            "Показывает действия для восстановления связи без повторной установки"
+            "Показать, как проверить помощник и восстановить связь с браузером."
         )
         self.recovery_steps = QLabel(
-            "1. Откройте ГИС ЖКХ в браузере и войдите в личный кабинет. "
-            "2. Проверьте, что помощник включён именно в этом профиле браузера. "
-            "3. Если соединение не появилось, перезапустите приложение и "
-            "обновите состояние связи. Устанавливать помощник повторно "
-            "не нужно, если он уже добавлен и включён."
+            '1. Откройте личный кабинет ГИС в браузере, где установлен помощник.\n2. Проверьте, что «ГИС ЖКХ помощник» включён в расширениях этого профиля.\n3. Обновите вкладку ГИС. Если связи нет, перезапустите программу.\nЕсли помощник уже установлен, добавлять его повторно не нужно.'
         )
         self.recovery_steps.setObjectName("Muted")
         self.recovery_steps.setWordWrap(True)

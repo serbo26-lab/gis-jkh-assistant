@@ -25,7 +25,7 @@ def connect_result(worker, signal, callback):
             worker.result_apply_failed = True
             detail = error_text(
                 exc, context=context_text(parent) if parent else "",
-                effect="Результат операции не удалось обработать локально. Отдельные записи могли быть сохранены. Состояние ГИС этой ошибкой не отменяется.",
+                effect="Не удалось сохранить результат в программе. Некоторые записи могли сохраниться; изменения в ГИС не отменяются автоматически.",
                 recovery="Проверьте локальные данные. Перед повторной отправкой проверьте состояние сведений в ГИС. Затем повторите загрузку или продолжите очередь.",
             )
             strip = getattr(parent, "operation_status", None)
