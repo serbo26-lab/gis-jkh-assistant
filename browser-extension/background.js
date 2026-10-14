@@ -6,7 +6,7 @@ const GIS_MATCH = [
 ];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.31";
+const HELPER_CODE_VERSION = "0.1.32";
 const organizationTabs = new Map();
 // Routing identity for this worker, not an authentication credential.
 const HELPER_INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -2370,6 +2370,30 @@ async function runGisCommand(command) {
     // Recheck inside the selected page: tab navigation or organization switching
     // may have happened after discovery. Writes are also checked by request().
     await assertOrganization();
+
+    if (command.type === "get_organization_act_signatory") {
+      const details = await request("GET", "/ppa/api/rest/services/ppa/organizations/details",
+        undefined, "/organization/information");
+      const fullName = [details?.chiefLastName, details?.chiefFirstName, details?.chiefMiddleName]
+        .filter(value => typeof value === "string" && value.trim()).map(value => value.trim()).join(" ");
+      if (!fullName || !details?.ogrn || !details?.guid) {
+        throw new Error("В ГИС ЖКХ не заполнены сведения о руководителе организации.");
+      }
+      const additional = await request("POST", "/ppa/api/rest/services/ppa/organizations/additionalinfo",
+        {organizationGuids: [details.guid]}, "/organization/information");
+      const rows = additional?.additionalInfos || [];
+      const chief = rows.length === 1 ? rows[0]?.chiefInfo : null;
+      const normalizeName = value => String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+      const position = normalizeName(chief?.fio) === normalizeName(fullName) ? chief?.position : null;
+      const candidates = [{fullName, position: typeof position === "string" ? position.trim() : "",
+        source: "Реквизиты УО"}];
+      if (typeof chief?.fio === "string" && chief.fio.trim() && normalizeName(chief.fio) !== normalizeName(fullName)) {
+        candidates.push({fullName: chief.fio.trim(), position: String(chief.position || "").trim(),
+          source: "Дополнительные сведения УО"});
+      }
+      await assertOrganization();
+      return {ok: true, result: {ogrn: String(details.ogrn), candidates}};
+    }
 
     if (command.type === "get_house_management_info") {
       return {

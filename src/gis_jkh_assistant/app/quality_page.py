@@ -23,6 +23,7 @@ from gis_jkh_assistant.work_lists.gis_quality_sync import (
     local_quality_has_data,
 )
 from gis_jkh_assistant.quality_automation import (
+    ActReadinessError,
     fill_quality_period_from_fixation,
     generate_acceptance_act_for_period,
 )
@@ -581,9 +582,10 @@ class QualityAssessmentPage(QWidget):
         if not units_ready and self._sync_work_units_for_act(lambda: self._auto_generate_year_acts(units_ready=True)):
             return
         year = int(self.year_combo.currentData())
-        created = linked = protected = missing = 0
+        created = linked = protected = 0
         processed = 0
         failure = None
+        unready = []
         for month in months:
             period = self.store.get_period_for_month(
                 self._current_work_list_id,
@@ -596,6 +598,9 @@ class QualityAssessmentPage(QWidget):
                 continue
             try:
                 result = self._auto_generate_act_for_period(period.id)
+            except ActReadinessError as exc:
+                unready.append(f"{_MONTHS[month - 1]} {year}: {exc}")
+                continue
             except (sqlite3.DatabaseError, OSError, RuntimeError, ValueError) as exc:
                 failure = f"{_MONTHS[month - 1]} {year}: {exc}"
                 self._auto_act_resume = (self._current_work_list_id, year, month)
@@ -604,23 +609,22 @@ class QualityAssessmentPage(QWidget):
             created += result.created
             linked += result.linked_items
             protected += result.protected_items
-            missing += result.missing_costs
 
         if not failure:
             self._auto_act_resume = None
 
         self._month_changed()
         self._refresh_year_status()
-        notify = QMessageBox.warning if failure else QMessageBox.information
+        notify = QMessageBox.warning if failure or unready else QMessageBox.information
         notify(
             self,
-            "Акты сформированы частично" if failure else "Акты за год сформированы",
+            "Акты сформированы частично" if failure or unready else "Акты за год сформированы",
             f"Обработано месяцев: {processed}.\n"
             f"Сформировано актов: {created}.\n"
             f"Связей с работами: {linked}.\n"
-            f"Защищено пользовательскими/импортированными актами: {protected}.\n"
-            f"Строк без фактической стоимости: {missing}."
-            + (f"\n\nОстановлено: {failure}\nУспешно созданные акты сохранены." if failure else ""),
+            f"Защищено пользовательскими/импортированными актами: {protected}."
+            + (f"\n\nОстановлено: {failure}\nУспешно созданные акты сохранены." if failure else "")
+            + (f"\n\nНе готовы: {len(unready)}.\n" + "\n".join(unready) if unready else ""),
         )
 
     def _sync_work_units_for_act(self, continuation=None) -> bool:

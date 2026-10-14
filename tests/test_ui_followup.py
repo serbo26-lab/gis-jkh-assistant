@@ -46,8 +46,8 @@ def test_house_commands_follow_the_registry_and_preparation(desktop):
         page.export_house_data_button, page.import_house_data_button,
     ]
     assert page.house_local_actions.y() >= page.house_download_actions.geometry().bottom()
-    assert page.export_house_data_button.text() == "Экспорт шаблона Excel…"
-    assert page.import_house_data_button.text() == "Импорт тарифов и площадей из Excel…"
+    assert page.export_house_data_button.text() == "Экспорт данных в Excel…"
+    assert page.import_house_data_button.text() == "Импорт данных из Excel…"
 
 
 def test_composition_commands_are_direct_and_beside_the_table(desktop):

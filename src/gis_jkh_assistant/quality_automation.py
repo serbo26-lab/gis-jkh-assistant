@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any
 
 from gis_jkh_assistant.acceptance_act_pdf import (
@@ -13,6 +13,8 @@ from gis_jkh_assistant.acceptance_act_pdf import (
 from gis_jkh_assistant.database.quality_assessment_store import (
     QualityAssessmentStore,
 )
+from gis_jkh_assistant.acceptance_act_details import resolve_act_details, has_quality_issues, fixation_for_act
+from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +30,10 @@ class QualityActGenerationResult:
     linked_items: int
     protected_items: int
     missing_costs: int
+
+
+class ActReadinessError(ValueError):
+    """Missing source requisites; other periods may still be ready to generate."""
 
 
 def _has_fixation_fact(item: Any) -> bool:
@@ -166,21 +172,6 @@ def _acceptance_work_rows(
     )
     list_items = store.repository.list_work_list_items(period.work_list_id)
 
-    fixation_by_list_id = {
-        item.work_list_item_id: item
-        for item in fixation_items
-        if item.work_list_item_id
-    }
-    fixation_by_guid = {
-        str(item.work_guid): item
-        for item in fixation_items
-        if item.work_guid
-    }
-    fixation_by_code = {
-        str(item.work_code): item
-        for item in fixation_items
-        if item.work_code
-    }
     list_by_id = {item.id: item for item in list_items}
     items_by_id = {item.id: item for item in store.list_items(period_id)}
 
@@ -188,19 +179,7 @@ def _acceptance_work_rows(
     missing_costs = 0
     for item_id in item_ids:
         item = items_by_id[item_id]
-        fixation_item = (
-            fixation_by_list_id.get(item.work_list_item_id)
-            or (
-                fixation_by_guid.get(str(item.work_guid))
-                if item.work_guid
-                else None
-            )
-            or (
-                fixation_by_code.get(str(item.work_code))
-                if item.work_code
-                else None
-            )
-        )
+        fixation_item = fixation_for_act(item, fixation_items)
         list_item = (
             list_by_id.get(item.work_list_item_id)
             if item.work_list_item_id
@@ -226,6 +205,9 @@ def _acceptance_work_rows(
                     else None
                 ),
                 actual_cost=actual_cost,
+                unit_cost=getattr(list_item, "price", None),
+                actual_price=getattr(fixation_item, "fact_price", None),
+                actual_amount=getattr(fixation_item, "fact_amount", None),
             )
         )
     return rows, missing_costs
@@ -269,6 +251,19 @@ def generate_acceptance_act_for_period(
     period_to = f"{last_day:02d}.{period.month:02d}.{period.year}"
     number = str(period.month)
 
+    work_list = store.repository.get_work_list(period.work_list_id)
+    details = resolve_act_details(store.repository, work_list.house_id, period_to)
+    problems = list(details["issues"])
+    if missing_costs:
+        problems.append(f"Не заполнена фактическая стоимость {missing_costs} работ.")
+    if any(has_quality_issues(item) for item in items if item.id in target_ids):
+        problems.append("Есть дни ненадлежащего качества или перерасчёт. Проверьте состав принимаемых работ в окне актов.")
+    if problems:
+        raise ActReadinessError("Акт не сформирован. " + " ".join(problems) +
+                         " Заполните реквизиты в разделе «Дома» или откройте «Акты» для ручной подготовки.")
+    details.update(act_number=number, act_date=period_to, period_from=period_from,
+                   period_to=period_to, work_rows=[asdict(row) for row in work_rows])
+
     pdf = build_acceptance_act_pdf(
         organization_name=organization_name,
         house_address=house_address,
@@ -277,11 +272,13 @@ def generate_acceptance_act_for_period(
         period_from=period_from,
         period_to=period_to,
         work_rows=work_rows,
+        details=details,
     )
     file_name = f"Акт_выполненных_работ_{period.month:02d}_{period.year}.pdf"
     with store.connection.atomic():
-        _replace_generated_act(store, period_id, target_ids, number, period_from,
-                               period_to, file_name, pdf)
+        act = _replace_generated_act(store, period_id, target_ids, number, period_from,
+                                     period_to, file_name, pdf)
+        ActRequisitesStore(store.repository).save_snapshot(act.id, details)
     return QualityActGenerationResult(
         created=1,
         linked_items=len(target_ids),
@@ -310,3 +307,4 @@ def _replace_generated_act(store, period_id, target_ids, number, period_from,
         generated=True,
     )
     store.set_act_links(act.id, target_ids)
+    return act

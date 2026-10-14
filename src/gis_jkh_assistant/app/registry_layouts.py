@@ -547,8 +547,11 @@ def adapt_houses(page):
         local_flow.addWidget(button)
         button.show()
     root.insertWidget(4, page.house_local_actions)
-    page.export_house_data_button.setText("Экспорт шаблона Excel…")
-    page.import_house_data_button.setText("Импорт тарифов и площадей из Excel…")
+    page.export_house_data_button.setText("Экспорт данных в Excel…")
+    page.import_house_data_button.setText("Импорт данных из Excel…")
+    from .act_requisites_dialog import open_act_requisites
+    page.organization_actions_button.menu().addAction("Реквизиты актов и подписанты УО…",
+        lambda: open_act_requisites(page, organization=True))
     page.sync_houses_button.setText("Загрузить дома")
     page.sync_all_management_button.setText("Загрузить управление")
     page.sync_all_work_lists_button.setText("Загрузить перечни")
@@ -567,6 +570,9 @@ def adapt_houses(page):
     page.house_detail_title.setObjectName("SectionTitle")
     page.house_detail_title.setWordWrap(True)
     page.card_layout.addWidget(page.house_detail_title)
+    page.act_requisites_button = QPushButton("Представители собственников и реквизиты акта…")
+    page.act_requisites_button.clicked.connect(lambda: open_act_requisites(page))
+    page.card_layout.addWidget(page.act_requisites_button)
     section = None
     for item in items:
         widget = item.widget()

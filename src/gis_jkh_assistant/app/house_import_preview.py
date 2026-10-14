@@ -3,15 +3,17 @@ from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QHeaderView, QLabel,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
+from gis_jkh_assistant.gis_files.house_extra_data import HOUSE_COLUMNS
 
 AREA_LABELS = {"charge_area": "К начислению", "residential_area": "Жилая площадь",
                "non_residential_area": "Нежилая площадь"}
+AREA_LABELS.update(HOUSE_COLUMNS)
 
 
 class HouseImportPreview(QDialog):
-    def __init__(self, areas, tariffs, summary, parent=None):
+    def __init__(self, areas, tariffs, summary, parent=None, other_changes=()):
         super().__init__(parent)
-        self.setWindowTitle("Проверка импорта площадей и тарифов")
+        self.setWindowTitle("Проверка импорта данных домов и актов")
         self.resize(900, 500)
         body = QVBoxLayout(self)
         text = QLabel(summary)
@@ -28,6 +30,8 @@ class HouseImportPreview(QDialog):
         for house, row, previous in tariffs:
             self._row(house.address, "Тариф с " + row.start.input_label,
                       previous.amount if previous else None, row.amount)
+        for owner, field, before, after in other_changes:
+            self._row(owner, field, before, after)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Применить изменения")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")

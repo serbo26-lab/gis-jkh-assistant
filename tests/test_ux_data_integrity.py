@@ -136,13 +136,18 @@ def test_quality_import_preserves_local_file_and_links(tmp_path, remote_has_act)
 @pytest.mark.parametrize("failure", ["pdf", "insert", "link"])
 def test_generation_failure_preserves_previous_generated_act(tmp_path, monkeypatch, failure):
     repo, wl = _setup(tmp_path)
+    from act_test_data import populate_act_requisites
+    populate_act_requisites(repo, wl)
+    fixation = repo.get_or_create_work_fixation_period(work_list_id=wl.id, year=2026, month=1)
+    repo.update_work_fixation_item(repo.list_work_fixation_items(fixation.id)[0].id,
+        fact_price=None, fact_amount=None, fact_count=1, fact_total_cost="100")
     store = QualityAssessmentStore(repo)
     period = store.get_or_create_period(work_list_id=wl.id, year=2026, month=1)
     item = store.list_items(period.id)[0]
     store.update_item(item.id, included=True, cost=None, days_count=None, cost_reduction=None)
     previous = add_act(store, item, generated=True)
     before = snapshot(repo, "quality_assessment_acts", "quality_assessment_act_links",
-                      "quality_assessment_periods")
+                      "quality_assessment_periods", "acceptance_act_snapshots")
     def fail(*args, **kwargs):
         raise RuntimeError("TEST GENERATION FAILURE")
     if failure == "pdf":

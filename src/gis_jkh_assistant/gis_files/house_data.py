@@ -50,6 +50,8 @@ class HouseDataImportResult:
     areas: tuple[ImportedAreaRow, ...]
     tariffs: tuple[ImportedTariffRow, ...]
     warnings: tuple[str, ...] = ()
+    houses: tuple = ()
+    people: tuple = ()
 
 
 AREA_SHEET = "Площади"
@@ -65,6 +67,7 @@ def write_house_data_template(
     *,
     houses: Iterable[House],
     tariffs_by_house: dict[str, Iterable[HouseTariff]],
+    repository=None,
 ) -> None:
     """Write a reusable workbook prefilled with the current houses."""
 
@@ -149,6 +152,10 @@ def write_house_data_template(
             tariffs.cell(1, column).column_letter
         ].width = 20 if column % 2 else 28
 
+    from .house_extra_data import write_extra_sheets
+    write_extra_sheets(workbook, sorted_houses, repository)
+    instruction.append(["Лист «Дома»: помещения, договор, сроки управления и адресные реквизиты акта. Пустые ячейки не удаляют сохранённые значения; явный ноль меняет количество помещений на ноль."])
+    instruction.append(["Листы «Представители домов» и «Подписанты УО»: одна строка — один период полномочий. Заполните ФИО, основание и точную дату начала; окончание необязательно и включается в период. Для новой записи скопируйте строку дома / УО и очистите _person_id. Подпись и печать загружаются только в программе."])
     workbook.save(Path(path))
 
 
@@ -264,10 +271,15 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
         if not area_rows and not tariff_rows:
             warnings.append("В файле нет заполненных площадей или тарифов.")
 
+        from .house_extra_data import parse_extra_sheets
+        extra_houses, extra_people = parse_extra_sheets(workbook)
+        if extra_houses or extra_people:
+            warnings = [text for text in warnings if text != "В файле нет заполненных площадей или тарифов."]
         return HouseDataImportResult(
             areas=tuple(area_rows),
             tariffs=tuple(tariff_rows),
             warnings=tuple(warnings),
+            houses=extra_houses, people=extra_people,
         )
     finally:
         workbook.close()
