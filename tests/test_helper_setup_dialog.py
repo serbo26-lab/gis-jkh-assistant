@@ -204,7 +204,7 @@ def test_settings_button_opens_single_dialog_and_reopens_status_timer(desktop, t
     _settle(desktop.app)
     assert window._helper_setup_dialog is dialog
     assert dialog.timer.isActive()
-    assert window.navigation.count() == 6
+    assert window.navigation.count() == 7
     assert window._normalized_context(window._shared_context) == before_context
     dialog.close()
 

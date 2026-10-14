@@ -76,7 +76,13 @@ class OrganizationsPage(QWidget):
         self.basic.body.addWidget(self.form)
         self.save_button = QPushButton("Сохранить реквизиты УО")
         self.save_button.clicked.connect(self.flush_pending_changes)
-        self.basic.body.addWidget(self.save_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.cancel_button = QPushButton("Отменить правки")
+        self.cancel_button.clicked.connect(self._cancel_basic_edit)
+        save_actions = QHBoxLayout()
+        save_actions.addWidget(self.save_button)
+        save_actions.addWidget(self.cancel_button)
+        save_actions.addStretch(1)
+        self.basic.body.addLayout(save_actions)
         body.addWidget(self.basic)
         self.people = SectionCard("Руководитель и подписанты актов")
         body.addWidget(self.people)
@@ -179,6 +185,13 @@ class OrganizationsPage(QWidget):
         self.houses_page._refresh_workflow()
         self._set_bulk_status("Реквизиты УО сохранены.")
         return True
+
+    def _cancel_basic_edit(self):
+        # The former edit dialog's Cancel action remains available inline.
+        organization = self.repository.get_organization(self._current_organization_id)
+        self.form.set_organization(organization)
+        self._saved_values = self.form.values()
+        self._set_bulk_status("Правки реквизитов отменены.")
 
     def _flush_autosave(self):
         return self.flush_pending_changes() and self.houses_page.flush_pending_changes()

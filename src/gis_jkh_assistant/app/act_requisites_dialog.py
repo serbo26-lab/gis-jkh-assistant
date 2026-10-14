@@ -355,6 +355,8 @@ class ActRequisitesDialog(QDialog):
             self.page.refresh_availability()
 
     def reject(self):
+        if self._embedded:
+            return  # Escape must not hide an editor embedded in a section.
         if self._worker is not None and self._worker.isRunning():
             return
         super().reject()

@@ -32,8 +32,14 @@ def test_sections_and_direct_organization_commands(desktop):
                    page.delete_org_button, page.requisites.load_button):
         assert button.isVisibleTo(page)
         assert button.menu() is None
+    QTest.keyClick(page.requisites.table, Qt.Key.Key_Escape)
+    assert page.requisites.isVisibleTo(page)
     assert page.organization_combo is window.houses_page.organization_combo
     assert page.organization_combo.parentWidget() is page.page_content
+    page.form.name_edit.setText("Отменяемая правка")
+    page.cancel_button.click()
+    assert page.form.name_edit.text() == desktop.organization.name
+    assert desktop.repository.get_organization(desktop.organization.id).name == desktop.organization.name
     assert not hasattr(window.houses_page, "organization_actions_button")
     page.workflow.primary.click()
     workflows._settle(desktop.app)
