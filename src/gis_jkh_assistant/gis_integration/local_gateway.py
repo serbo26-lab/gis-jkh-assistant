@@ -40,6 +40,23 @@ class IntegrationStatus:
     session_keep_alive_error: str | None = None
     last_seen_age: float | None = None
     error: str | None = None
+    browser_names: tuple[str, ...] = ()
+
+
+def _browser_name(user_agent: str) -> str | None:
+    """Display-only identification; never used for routing or permissions."""
+    products = {part.split("/", 1)[0] for part in user_agent.split() if "/" in part}
+    for product, name in (
+        ("YaBrowser", "Яндекс Браузер"),
+        ("Edg", "Microsoft Edge"),
+        ("OPR", "Opera"),
+        ("Vivaldi", "Vivaldi"),
+        ("Chromium", "Chromium"),
+        ("Chrome", "Google Chrome"),
+    ):
+        if product in products:
+            return name
+    return None
 
 
 class _GatewayState:
@@ -56,10 +73,12 @@ class _GatewayState:
         self.session_keep_alive_error: str | None = None
         self.clients: dict[str, tuple[float, dict]] = {}
 
-    def update_hello(self, payload: dict[str, Any]) -> None:
+    def update_hello(self, payload: dict[str, Any], *, user_agent: str = "") -> None:
         with self.lock:
             instance = str(payload.get("helperInstance") or "legacy")[:128]
-            self.clients[instance] = (time.monotonic(), dict(payload))
+            self.clients[instance] = (
+                time.monotonic(), dict(payload, _browser_name=_browser_name(user_agent)),
+            )
             self.clients = {key: value for key, value in self.clients.items()
                             if time.monotonic() - value[0] < 35.0}
             self.last_seen = time.monotonic()
@@ -94,6 +113,15 @@ class _GatewayState:
                 self.session_keep_alive_error = _optional_text(payload.get("sessionKeepAliveError"))
             age = None if self.last_seen is None else max(0.0, time.monotonic() - self.last_seen)
             connected = age is not None and age < 35.0
+            # Match the readiness shown in the UI. A helper without a GIS tab
+            # must not replace the browser(s) that can actually handle commands.
+            browser_clients = [payload for _, payload in fresh if payload.get("gisPageReady")]
+            if not browser_clients:
+                browser_clients = [payload for _, payload in fresh]
+            browser_names = tuple(sorted({
+                payload.get("_browser_name") or "Браузер не определён"
+                for payload in browser_clients
+            })) if running and connected else ()
             return IntegrationStatus(
                 running=running,
                 helper_connected=connected,
@@ -105,6 +133,7 @@ class _GatewayState:
                 session_keep_alive_error=self.session_keep_alive_error,
                 last_seen_age=age,
                 error=error,
+                browser_names=browser_names,
             )
 
     def can_poll(self, instance: str | None) -> bool:
@@ -185,7 +214,7 @@ class LocalIntegrationGateway:
 
                 path = urlparse(self.path).path
                 if path == "/api/integration/hello":
-                    state.update_hello(payload)
+                    state.update_hello(payload, user_agent=self.headers.get("User-Agent", ""))
                     self._send_json(HTTPStatus.OK, {"ok": True})
                     return
 

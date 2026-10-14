@@ -73,6 +73,39 @@ def test_publication_baseline_is_the_sent_snapshot(desktop, messages, monkeypatc
     assert page.workflow._key != "next"
 
 
+def test_bad_remote_date_preserves_plan_and_explains_read_only_import(desktop, messages, monkeypatch):
+    page = _select_page(desktop, 2)
+    plan_id = page._current_plan_id
+    mark_plan_synced(page, plan_id)
+    baseline = desktop.repository.get_setting(f"ui.plan.synced.{plan_id}")
+    before = plan_fingerprint(page, plan_id)
+    workers = []
+
+    def create(*args, **kwargs):
+        worker = ControlledWorker(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr(planning_page, "GisIntegrationWorker", create)
+    page._load_from_gis()
+    workers[0].succeeded.emit({"found": True, "year": 2026, "items": [
+        {"workName": "Обслуживание оборудования", "monthlyWorks": [
+            {"month": 1, "count": 1, "dates": ["2026-01-15"]},
+            {"month": 3, "count": 1, "dates": ["2001-01-01"]},
+        ]},
+    ]})
+    workers[0].finish()
+    _settle(desktop.app)
+    assert plan_fingerprint(page, plan_id) == before
+    assert desktop.repository.get_setting(f"ui.plan.synced.{plan_id}") == baseline
+    errors = [text for kind, _, text in messages if kind == "critical"]
+    assert len(errors) == 1
+    for expected in ("Обслуживание оборудования", "01.01.2001", "03.2026",
+                     "локальный план сохранён", "Изменений в ГИС ЖКХ не было"):
+        assert expected in errors[0]
+    assert "проверьте соединение" not in errors[0].lower()
+
+
 @pytest.mark.parametrize("index", [2, 3, 4])
 @pytest.mark.parametrize("shared", [True, False])
 def test_navigation_retains_year_month_and_scope(desktop, index, shared):

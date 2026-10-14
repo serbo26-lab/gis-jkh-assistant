@@ -19,6 +19,7 @@ from gis_jkh_assistant.gis_integration import (  # noqa: E402
 from gis_jkh_assistant.gis_integration.organization_context import (  # noqa: E402
     helper_supports_organization_routing, with_organization_context,
 )
+from gis_jkh_assistant.gis_integration.local_gateway import _GatewayState  # noqa: E402
 
 
 @pytest.mark.parametrize("version,supported", [
@@ -148,3 +149,48 @@ def test_browser_instance_header_preflight_and_inactive_poll_are_supported():
                 assert reply == command and gateway._state.commands.empty()
     finally:
         gateway.stop()
+
+
+def test_hello_browser_identification_works_without_changing_helper_payload():
+    gateway = LocalIntegrationGateway(port=0)
+    gateway.start()
+    try:
+        url = f"http://127.0.0.1:{gateway._server.server_port}/api/integration/hello"
+        payload = json.dumps({"gisPageReady": True, "helperVersion": "0.1.31"}).encode()
+        for agent, expected in (
+            ("Mozilla/5.0 Chrome/141.0.0.0 Safari/537.36", "Google Chrome"),
+            ("Mozilla/5.0 Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0", "Microsoft Edge"),
+            ("Mozilla/5.0 Chrome/141.0.0.0 YaBrowser/25.10.0.0 Safari/537.36", "Яндекс Браузер"),
+            ("unknown", "Браузер не определён"),
+        ):
+            with urlopen(Request(url, data=payload, headers={
+                "X-GIS-JKH-Helper": "desktop-helper", "User-Agent": agent,
+                "Content-Type": "application/json",
+            }), timeout=2) as response:
+                assert json.load(response) == {"ok": True}
+            assert gateway.status().browser_names == (expected,)
+    finally:
+        gateway.stop()
+
+
+def test_browser_status_follows_ready_clients_and_expires_with_them(monkeypatch):
+    from gis_jkh_assistant.gis_integration import local_gateway
+
+    clock = [100.0]
+    monkeypatch.setattr(local_gateway.time, "monotonic", lambda: clock[0])
+    state = _GatewayState()
+    state.update_hello({"helperInstance": "chrome", "gisPageReady": True},
+                       user_agent="Chrome/141.0")
+    clock[0] += 1
+    state.update_hello({"helperInstance": "edge", "gisPageReady": False},
+                       user_agent="Chrome/141.0 Edg/141.0")
+    assert state.status(True, None).browser_names == ("Google Chrome",)
+    state.update_hello({"helperInstance": "edge", "gisPageReady": True},
+                       user_agent="Chrome/141.0 Edg/141.0")
+    assert state.status(True, None).browser_names == ("Google Chrome", "Microsoft Edge")
+    assert state.status(False, None).browser_names == ()
+    clock[0] += 34.5
+    assert state.status(True, None).browser_names == ("Microsoft Edge",)
+    clock[0] += 1
+    status = state.status(True, None)
+    assert not status.helper_connected and status.browser_names == ()
