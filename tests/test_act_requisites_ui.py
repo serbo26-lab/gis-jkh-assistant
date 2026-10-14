@@ -166,9 +166,12 @@ def test_pdf_preview_loads_document_and_closes_without_writing(desktop):
     assert list(desktop.repository.connection.iterdump()) == before
 
 
-def test_manual_pdf_generation_attaches_document_links_and_requisites_together(desktop, monkeypatch):
+@pytest.mark.parametrize("placeholder", [False, True])
+def test_manual_pdf_generation_attaches_document_links_and_requisites_together(desktop, monkeypatch, placeholder):
     from gis_jkh_assistant.app.quality_bulk_dialogs import QualityMonthActsDialog
     populate_act_requisites(desktop.repository, desktop.work_list)
+    ActRequisitesStore(desktop.repository).save_options(desktop.organization.id,
+        customer_signature_placeholder=int(placeholder))
     page = workflows._select_page(desktop, 4)
     period, item = workflows._include_quality(page, 1)
     fixation = desktop.repository.get_work_fixation_period_for_month(desktop.work_list.id, year=2026, month=1)
@@ -188,6 +191,7 @@ def test_manual_pdf_generation_attaches_document_links_and_requisites_together(d
     assert snapshot["executor"]["full_name"] == "Иванов Иван Иванович"
     assert snapshot["agreement_number"] == "TEST-1"
     assert snapshot["work_rows"][0]["actual_cost"] == "200"
+    assert snapshot["customer_signature_placeholder"] is placeholder
     dialog.close()
     dialog.deleteLater()
 

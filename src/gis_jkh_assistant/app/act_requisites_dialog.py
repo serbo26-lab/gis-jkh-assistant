@@ -192,14 +192,23 @@ class ActRequisitesDialog(QDialog):
                 button.clicked.connect(callback)
                 images.addWidget(button)
             self.insert_images = QCheckBox("Вставлять загруженные изображения в новые акты")
-            self.insert_images.setChecked(bool(self.store.options(organization_id)["insert_images"]))
-            self.insert_images.toggled.connect(self._image_option)
+            options = self.store.options(organization_id)
+            self.insert_images.setChecked(bool(options["insert_images"]))
+            self.insert_images.toggled.connect(lambda enabled: self._save_option(self.insert_images, "insert_images", enabled))
             images.addWidget(self.insert_images)
             root.addLayout(images)
             self.image_info = QLabel()
             self.image_info.setWordWrap(True)
             root.addWidget(self.image_info)
             self.table.currentCellChanged.connect(lambda *_: self._image_label())
+            self.customer_signature_placeholder = QCheckBox("Использовать заглушку вместо подписи заказчика")
+            self.customer_signature_placeholder.setChecked(bool(options["customer_signature_placeholder"]))
+            self.customer_signature_placeholder.toggled.connect(lambda enabled: self._save_option(
+                self.customer_signature_placeholder, "customer_signature_placeholder", enabled))
+            root.addWidget(self.customer_signature_placeholder)
+            placeholder_hint = QLabel("Для новых ручных и автоматических актов этой УО. Заменяет только строку подписи заказчика; ФИО остаётся в акте.")
+            placeholder_hint.setWordWrap(True)
+            root.addWidget(placeholder_hint)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("Закрыть")
         buttons.rejected.connect(self.reject)
@@ -250,13 +259,13 @@ class ActRequisitesDialog(QDialog):
                                 "; печать: " + (options.get("stamp_name") or "не загружена") +
                                 ". Изображения не меняют статус подписания документа.")
 
-    def _image_option(self, enabled):
+    def _save_option(self, checkbox, field, enabled):
         try:
-            self.store.save_options(self.organization_id, insert_images=int(enabled))
+            self.store.save_options(self.organization_id, **{field: int(enabled)})
         except sqlite3.DatabaseError as exc:
-            self.insert_images.blockSignals(True)
-            self.insert_images.setChecked(not enabled)
-            self.insert_images.blockSignals(False)
+            checkbox.blockSignals(True)
+            checkbox.setChecked(not enabled)
+            checkbox.blockSignals(False)
             QMessageBox.warning(self, "Не удалось сохранить настройку", str(exc))
 
     def _image(self, kind):

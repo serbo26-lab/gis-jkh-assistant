@@ -33,10 +33,15 @@ def initialize_act_schema(connection):
         CREATE TABLE IF NOT EXISTS act_organization_options (
             organization_id TEXT PRIMARY KEY REFERENCES management_organizations(id) ON DELETE CASCADE,
             insert_images INTEGER NOT NULL DEFAULT 0,
+            customer_signature_placeholder INTEGER NOT NULL DEFAULT 0,
             stamp BLOB,
             stamp_name TEXT
         );
     """)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(act_organization_options)")}
+    if "customer_signature_placeholder" not in columns:
+        connection.execute("ALTER TABLE act_organization_options ADD COLUMN customer_signature_placeholder INTEGER NOT NULL DEFAULT 0")
+        connection.commit()
 
 
 def normalized_person(values):
@@ -118,17 +123,21 @@ class ActRequisitesStore:
     def options(self, organization_id):
         row = self.connection.execute("SELECT * FROM act_organization_options WHERE organization_id=?", (organization_id,)).fetchone()
         return dict(row) if row else {"organization_id": organization_id, "insert_images": 0,
+                                     "customer_signature_placeholder": 0,
                                      "stamp": None, "stamp_name": None}
 
     def save_options(self, organization_id, **fields):
         previous = self.options(organization_id)
-        previous.update({k: v for k, v in fields.items() if k in {"insert_images", "stamp", "stamp_name"}})
+        previous.update({k: v for k, v in fields.items() if k in {
+            "insert_images", "customer_signature_placeholder", "stamp", "stamp_name"}})
         with self.connection:
-            self.connection.execute("""INSERT INTO act_organization_options (organization_id, insert_images, stamp, stamp_name)
-                VALUES (?, ?, ?, ?)
+            self.connection.execute("""INSERT INTO act_organization_options
+                (organization_id, insert_images, customer_signature_placeholder, stamp, stamp_name)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(organization_id) DO UPDATE SET insert_images=excluded.insert_images,
+                customer_signature_placeholder=excluded.customer_signature_placeholder,
                 stamp=excluded.stamp, stamp_name=excluded.stamp_name""",
-                tuple(previous[k] for k in ("organization_id", "insert_images", "stamp", "stamp_name")))
+                tuple(previous[k] for k in ("organization_id", "insert_images", "customer_signature_placeholder", "stamp", "stamp_name")))
 
     def save_signature(self, person_id, content, name):
         with self.connection:

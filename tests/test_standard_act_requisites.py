@@ -36,9 +36,12 @@ def test_signatory_is_chosen_on_act_date_and_overlaps_require_a_choice(source):
     assert not resolve_act_details(repo, house.id, "28.02.2026", customer_id=next_id)["issues"]
 
 
-def test_generated_act_snapshot_and_bytes_survive_changes_to_live_requisites(source):
+@pytest.mark.parametrize("placeholder", [False, True])
+def test_generated_act_snapshot_and_bytes_survive_changes_to_live_requisites(source, placeholder):
     repo, wl = source
     house = repo.get_house(wl.house_id)
+    requisites = ActRequisitesStore(repo)
+    requisites.save_options(house.organization_id, customer_signature_placeholder=int(placeholder))
     store = QualityAssessmentStore(repo)
     period = store.get_or_create_period(work_list_id=wl.id, year=2026, month=1)
     item = store.list_items(period.id)[0]
@@ -50,11 +53,13 @@ def test_generated_act_snapshot_and_bytes_survive_changes_to_live_requisites(sou
     act = store.list_period_acts(period.id)[0]
     requisites = ActRequisitesStore(repo)
     snapshot = requisites.snapshot(act.id)
+    assert snapshot["customer_signature_placeholder"] is placeholder
     assert snapshot["work_rows"][0]["unit_cost"] == "100"
     before = act.content
     director = requisites.list_people(organization_id=house.organization_id)[0]
     requisites.save_person(dict(director, full_name="Другой Подписант"), organization_id=house.organization_id, person_id=director["id"])
     repo.update_house(house.id, management_agreement_number="CHANGED")
+    requisites.save_options(house.organization_id, customer_signature_placeholder=int(not placeholder))
     assert requisites.snapshot(act.id) == snapshot
     assert store.get_act(act.id).content == before
     assert snapshot["agreement_number"] == "TEST-1"

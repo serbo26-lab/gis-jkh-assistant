@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 
 from reportlab.lib import colors
+from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
@@ -57,6 +58,19 @@ def money_in_words(amount):
     if rubles == 0:
         groups.insert(0, "ноль")
     return (" ".join(groups) + f" {kopeks:02d} " + ending(kopeks, ("копейка", "копейки", "копеек"))).capitalize()
+
+
+def _customer_signature_placeholder(font_name):
+    # Match the supplied two-line 440 x 84 SVG as printable vector graphics.
+    # The customer's unused seal cell gives the text enough room to stay legible.
+    scale = 64 * mm / 440
+    drawing = Drawing(440 * scale, 84 * scale)
+    drawing.add(Rect(scale, scale, 438 * scale, 82 * scale,
+                     fillColor=colors.white, strokeColor=colors.black, strokeWidth=2 * scale))
+    for baseline, text in ((48, "Данные скрыты в целях безопасности"), (22, "персональных данных")):
+        drawing.add(String(220 * scale, baseline * scale, text, fontName=font_name,
+                           fontSize=20 * scale, textAnchor="middle", fillColor=colors.black))
+    return drawing
 
 
 def build_standard_pdf(*, organization_name, house_address, act_number, act_date,
@@ -148,11 +162,15 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
 
     signature = image(executor["signature_base64"], 38*mm, 13*mm) if details.get("insert_images") and executor.get("signature_base64") else p("________________", small)
     stamp = image(details["stamp_base64"], 30*mm, 25*mm) if details.get("insert_images") and details.get("stamp_base64") else p("", small)
+    customer_signature = (_customer_signature_placeholder(regular)
+                          if details.get("customer_signature_placeholder") else p("________________", small))
     signatures = Table([
         [p("Исполнитель — " + executor_position + " " + organization_name + " " + (executor.get("full_name") or blank), small), signature, stamp],
-        [p("Заказчик — " + (customer.get("role") or blank) + ", " + (customer.get("full_name") or blank), small), p("________________", small), p("", small)],
+        [p("Заказчик — " + (customer.get("role") or blank) + ", " + (customer.get("full_name") or blank), small), customer_signature, p("", small)],
     ], colWidths=[104*mm, 40*mm, 30*mm])
     signatures.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6)]))
+    if details.get("customer_signature_placeholder"):
+        signatures.setStyle(TableStyle([("SPAN", (1,1), (2,1))]))
     story.append(KeepTogether([Spacer(1, 3*mm), p("Подписи Сторон", heading), signatures]))
 
     def footer(canvas, doc):
