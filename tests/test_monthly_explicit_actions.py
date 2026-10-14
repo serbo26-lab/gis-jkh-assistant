@@ -175,8 +175,11 @@ def test_period_save_available_while_displayed_month_is_empty(pages):
 
 def test_quality_act_choices_explain_violation_and_upload(pages, monkeypatch):
     page = pages.quality
-    assert "Акт нарушения качества автоматически не формируется" in page.acts_explanation.text()
-    assert "поля перерасчёта оставьте пустыми" in page.acts_explanation.text()
+    explanation = page.acts_explanation.text()
+    assert "Для нарушения качества добавьте готовый документ" in explanation
+    assert "укажите число дней нарушения" in explanation
+    assert "оставьте поля перерасчёта пустыми" in explanation
+    assert "Проект можно сохранить без актов; для размещения нужны акты" in explanation
     calls = []
     monkeypatch.setattr(page, "_open_month_acts", lambda **kwargs: calls.append(kwargs))
     page.upload_acts_button.click()
