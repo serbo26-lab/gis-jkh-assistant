@@ -183,6 +183,10 @@ def stylesheet(theme: str = "light", scale: float = 1.0) -> str:
 
 
 def apply_theme(app, theme: str, scale: float = 1.0) -> None:
+    # Qt visits existing widgets while repolishing. Python event callbacks can
+    # run cyclic GC and delete another widget in that native traversal. Hold
+    # their wrappers until the complete palette/stylesheet update has returned.
+    widgets = app.allWidgets()
     global _theme
     _theme = theme if theme in THEMES else "light"
     values = tokens()
@@ -206,6 +210,7 @@ def apply_theme(app, theme: str, scale: float = 1.0) -> None:
     refresh_button_icons(app)
     from .widgets import refresh_combo_chevrons
     refresh_combo_chevrons(app)
+    del widgets
 
 
 APP_STYLESHEET = stylesheet("light")
