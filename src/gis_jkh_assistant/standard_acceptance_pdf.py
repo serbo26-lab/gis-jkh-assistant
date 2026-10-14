@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -73,6 +73,7 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
     heading = ParagraphStyle("ActHeading", parent=body, fontName=bold, fontSize=11.5, leading=14, alignment=TA_CENTER)
     small = ParagraphStyle("ActSmall", parent=body, fontSize=8, leading=10, spaceAfter=0)
     header = ParagraphStyle("ActHeader", parent=small, fontName=bold, alignment=TA_CENTER)
+    date_style = ParagraphStyle("ActDate", parent=body, alignment=TA_RIGHT)
     stream = BytesIO()
     document = SimpleDocTemplate(stream, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm,
                                  topMargin=14*mm, bottomMargin=17*mm,
@@ -86,7 +87,7 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
     story += [p(f"АКТ № {act_number}", heading),
               p("приемки оказанных услуг и (или) выполненных работ по содержанию и текущему ремонту общего имущества в многоквартирном доме", heading),
               Spacer(1, 3*mm)]
-    story.append(Table([[p(details.get("locality") or blank), p(act_date)]], colWidths=[110*mm, 64*mm]))
+    story.append(Table([[p(details.get("locality") or blank), p(act_date, date_style)]], colWidths=[110*mm, 64*mm]))
     customer_name = customer.get("name_genitive") or blank
     executor_name = executor.get("name_genitive") or blank
     executor_position_genitive = executor.get("position_genitive") or suggested_position_genitive(executor.get("position")) or blank

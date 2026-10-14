@@ -233,3 +233,28 @@ def test_pdf_has_position_before_name_and_short_organization_in_both_blocks(qt_a
     assert "Полное наименование" not in text
     assert f"и {short_name} (далее" in text
     document.close()
+
+
+def test_pdf_locality_and_date_align_with_opposite_text_margins(qt_app, tmp_path):
+    from PySide6.QtPdf import QPdfDocument
+    from gis_jkh_assistant.acceptance_act_pdf import AcceptanceActWorkRow, build_acceptance_act_pdf
+    locality, act_date = "г. Тестовый", "31.01.2026"
+    content = build_acceptance_act_pdf(organization_name="Тестовая УО", house_address="Тестовый дом",
+        act_number="1", act_date=act_date, period_from="01.01.2026", period_to=act_date,
+        details={"locality": locality, "executor": {}, "customer": {}},
+        work_rows=[AcceptanceActWorkRow(name="Работа", actual_cost="100")])
+    file = tmp_path / "aligned-header.pdf"
+    file.write_bytes(content)
+    document = QPdfDocument()
+    document.load(str(file))
+    text = document.getAllText(0).text()
+    assert locality in text
+    assert act_date in text
+    city_box = document.getSelectionAtIndex(0, text.index(locality), len(locality)).boundingRectangle()
+    date_box = document.getSelectionAtIndex(0, text.index(act_date), len(act_date)).boundingRectangle()
+    page_width = document.pagePointSize(0).width()
+    assert city_box.left() < page_width * 0.12
+    assert date_box.right() > page_width * 0.88
+    assert city_box.left() == pytest.approx(page_width - date_box.right(), abs=1)
+    assert city_box.top() == pytest.approx(date_box.top(), abs=1)
+    document.close()
