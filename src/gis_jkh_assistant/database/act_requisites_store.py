@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 
 
 PERSON_FIELDS = (
-    "full_name", "name_genitive", "position", "role", "premises", "gender",
+    "full_name", "name_genitive", "position", "position_genitive", "role", "premises", "gender",
     "basis_kind", "basis_number", "basis_date", "basis_text", "valid_from", "valid_to",
 )
 HOUSE_ACT_FIELDS = ("locality", "house_number", "address_without_number")

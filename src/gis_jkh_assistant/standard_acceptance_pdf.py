@@ -13,6 +13,8 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Image, KeepTogether, LongTable, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .acceptance_act_details import suggested_position_genitive
+
 
 def amount_decimal(value):
     try:
@@ -87,6 +89,10 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
     story.append(Table([[p(details.get("locality") or blank), p(act_date)]], colWidths=[110*mm, 64*mm]))
     customer_name = customer.get("name_genitive") or blank
     executor_name = executor.get("name_genitive") or blank
+    executor_position_genitive = executor.get("position_genitive") or suggested_position_genitive(executor.get("position")) or blank
+    executor_position = executor.get("position") or blank
+    if len(executor_position) > 1 and executor_position[1].islower():
+        executor_position = executor_position[0].lower() + executor_position[1:]
     customer_gender = "являющейся" if customer.get("gender") == "female" else "являющегося"
     customer_acting = "действующей" if customer.get("gender") == "female" else "действующего"
     executor_acting = "действующей" if executor.get("gender") == "female" else "действующего"
@@ -95,7 +101,7 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
                 f"{customer_gender} собственником помещения № {customer.get('premises') or blank}, "
                 f"находящегося в данном многоквартирном доме, {customer_acting} на основании {customer.get('basis') or blank}, "
                 f"с одной стороны, и {organization_name} (далее — «Исполнитель»), "
-                f"в лице {executor_name} ({executor.get('position') or blank}), "
+                f"в лице {executor_position_genitive} {executor_name}, "
                 f"{executor_acting} на основании {executor.get('basis') or blank}, с другой стороны, "
                 "совместно именуемые «Стороны», составили настоящий Акт о нижеследующем:"),
               p(f"1. Исполнителем предъявлены к приемке следующие оказанные на основании договора управления "
@@ -142,7 +148,7 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
     signature = image(executor["signature_base64"], 38*mm, 13*mm) if details.get("insert_images") and executor.get("signature_base64") else p("________________", small)
     stamp = image(details["stamp_base64"], 30*mm, 25*mm) if details.get("insert_images") and details.get("stamp_base64") else p("", small)
     signatures = Table([
-        [p("Исполнитель — " + (executor.get("position") or blank) + ", " + (executor.get("full_name") or blank), small), signature, stamp],
+        [p("Исполнитель — " + executor_position + " " + organization_name + " " + (executor.get("full_name") or blank), small), signature, stamp],
         [p("Заказчик — " + (customer.get("role") or blank) + ", " + (customer.get("full_name") or blank), small), p("________________", small), p("", small)],
     ], colWidths=[104*mm, 40*mm, 30*mm])
     signatures.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6)]))

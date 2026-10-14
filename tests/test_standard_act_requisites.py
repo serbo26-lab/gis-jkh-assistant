@@ -6,7 +6,7 @@ from openpyxl import load_workbook
 
 from act_test_data import populate_act_requisites
 from test_gis_downstream_sync import _setup
-from gis_jkh_assistant.acceptance_act_details import address_parts, resolve_act_details, suggested_genitive
+from gis_jkh_assistant.acceptance_act_details import address_parts, resolve_act_details, suggested_genitive, suggested_position_genitive
 from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
 from gis_jkh_assistant.gis_files.house_data import write_house_data_template, parse_house_data_template
@@ -158,6 +158,48 @@ def test_long_address_suffixes_do_not_require_regex_backtracking():
 def test_fio_suggestion_keeps_indeclinable_family_name():
     assert suggested_genitive("Шевченко Александр Андреевич", "male") == "Шевченко Александра Андреевича"
     assert suggested_genitive("Иванова Мария Ивановна", "female") == "Ивановой Марии Ивановны"
+
+
+@pytest.mark.parametrize("position,expected", [
+    ("Директор", "директора"), ("Генеральный директор", "генерального директора"),
+    ("Председатель", "председателя"), ("Председатель правления ТСЖ", "председателя правления ТСЖ"),
+    ("Первый заместитель генерального директора", "первого заместителя генерального директора"),
+    ("Технический директор", "технического директора"), ("Управляющая", "управляющей"),
+    ("И. о. директора", ""),
+])
+def test_position_genitive_suggestion(position, expected):
+    assert suggested_position_genitive(position) == expected
+
+
+def test_custom_position_genitive_survives_workbook_and_is_used_in_act(source, tmp_path):
+    repo, wl = source
+    house = repo.get_house(wl.house_id)
+    store = ActRequisitesStore(repo)
+    person = store.list_people(organization_id=house.organization_id)[0]
+    store.save_person(dict(person, position="И. о. директора", position_genitive="исполняющего обязанности директора"),
+                      organization_id=house.organization_id, person_id=person["id"])
+    details = resolve_act_details(repo, house.id, "31.01.2026")
+    assert not details["issues"]
+    assert details["executor"]["position_genitive"] == "исполняющего обязанности директора"
+    assert details["organization_name"] == repo.get_organization(house.organization_id).name
+    file = tmp_path / "requisites.xlsx"
+    write_house_data_template(file, houses=[house], tariffs_by_house={}, repository=repo)
+    imported = next(row for row in parse_house_data_template(file).people if row.ogrn)
+    assert imported.fields["position_genitive"] == "исполняющего обязанности директора"
+    from gis_jkh_assistant.gis_files.house_extra_data import prepare_person_change
+    imported.fields["position"] = "Генеральный директор"
+    _, updated, _ = prepare_person_change(repo, imported, organization_id=house.organization_id)
+    assert updated["position_genitive"] == ""
+
+
+def test_unrecognized_position_requests_manual_genitive(source):
+    repo, wl = source
+    house = repo.get_house(wl.house_id)
+    store = ActRequisitesStore(repo)
+    person = store.list_people(organization_id=house.organization_id)[0]
+    store.save_person(dict(person, position="И. о. директора"), organization_id=house.organization_id, person_id=person["id"])
+    assert any("должность" in issue and "родительном" in issue
+               for issue in resolve_act_details(repo, house.id, "31.01.2026")["issues"])
 
 
 def test_snapshot_requires_an_existing_act(source):

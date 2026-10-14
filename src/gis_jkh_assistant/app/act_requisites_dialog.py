@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
 )
 from reportlab.lib.utils import ImageReader
 
-from gis_jkh_assistant.acceptance_act_details import address_parts, display_date, iso_date, suggested_genitive
+from gis_jkh_assistant.acceptance_act_details import (
+    address_parts, display_date, iso_date, suggested_genitive, suggested_position_genitive,
+)
 from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore, normalized_person
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 
@@ -49,12 +51,20 @@ class ActPersonDialog(QDialog):
         form = QFormLayout(content)
         self.edits = {}
         for field, label in (("full_name", "ФИО *"), ("name_genitive", "ФИО в родительном падеже"),
-                             ("position", "Должность"), ("premises", "Квартира / помещение")):
+                             ("position", "Должность"), ("position_genitive", "Должность в родительном падеже"),
+                             ("premises", "Квартира / помещение")):
             edit = QLineEdit(str(person.get(field) or ""))
             self.edits[field] = edit
-            if (organization and field == "premises") or (not organization and field == "position"):
+            if (organization and field == "premises") or (not organization and field.startswith("position")):
                 continue
             form.addRow(label, edit)
+        self._position_source = self.edits["position"].text()
+        if organization:
+            genitive = self.edits["position_genitive"]
+            genitive.setPlaceholderText("Например: генерального директора")
+            if not genitive.text():
+                genitive.setText(suggested_position_genitive(self._position_source))
+            self.edits["position"].editingFinished.connect(self._position_changed)
         self.role = QComboBox()
         self.role.addItems(["Руководитель", "Уполномоченный сотрудник"] if organization else
                            ["Председатель совета МКД", "Уполномоченный собственник"])
@@ -98,6 +108,13 @@ class ActPersonDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+
+    def _position_changed(self):
+        edit = self.edits["position_genitive"]
+        position = self.edits["position"].text()
+        if not edit.text() or edit.text() == suggested_position_genitive(self._position_source):
+            edit.setText(suggested_position_genitive(position))
+        self._position_source = position
 
     def values(self):
         values = {key: edit.text().strip() for key, edit in self.edits.items()}

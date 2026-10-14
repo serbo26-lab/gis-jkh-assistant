@@ -23,7 +23,8 @@ HOUSE_COLUMNS = {
 }
 PERSON_COLUMNS = {
     "full_name": "ФИО", "name_genitive": "ФИО в родительном падеже",
-    "position": "Должность", "role": "Статус представителя", "premises": "Квартира / помещение",
+    "position": "Должность", "position_genitive": "Должность в родительном падеже",
+    "role": "Статус представителя", "premises": "Квартира / помещение",
     "gender": "Согласование (male / female)", "basis_kind": "Основание полномочий",
     "basis_number": "Номер основания", "basis_date": "Дата основания", "basis_text": "Основание полным текстом",
     "valid_from": "Начало полномочий", "valid_to": "Окончание полномочий (включительно)",
@@ -168,5 +169,8 @@ def prepare_person_change(repository, row, *, organization_id=None, house_id=Non
         raise ValueError("Несколько записей подписанта с одинаковыми ФИО и началом полномочий.")
     previous = matched[0] if matched else {}
     merged = {**previous, **row.fields}
+    if "position" in row.fields and row.fields["position"] != previous.get("position"):
+        if not row.fields.get("position_genitive") or row.fields["position_genitive"] == previous.get("position_genitive", ""):
+            merged["position_genitive"] = ""
     data = normalized_person(merged)
     return previous.get("id"), data, previous

@@ -190,3 +190,46 @@ def test_manual_pdf_generation_attaches_document_links_and_requisites_together(d
     assert snapshot["work_rows"][0]["actual_cost"] == "200"
     dialog.close()
     dialog.deleteLater()
+
+
+def test_position_form_suggestion_and_manual_override(qt_app):
+    from gis_jkh_assistant.app.act_requisites_dialog import ActPersonDialog
+    dialog = ActPersonDialog({"position": "Директор"}, organization=True)
+    assert dialog.edits["position_genitive"].text() == "директора"
+    dialog.edits["position"].setText("Генеральный директор")
+    dialog.edits["position"].editingFinished.emit()
+    assert dialog.edits["position_genitive"].text() == "генерального директора"
+    dialog.edits["position_genitive"].setText("исполняющего обязанности директора")
+    dialog.edits["position"].setText("И. о. директора")
+    dialog.edits["position"].editingFinished.emit()
+    assert dialog.edits["position_genitive"].text() == "исполняющего обязанности директора"
+    dialog.close()
+    dialog.deleteLater()
+
+
+@pytest.mark.parametrize("position,genitive", [
+    ("Директор", "директора"), ("Генеральный директор", "генерального директора"),
+    ("Председатель", "председателя"),
+])
+def test_pdf_has_position_before_name_and_short_organization_in_both_blocks(qt_app, tmp_path, position, genitive):
+    from PySide6.QtPdf import QPdfDocument
+    from gis_jkh_assistant.acceptance_act_pdf import AcceptanceActWorkRow, build_acceptance_act_pdf
+    short_name = "ООО УК «Тестовая»"
+    details = {"organization_name": short_name, "executor": {
+        "full_name": "Иванов Иван Иванович", "name_genitive": "Иванова Ивана Ивановича",
+        "position": position, "position_genitive": genitive, "basis": "Устава",
+    }, "customer": {}}
+    content = build_acceptance_act_pdf(organization_name="Полное наименование не должно подменять карточку УО",
+        house_address="Тестовый дом", act_number="1", act_date="31.01.2026",
+        period_from="01.01.2026", period_to="31.01.2026", details=details,
+        work_rows=[AcceptanceActWorkRow(name="Тестовая работа", actual_cost="100")])
+    file = tmp_path / "act.pdf"
+    file.write_bytes(content)
+    document = QPdfDocument()
+    document.load(str(file))
+    text = " ".join(document.getAllText(0).text().split())
+    assert f"в лице {genitive} Иванова Ивана Ивановича" in text
+    assert f"Исполнитель — {position.lower()} {short_name} Иванов Иван Иванович" in text
+    assert "Полное наименование" not in text
+    assert f"и {short_name} (далее" in text
+    document.close()

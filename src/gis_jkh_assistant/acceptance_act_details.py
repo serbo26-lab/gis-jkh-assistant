@@ -66,6 +66,33 @@ def suggested_genitive(full_name, gender=""):
     return " ".join(result)
 
 
+def _position_adjective_genitive(word):
+    word = word.casefold()
+    if word.endswith(("ый", "ой", "кий", "гий", "хий")):
+        return word[:-2] + "ого"
+    if word.endswith("ий"):
+        return word[:-2] + "его"
+    return None
+
+
+def suggested_position_genitive(position):
+    """Decline common job titles; leave unfamiliar constructions for manual input."""
+    nouns = {"директор": "директора", "гендиректор": "гендиректора", "председатель": "председателя",
+             "руководитель": "руководителя", "заместитель": "заместителя", "представитель": "представителя",
+             "начальник": "начальника", "предприниматель": "предпринимателя", "член": "члена",
+             "управляющий": "управляющего", "управляющая": "управляющей",
+             "исполняющий": "исполняющего", "исполняющая": "исполняющей"}
+    words = str(position or "").split()
+    for index, word in enumerate(words):
+        head = nouns.get(word.casefold())
+        if head:
+            adjectives = [_position_adjective_genitive(value) for value in words[:index]]
+            if any(value is None for value in adjectives):
+                return ""
+            return " ".join([*adjectives, head, *words[index + 1:]])
+    return ""
+
+
 def has_quality_issues(item):
     if item.days_count:
         return True
@@ -156,9 +183,12 @@ def resolve_act_details(repository, house_id, act_date, *, executor_id=None, cus
             return {}
         person = dict(candidates[0])
         person["name_genitive"] = person.get("name_genitive") or suggested_genitive(person["full_name"], person.get("gender"))
+        person["position_genitive"] = person.get("position_genitive") or suggested_position_genitive(person.get("position"))
         person["basis"] = basis_text(person)
         if not person.get("position") and owner.get("organization_id"):
             issues.append("У подписанта УО не указана должность.")
+        elif owner.get("organization_id") and not person["position_genitive"]:
+            issues.append("Уточните должность подписанта УО в родительном падеже.")
         if not person.get("gender"):
             issues.append("Уточните согласование текста для подписанта: " + person["full_name"] + ".")
         if owner.get("house_id") and not person.get("premises"):
