@@ -250,7 +250,13 @@ def test_houses_has_real_operation_status_and_contextual_next_action(tmp_path, a
     repository = Repository(tmp_path / "houses.db")
     page = HousesPage(repository, Gateway())
     assert isinstance(page.bulk_status_strip, OperationStatus)
-    assert page.workflow._key == "organization_load"
+    # Organization import moved to the first UO section; an empty houses
+    # registry now offers navigation there instead of importing in-place.
+    assert page.workflow._key == "organization"
+    targets = []
+    page.workflow.navigateRequested.connect(targets.append)
+    page.workflow.primary.click()
+    assert targets == [-1]
     org = repository.create_organization(name="УК", ogrn="1022600000000")
     page.refresh_organizations(select_id=org.id)
     assert page.workflow._key == "load"
