@@ -3,7 +3,7 @@ from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
-from .styles import color as theme_color
+from .styles import THEMES, tokens, color as theme_color
 
 _PATHS = {
     "houses": '<path d="M3 10 12 3l9 7v10H3Z"/><path d="M9 20v-8h6v8"/>',
@@ -30,12 +30,34 @@ _PATHS = {
 }
 
 
+
+def _organization_svg():
+    # Supplied light/dark SVGs; keep their fills, strokes and dark gradient.
+    dark = tokens() is THEMES["dark"]
+    accent = "url(#d_uo)" if dark else "#0066CC"
+    definitions = ('<defs><linearGradient id="d_uo" x1="0%" y1="0%" x2="100%" y2="100%">'
+                   '<stop offset="0%" stop-color="#38BDF8"/><stop offset="100%" stop-color="#818CF8"/>'
+                   '</linearGradient></defs>') if dark else ""
+    side_fill, side_stroke = ("#1E2333", "#475569") if dark else ("#F0F4F8", "#64748B")
+    window = "#F8FAFC" if dark else "#0066CC"
+    bottom_window = "#38BDF8" if dark else "#1F2937"
+    side_window = "#94A3B8" if dark else "#64748B"
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">{definitions}'
+            f'<path d="M14 9h4.5a1.5 1.5 0 0 1 1.5 1.5V21h-6V9z" fill="{side_fill}" stroke="{side_stroke}" stroke-width="1.6" stroke-linejoin="round"/>'
+            f'<rect x="4" y="3" width="10" height="18" rx="2" fill="{accent}" fill-opacity="{0.22 if dark else 0.12}" stroke="{accent}" stroke-width="1.8"/>'
+            f'<path d="M7 7h4M7 11h4" stroke="{window}" stroke-width="1.8" stroke-linecap="round"/>'
+            f'<path d="M7 15h4" stroke="{bottom_window}" stroke-width="1.8" stroke-linecap="round"/>'
+            f'<path d="M16.5 13h1M16.5 17h1" stroke="{side_window}" stroke-width="1.6" stroke-linecap="round"/>'
+            f'<path d="M2 21h20" stroke="{accent}" stroke-width="1.8" stroke-linecap="round"/></svg>')
+
 def icon(name: str, color: str | None = None, size: int = 20) -> QIcon:
     color = color or theme_color("muted_text")
     body = _PATHS.get(name, _PATHS["more"])
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
            f'fill="none" stroke="{color}" stroke-width="1.7" '
            f'stroke-linecap="round" stroke-linejoin="round">{body}</svg>')
+    if name == "organizations":
+        svg = _organization_svg()
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)

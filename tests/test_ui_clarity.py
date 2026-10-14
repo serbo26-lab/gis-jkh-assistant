@@ -15,6 +15,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics  # noqa: E402
 from PySide6.QtWidgets import QApplication, QComboBox, QFrame, QLabel, QPushButton, QWidget  # noqa: E402
 
 from gis_jkh_assistant.app.houses_page import HousesPage  # noqa: E402
+from gis_jkh_assistant.app.organizations_page import OrganizationsPage  # noqa: E402
 from gis_jkh_assistant.app.quality_page import QualityAssessmentPage  # noqa: E402
 from gis_jkh_assistant.app.styles import apply_theme  # noqa: E402
 from gis_jkh_assistant.app.work_lists_page import WorkListsPage  # noqa: E402
@@ -66,19 +67,20 @@ def pages(app, tmp_path):
     )
     gateway = Gateway()
     houses = HousesPage(repository, gateway)
+    organizations = OrganizationsPage(repository, houses, gateway)
     lists = WorkListsPage(repository, gateway)
     quality = QualityAssessmentPage(repository, gateway)
-    for page in (houses, lists, quality):
+    for page in (organizations, houses, lists, quality):
         page.resize(1100, 760)
         page.show()
     lists.refresh_work_lists(select_id=work_list.id)
     settle(app)
     yield SimpleNamespace(
-        app=app, repository=repository, houses=houses, lists=lists, quality=quality,
+        app=app, repository=repository, organizations=organizations, houses=houses, lists=lists, quality=quality,
     )
     houses._autosave_timer.stop()
     lists._period_timer.stop()
-    for page in (houses, lists, quality):
+    for page in (organizations, houses, lists, quality):
         page.close()
         page.deleteLater()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -100,48 +102,39 @@ def test_all_organization_downloads_are_visible_commands_with_explicit_scope(pag
     for button in (page.sync_all_management_button, page.sync_all_work_lists_button):
         assert button.isVisibleTo(page)
     assert not page.bulk_actions_button.isVisibleTo(page)
-    assert "Добавить УО из ГИС" in menu_text(page.organization_actions_button)
+    assert not hasattr(page, "organization_actions_button")
     assert not page.gis_actions_button.isVisibleTo(page)
 
 
 def test_manual_organization_actions_and_local_files_are_separate_from_gis(pages):
     page = pages.houses
-    assert page.organization_actions_button.isVisibleTo(page)
-    commands = menu_text(page.organization_actions_button)
-    assert "Добавить УО вручную" in commands
-    assert "Изменить реквизиты УО" in commands
-    assert "Удалить УО и её данные…" in commands
+    organizations = pages.organizations
+    for button in (organizations.load_organization_button, organizations.add_org_button,
+                   organizations.save_button, organizations.delete_org_button):
+        assert button.isVisibleTo(organizations)
+        assert button.menu() is None
     assert page.add_house_button.isVisibleTo(page)
     assert page.export_house_data_button.isVisibleTo(page)
     assert page.import_house_data_button.isVisibleTo(page)
     assert all("ГИС" not in item for item in menu_text(page.files_actions_button))
-    assert not page.delete_org_button.isVisibleTo(page)
-    assert page.delete_org_button.parentWidget() is page.command_host
+    assert not hasattr(page, "delete_org_button")
 
 
-@pytest.mark.parametrize("version,expected", [
-    ("0.1.30", "organization_load"), ("0.1.29", "organization"), ("0.1.28", "organization"),
-])
-def test_first_step_offers_import_from_supported_authorized_helper(app, tmp_path, version, expected, monkeypatch):
+@pytest.mark.parametrize("version,enabled", [("0.1.30", True), ("0.1.29", False), ("0.1.28", False)])
+def test_first_step_offers_import_from_supported_authorized_helper(app, tmp_path, version, enabled):
     repository = Repository(tmp_path / "empty.db")
-    page = HousesPage(repository, Gateway(version))
+    houses = HousesPage(repository, Gateway(version))
+    page = OrganizationsPage(repository, houses, houses.integration_gateway)
     page.show()
     settle(app)
-    assert page.workflow._key == expected
-    assert page.organization_actions_button.isVisibleTo(page)
-    page.organization_actions_button.sync()
-    assert any(source is page.add_org_button for _action, source, _when in page.organization_actions_button.entries)
-    assert any(source is page.load_organization_button for _action, source, _when in page.organization_actions_button.entries)
-    if expected == "organization_load":
-        from gis_jkh_assistant.app import organization_sync
-        called = []
-        monkeypatch.setattr(organization_sync, "load_organization_from_gis", called.append)
-        page.workflow.primary.click()
-        assert called == [page]
-    else:
-        assert not page.load_organization_button.isEnabled()
+    assert page.load_organization_button.isVisibleTo(page)
+    assert page.add_org_button.isVisibleTo(page)
+    assert page.load_organization_button.isEnabled() is enabled
+    assert page.add_org_button.isEnabled()
+    if not enabled:
         assert "0.1.30" in page.load_organization_button.toolTip()
     page.deleteLater()
+    houses.deleteLater()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     repository.close()
 

@@ -17,7 +17,7 @@ def _settle(app):
 
 def test_quality_expanded_guidance_uses_own_full_width_row_at_150_percent(desktop):
     window = desktop.window
-    window.navigation.setCurrentRow(4)
+    window.navigation.setCurrentRow(5)
     window.resize(1366, 800)
     window.settings_page.scale_combo.setCurrentIndex(
         window.settings_page.scale_combo.findData(150)
@@ -53,7 +53,7 @@ def test_quality_expanded_guidance_uses_own_full_width_row_at_150_percent(deskto
 
 def test_quality_narrow_actions_wrap_as_groups_but_not_help_text(desktop):
     window = desktop.window
-    window.navigation.setCurrentRow(4)
+    window.navigation.setCurrentRow(5)
     page = window.quality_page
     page.scope_switcher.set_scope("period")
     page.workflow.help_button.setChecked(True)
@@ -70,7 +70,7 @@ def test_quality_narrow_actions_wrap_as_groups_but_not_help_text(desktop):
 
 def test_month_fill_first_level_stays_in_month_scope_and_uses_existing_command(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(3)
+    window.navigation.setCurrentRow(4)
     page = window.fixation_page
     menu = page.data_actions
     menu.sync()

@@ -32,20 +32,20 @@ def test_toggle_guidance_preserves_commands_context_and_survives_layout_changes(
                 window.planning_page.load_gis_button, window.fixation_page.load_month_button,
                 window.quality_page.month_acts_button)
     for index, page in enumerate(_pages(window)):
-        window.navigation.setCurrentRow(index)
+        window.navigation.setCurrentRow(index + 1)
         workflows._settle(app)
         assert page.workflow.isVisibleTo(page)
         assert page.workflow.help_button.text() == "Подробнее"
         page.workflow.help_button.setChecked(True)
 
-    window.navigation.setCurrentRow(5)
+    window.navigation.setCurrentRow(6)
     QTest.keyClick(settings.next_step_panel_checkbox, Qt.Key.Key_Space)
     assert settings.next_step_panel_checkbox.text() == "Выключена"
     for width, height in ((1100, 680), (1366, 768)):
         window.resize(width, height)
         window._update_display_layout(force=True)
         for index, page in enumerate(_pages(window)):
-            window.navigation.setCurrentRow(index)
+            window.navigation.setCurrentRow(index + 1)
             workflows._settle(app)
             assert page.workflow.isHidden()
             assert page.workflow.help_button.isHidden()
@@ -63,7 +63,7 @@ def test_toggle_guidance_preserves_commands_context_and_survives_layout_changes(
 
     settings.next_step_panel_checkbox.click()
     for index, page in enumerate(_pages(window)):
-        window.navigation.setCurrentRow(index)
+        window.navigation.setCurrentRow(index + 1)
         workflows._settle(app)
         assert page.workflow.isVisibleTo(page)
         assert page.workflow.help_button.isVisibleTo(page)

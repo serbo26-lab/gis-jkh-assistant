@@ -172,7 +172,8 @@ def load_organization_from_gis(page) -> None:
         page.operation_status.set_text(reason)
         page.operation_status.show()
         return
-    page._flush_autosave()
+    if page._flush_autosave() is False:
+        return
     if not page._begin_bulk_operation("organization", "Загрузка управляющей организации из ГИС ЖКХ…"):
         return
     worker = GisIntegrationWorker(

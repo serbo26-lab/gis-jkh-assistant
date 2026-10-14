@@ -57,7 +57,7 @@ def test_quality_footer_keeps_complete_status_and_long_error_readable(desktop, t
     window = desktop.window
     getattr(window.settings_page, theme + "_radio").click()
     window.settings_page.scale_combo.setCurrentIndex(window.settings_page.scale_combo.findData(150))
-    window.navigation.setCurrentRow(4)
+    window.navigation.setCurrentRow(5)
     page = window.quality_page
     for width in (1366, 1600):
         window.resize(width, 900)
@@ -77,7 +77,7 @@ def test_quality_footer_keeps_complete_status_and_long_error_readable(desktop, t
 @pytest.mark.parametrize("ready,busy", [(True, False), (False, False), (True, True)])
 def test_registry_menu_follows_live_command_state_without_stray_buttons(desktop, state, ready, busy):
     window = desktop.window
-    window.navigation.setCurrentRow(1)
+    window.navigation.setCurrentRow(2)
     page = window.work_lists_page
     desktop.repository.update_work_list_gis_state(desktop.work_list.id, gis_status=state)
     page.refresh_work_lists(select_id=desktop.work_list.id)
@@ -101,7 +101,7 @@ def test_registry_menu_follows_live_command_state_without_stray_buttons(desktop,
 
 def test_collapsed_unplanned_counter_tracks_database_without_erasing_rows(desktop):
     window = desktop.window
-    window.navigation.setCurrentRow(3)
+    window.navigation.setCurrentRow(4)
     page = window.fixation_page
     period_id = page._current_period_id
     item = desktop.repository.add_work_fixation_unplanned_item(
@@ -127,7 +127,7 @@ def test_month_context_and_recommendation_remain_visible_without_month_matrix(de
     getattr(window.settings_page, theme + "_radio").click()
     window.settings_page.scale_combo.setCurrentIndex(window.settings_page.scale_combo.findData(150))
     for index in (3, 4):
-        window.navigation.setCurrentRow(index)
+        window.navigation.setCurrentRow(index + 1)
         page = window.pages.currentWidget()
         page._select_month(9)
         settle(desktop.app)
