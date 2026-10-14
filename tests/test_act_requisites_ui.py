@@ -164,3 +164,29 @@ def test_pdf_preview_loads_document_and_closes_without_writing(desktop):
     dialog.deleteLater()
     workflows._settle(desktop.app)
     assert list(desktop.repository.connection.iterdump()) == before
+
+
+def test_manual_pdf_generation_attaches_document_links_and_requisites_together(desktop, monkeypatch):
+    from gis_jkh_assistant.app.quality_bulk_dialogs import QualityMonthActsDialog
+    populate_act_requisites(desktop.repository, desktop.work_list)
+    page = workflows._select_page(desktop, 4)
+    period, item = workflows._include_quality(page, 1)
+    fixation = desktop.repository.get_work_fixation_period_for_month(desktop.work_list.id, year=2026, month=1)
+    desktop.repository.update_work_fixation_item(desktop.repository.list_work_fixation_items(fixation.id)[0].id,
+        fact_price="100", fact_amount="2", fact_count=1, fact_total_cost="200")
+    monkeypatch.setattr(GenerateAcceptanceActDialog, "exec", lambda _: QDialog.DialogCode.Accepted)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    dialog = QualityMonthActsDialog(page.store, period_id=period.id, year=2026, month=1,
+        organization_name=desktop.organization.name, house_address=desktop.house.address, parent=page)
+    dialog._generate(units_ready=True)
+    assert not warnings
+    acts = page.store.list_period_acts(period.id)
+    assert len(acts) == 1 and acts[0].content.startswith(b"%PDF")
+    assert page.store.act_link_item_ids(acts[0].id) == [item.id]
+    snapshot = ActRequisitesStore(desktop.repository).snapshot(acts[0].id)
+    assert snapshot["executor"]["full_name"] == "Иванов Иван Иванович"
+    assert snapshot["agreement_number"] == "TEST-1"
+    assert snapshot["work_rows"][0]["actual_cost"] == "200"
+    dialog.close()
+    dialog.deleteLater()
