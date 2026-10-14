@@ -22,8 +22,5 @@ def test_readme_versions_match_sources() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert version == __version__
-    assert f"Текущая тестовая версия приложения: **{version}**." in readme
-    assert (
-        f"Текущая версия **ГИС ЖКХ помощника**: **{helper_version}**."
-        in readme
-    )
+    assert f"Номер приложения в этой ветке: {version}." in readme
+    assert f"Версия встроенного помощника: {helper_version}." in readme
