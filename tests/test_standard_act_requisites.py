@@ -135,6 +135,26 @@ def test_compound_house_address_is_not_duplicated():
     assert address_parts("Неоднозначный адрес 15")["house_number"] == ""
 
 
+@pytest.mark.parametrize("address,number,remaining", [
+    ("г Москва, ул Учебная д. 15А", "15А", "г Москва, ул Учебная"),
+    ("с. Тестовое, ул. Учебная, дом 7/2, строение 4", "7/2, строение 4", "с. Тестовое, ул. Учебная"),
+    ("г. Тестовый, ул. Учебная, д. 7, неизвестное уточнение", "", ""),
+    ("г. Тестовый, ул. Учебная 7", "", ""),
+])
+def test_explicit_address_markers_preserve_compound_and_ambiguous_addresses(address, number, remaining):
+    parts = address_parts(address)
+    assert parts["house_number"] == number
+    assert parts["address_without_number"] == remaining
+
+
+def test_long_address_suffixes_do_not_require_regex_backtracking():
+    suffixes = ", корпус 2" * 2000
+    parts = address_parts("г. Тестовый, ул. Учебная, д. 15А" + suffixes)
+    assert parts["house_number"] == "15А" + suffixes
+    assert parts["address_without_number"] == "г. Тестовый, ул. Учебная"
+    assert address_parts("д." + " " * 100000)["house_number"] == ""
+
+
 def test_fio_suggestion_keeps_indeclinable_family_name():
     assert suggested_genitive("Шевченко Александр Андреевич", "male") == "Шевченко Александра Андреевича"
     assert suggested_genitive("Иванова Мария Ивановна", "female") == "Ивановой Марии Ивановны"

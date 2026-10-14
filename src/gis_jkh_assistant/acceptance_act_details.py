@@ -95,13 +95,32 @@ def fixation_for_act(item, rows):
 def address_parts(address):
     """Only recognize explicit locality/house markers; never remove bare numbers."""
     text = str(address or "").strip()
-    locality = re.search(r"(?:^|,\s*)((?:г\.?|город|с\.?|село|п\.?|пос\.?|поселок|посёлок|ст-ца|станица)\s+[^,]+)", text, re.I)
-    house = re.search(r"(?:,\s*|\s+)(?:д\.?|дом)\s+([^,]+)((?:,\s*(?:корп\.?|корпус|стр\.?|строение|лит\.?|литер)\s+[^,]+)*)\s*$", text, re.I)
-    return {
-        "locality": locality.group(1).strip() if locality else "",
-        "house_number": (house.group(1) + house.group(2)).strip() if house else "",
-        "address_without_number": text[:house.start()].rstrip(", ") if house else "",
-    }
+    segments = text.split(",")
+    locality_markers = {"г", "г.", "город", "с", "с.", "село", "п", "п.", "пос", "пос.",
+                        "поселок", "посёлок", "ст-ца", "станица"}
+    annex_markers = {"корп", "корп.", "корпус", "стр", "стр.", "строение", "лит", "лит.", "литер"}
+    result = {"locality": "", "house_number": "", "address_without_number": ""}
+    for segment in segments:
+        words = segment.split(maxsplit=1)
+        if len(words) == 2 and words[0].casefold() in locality_markers:
+            result["locality"] = segment.strip()
+            break
+    # Parse comma-separated suffixes once, from the end. A repeated regex over
+    # all possible house/suffix boundaries can backtrack exponentially on input.
+    suffixes = []
+    for index in range(len(segments) - 1, -1, -1):
+        segment = segments[index]
+        words = segment.split(maxsplit=1)
+        if len(words) == 2 and words[0].casefold() in annex_markers:
+            suffixes.append(segment.strip())
+            continue
+        marker = re.search(r"(?<!\S)(?:д\.?|дом)\s+", segment, re.I)
+        if marker and segment[marker.end():].strip():
+            result["house_number"] = ", ".join([segment[marker.end():].strip(), *reversed(suffixes)])
+            prefix = [*segments[:index], segment[:marker.start()]]
+            result["address_without_number"] = ",".join(prefix).rstrip(", ")
+        break
+    return result
 
 
 def basis_text(person):
