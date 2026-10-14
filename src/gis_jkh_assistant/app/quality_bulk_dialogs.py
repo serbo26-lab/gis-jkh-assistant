@@ -1,12 +1,15 @@
 """Bulk act management for monthly quality assessment."""
 
 from __future__ import annotations
+from dataclasses import asdict
+import sqlite3
 
 from .error_messages import context_text, error_text
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QDateEdit,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -32,6 +35,8 @@ from gis_jkh_assistant.database.quality_assessment_store import (
 )
 
 from .quality_dialogs import AddQualityActDialog
+from gis_jkh_assistant.acceptance_act_details import resolve_act_details, iso_date, has_quality_issues
+from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore
 
 
 class SelectActWorksDialog(QDialog):
@@ -153,6 +158,7 @@ class GenerateAcceptanceActDialog(QDialog):
         month: int,
         selected_ids: set[str] | None = None,
         locked_ids: set[str] | None = None,
+        repository=None, house_id=None, preview_callback=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -160,6 +166,7 @@ class GenerateAcceptanceActDialog(QDialog):
         self.year = int(year)
         self.month = int(month)
         self.locked_ids = set(locked_ids or set())
+        self.repository, self.house_id = repository, house_id
         self.setWindowTitle("Сформировать акт выполненных работ")
         self.resize(760, 650)
 
@@ -182,8 +189,8 @@ class GenerateAcceptanceActDialog(QDialog):
         self.reg_date = QDateEdit(last)
         self.reg_date.setCalendarPopup(True)
         self.reg_date.setDisplayFormat("dd.MM.yyyy")
-        self.reg_date.setMinimumDate(first)
-        self.reg_date.setMaximumDate(last)
+        self.reg_date.setMinimumDate(QDate(1900, 1, 1))
+        self.reg_date.setMaximumDate(QDate(2999, 12, 31))
         form.addRow("Дата акта *", self.reg_date)
 
         self.period_from = QDateEdit(first)
@@ -204,6 +211,36 @@ class GenerateAcceptanceActDialog(QDialog):
         period_row.addWidget(self.period_to)
         form.addRow("Отчётный период *", period_row)
         root.addLayout(form)
+
+        if repository is not None and house_id:
+            parties = QFormLayout()
+            self.executor_combo, self.customer_combo = QComboBox(), QComboBox()
+            parties.addRow("Подписант УО на дату акта", self.executor_combo)
+            parties.addRow("Представитель собственников", self.customer_combo)
+            root.addLayout(parties)
+            requisites_actions = QHBoxLayout()
+            from .act_requisites_dialog import ActRequisitesDialog
+            def edit_party(organization):
+                house = repository.get_house(house_id)
+                owner = {"organization_id": house.organization_id} if organization else {"house_id": house_id}
+                # The data page owns network workers, keeping the repository alive.
+                page = self.parent().parent() if self.parent() is not None else None
+                dialog = ActRequisitesDialog(repository, page=page, **owner)
+                dialog.exec()
+                self._refresh_parties()
+            for title, organization in (("Реквизиты УО…", True), ("Представитель и адрес дома…", False)):
+                button = QPushButton(title)
+                button.clicked.connect(lambda _=False, organization=organization: edit_party(organization))
+                requisites_actions.addWidget(button)
+            requisites_actions.addStretch(1)
+            root.addLayout(requisites_actions)
+            self.party_status = QLabel()
+            self.party_status.setWordWrap(True)
+            root.addWidget(self.party_status)
+            self.reg_date.dateChanged.connect(self._refresh_parties)
+            self.executor_combo.currentIndexChanged.connect(self._party_status)
+            self.customer_combo.currentIndexChanged.connect(self._party_status)
+            self._refresh_parties()
 
         root.addWidget(QLabel("Работы и услуги, которые попадут в PDF и получат этот акт:"))
 
@@ -257,6 +294,9 @@ class GenerateAcceptanceActDialog(QDialog):
         )
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
         root.addWidget(buttons)
+        if preview_callback is not None:
+            preview = buttons.addButton("Предпросмотр PDF…", QDialogButtonBox.ButtonRole.ActionRole)
+            preview.clicked.connect(lambda: preview_callback(self.values()))
 
         included.clicked.connect(
             lambda: self._set_checks({item.id for item in self.items if item.included})
@@ -280,6 +320,33 @@ class GenerateAcceptanceActDialog(QDialog):
                 if item_id in item_ids
                 else Qt.CheckState.Unchecked
             )
+
+    def _refresh_parties(self, *_):
+        store = ActRequisitesStore(self.repository)
+        house = self.repository.get_house(self.house_id)
+        point = self.reg_date.date().toString("yyyy-MM-dd")
+        for combo, owner in ((self.executor_combo, {"organization_id": house.organization_id}),
+                             (self.customer_combo, {"house_id": house.id})):
+            selected = combo.currentData()
+            people = store.people_on_date(point, **owner)
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("Выберите…" if people else "Нет записи на эту дату", None)
+            for person in people:
+                combo.addItem(person["full_name"] + " — с " + person["valid_from"], person["id"])
+            combo.setCurrentIndex(combo.findData(selected) if selected and combo.findData(selected) >= 0 else 1 if len(people) == 1 else 0)
+            combo.blockSignals(False)
+        self._party_status()
+
+    def _details(self):
+        return resolve_act_details(self.repository, self.house_id, self.reg_date.date().toString("yyyy-MM-dd"),
+            executor_id=self.executor_combo.currentData(), customer_id=self.customer_combo.currentData())
+
+    def _party_status(self, *_):
+        if self.repository is not None:
+            details = self._details()
+            self.party_status.setText(" ".join(details["issues"]) if details["issues"] else
+                                     "Стороны и договор заполнены. Проверьте ФИО и реквизиты в предпросмотре.")
 
     def selected_item_ids(self) -> list[str]:
         result: list[str] = []
@@ -307,6 +374,12 @@ class GenerateAcceptanceActDialog(QDialog):
                 "Выберите хотя бы одну работу или услугу.",
             )
             return
+        if self.repository is not None:
+            issues = self._details()["issues"]
+            if issues:
+                QMessageBox.warning(self, "Заполните реквизиты", "\n".join(issues) +
+                    "\nЧерновик доступен в предпросмотре; для прикрепления акта заполните реквизиты.")
+                return
         self.accept()
 
     def values(self) -> dict:
@@ -316,6 +389,8 @@ class GenerateAcceptanceActDialog(QDialog):
             "period_from": self.period_from.date().toString("dd.MM.yyyy"),
             "period_to": self.period_to.date().toString("dd.MM.yyyy"),
             "item_ids": self.selected_item_ids(),
+            "executor_id": self.executor_combo.currentData() if self.repository is not None else None,
+            "customer_id": self.customer_combo.currentData() if self.repository is not None else None,
         }
 
 
@@ -497,79 +572,11 @@ class QualityMonthActsDialog(QDialog):
         self,
         selected_items: list[QualityAssessmentItem],
     ) -> tuple[list[AcceptanceActWorkRow], list[str], bool]:
+        from gis_jkh_assistant.quality_automation import _acceptance_work_rows
+        rows, _missing = _acceptance_work_rows(self.store, self.period_id, [item.id for item in selected_items])
         period = self.store.get_period(self.period_id)
-        fixation_period = (
-            self.store.repository.get_work_fixation_period_for_month(
-                period.work_list_id,
-                year=self.year,
-                month=self.month,
-            )
-            if period is not None
-            else None
-        )
-        fixation_items = (
-            self.store.repository.list_work_fixation_items(fixation_period.id)
-            if fixation_period is not None
-            else []
-        )
-
-        by_list_item_id = {
-            item.work_list_item_id: item
-            for item in fixation_items
-            if item.work_list_item_id
-        }
-        by_guid = {
-            item.work_guid: item
-            for item in fixation_items
-            if item.work_guid
-        }
-        by_code = {
-            item.work_code: item
-            for item in fixation_items
-            if item.work_code
-        }
-
-        list_items = (
-            self.store.repository.list_work_list_items(period.work_list_id)
-            if period is not None
-            else []
-        )
-        list_item_by_id = {item.id: item for item in list_items}
-
-        rows: list[AcceptanceActWorkRow] = []
-        missing_cost_names: list[str] = []
-        for item in selected_items:
-            fixation = (
-                by_list_item_id.get(item.work_list_item_id)
-                or (by_guid.get(item.work_guid) if item.work_guid else None)
-                or (by_code.get(item.work_code) if item.work_code else None)
-            )
-            list_item = (
-                list_item_by_id.get(item.work_list_item_id)
-                if item.work_list_item_id
-                else None
-            )
-            actual_cost = fixation.fact_total_cost if fixation else None
-            if not actual_cost:
-                missing_cost_names.append(item.work_name)
-
-            rows.append(
-                AcceptanceActWorkRow(
-                    name=item.work_name,
-                    unit_name=(
-                        getattr(fixation, "unit_name", None)
-                        or getattr(list_item, "unit_name", None)
-                    ),
-                    periodicity=(
-                        fixation.fact_count
-                        if fixation is not None
-                        else None
-                    ),
-                    actual_cost=actual_cost,
-                )
-            )
-
-        return rows, missing_cost_names, fixation_period is not None
+        fixation = self.store.repository.get_work_fixation_period_for_month(period.work_list_id, year=self.year, month=self.month)
+        return rows, [row.name for row in rows if row.actual_cost in (None, "")], fixation is not None
 
     def _generate(self, *, units_ready=False) -> None:
         page = self.parent()
@@ -614,6 +621,9 @@ class QualityMonthActsDialog(QDialog):
             month=self.month,
             selected_ids=selected_ids,
             locked_ids=protected,
+            repository=self.store.repository,
+            house_id=self.store.repository.get_work_list(self.store.get_period(self.period_id).work_list_id).house_id,
+            preview_callback=self._preview_generated_act,
             parent=self,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
@@ -621,33 +631,34 @@ class QualityMonthActsDialog(QDialog):
         values = dialog.values()
         selected = set(values["item_ids"])
         selected_items = [item for item in items if item.id in selected]
-        work_rows, missing_costs, has_fixation = self._act_work_rows(
+        work_rows, missing_costs, _has_fixation = self._act_work_rows(
             selected_items
         )
 
+        selected_quality = [item for item in selected_items if has_quality_issues(item)]
+        if selected_quality:
+            QMessageBox.warning(self, "Проверьте принимаемые работы",
+                "У выбранных работ есть дни ненадлежащего качества или перерасчёт. "
+                "Акт содержит подтверждение надлежащего качества и отсутствия претензий. "
+                "Уточните выбранные работы; акт о нарушении качества добавляется отдельным документом.")
+            return
+
         if missing_costs:
-            examples = "\n".join(f"• {name}" for name in missing_costs[:5])
-            if len(missing_costs) > 5:
-                examples += f"\n… ещё: {len(missing_costs) - 5}"
-            prefix = (
-                "За выбранный месяц фиксация работ ещё не создана. "
-                if not has_fixation
-                else ""
-            )
-            answer = QMessageBox.question(
-                self,
-                "Не заполнена фактическая стоимость",
-                prefix
-                + f"Для {len(missing_costs)} из {len(work_rows)} работ нет "
-                "значения «Стоимость факт.» в разделе «Фиксация работ и услуг». "
-                "В сформированном акте эти ячейки останутся пустыми.\n\n"
-                + examples
-                + "\n\nСформировать акт?",
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
+            QMessageBox.warning(self, "Не заполнена стоимость",
+                "У выбранных работ не заполнена фактическая стоимость. "
+                "Уточните её в фиксации. Черновик с пустыми значениями можно посмотреть до сохранения акта.")
+            return
 
         try:
+            details = self._generated_details(values)
+            if details["issues"]:
+                raise ValueError(" ".join(details["issues"]))
+            if iso_date(values["period_from"]) != f"{self.year}-{self.month:02d}-01" or iso_date(values["period_to"]) != f"{self.year}-{self.month:02d}-{QDate(self.year,self.month,1).daysInMonth():02d}":
+                if QMessageBox.question(self, "Период короче месяца",
+                    "Будут использованы месячные показатели выбранных работ без пропорционального пересчёта. "
+                    "Они соответствуют указанному периоду выполнения?") != QMessageBox.StandardButton.Yes:
+                    return
+            details.update(work_rows=[asdict(row) for row in work_rows], **{k:v for k,v in values.items() if k != "item_ids"})
             pdf = build_acceptance_act_pdf(
                 organization_name=self.organization_name,
                 house_address=self.house_address,
@@ -656,28 +667,54 @@ class QualityMonthActsDialog(QDialog):
                 period_from=values["period_from"],
                 period_to=values["period_to"],
                 work_rows=work_rows,
+                details=details,
             )
             file_name = (
                 f"Акт_выполненных_работ_{self.month:02d}_{self.year}.pdf"
             )
-            act = self.store.add_act(
-                item_id=values["item_ids"][0],
-                act_type="ACCEPTANCE_ACT",
-                number=values["number"],
-                reg_date=values["reg_date"],
-                period_from=values["period_from"],
-                period_to=values["period_to"],
-                file_name=file_name,
-                description=file_name,
-                content_type="application/pdf",
-                content=pdf,
-                generated=True,
-            )
-            self.store.set_act_links(act.id, values["item_ids"])
-        except (OSError, RuntimeError, ValueError) as exc:
+            with self.store.connection.atomic():
+                act = self.store.add_act(
+                    item_id=values["item_ids"][0],
+                    act_type="ACCEPTANCE_ACT",
+                    number=values["number"],
+                    reg_date=values["reg_date"],
+                    period_from=values["period_from"],
+                    period_to=values["period_to"],
+                    file_name=file_name,
+                    description=file_name,
+                    content_type="application/pdf",
+                    content=pdf,
+                    generated=True,
+                )
+                self.store.set_act_links(act.id, values["item_ids"])
+                ActRequisitesStore(self.store.repository).save_snapshot(act.id, details)
+        except (OSError, RuntimeError, ValueError, sqlite3.DatabaseError) as exc:
             QMessageBox.warning(self, "Не удалось сформировать акт", error_text(exc, context=context_text(self)))
             return
         self._reload(act.id)
+
+    def _generated_details(self, values):
+        period = self.store.get_period(self.period_id)
+        work_list = self.store.repository.get_work_list(period.work_list_id)
+        return resolve_act_details(self.store.repository, work_list.house_id, values["reg_date"],
+                                   executor_id=values.get("executor_id"), customer_id=values.get("customer_id"))
+
+    def _preview_generated_act(self, values):
+        from .pdf_preview_dialog import PdfPreviewDialog
+        try:
+            selected = set(values["item_ids"])
+            rows, missing, _ = self._act_work_rows([item for item in self.store.list_items(self.period_id) if item.id in selected])
+            details = self._generated_details(values)
+            if missing:
+                details["issues"].append("Не заполнена фактическая стоимость некоторых работ.")
+            if any(has_quality_issues(item) for item in self.store.list_items(self.period_id) if item.id in selected):
+                details["issues"].append("У выбранных работ есть замечания по качеству. Подтверждение надлежащего качества требует проверки.")
+            pdf = build_acceptance_act_pdf(organization_name=self.organization_name,
+                house_address=self.house_address, act_number=values["number"], act_date=values["reg_date"],
+                period_from=values["period_from"], period_to=values["period_to"], work_rows=rows, details=details)
+            PdfPreviewDialog(pdf, note="Предпросмотр не прикрепляет акт и ничего не отправляет в ГИС.", parent=self).exec()
+        except (ValueError, RuntimeError, OSError) as exc:
+            QMessageBox.warning(self, "Не удалось подготовить предпросмотр", str(exc))
 
     def _edit_links(self) -> None:
         act = self._current_act()

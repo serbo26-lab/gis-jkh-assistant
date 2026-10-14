@@ -142,8 +142,8 @@ class HousesPage(QWidget):
             "Получить все дома текущей управляющей организации напрямую из ГИС ЖКХ."
         )
         self.add_house_button = QPushButton("+ Добавить дом")
-        self.export_house_data_button = QPushButton("Шаблон площадей и тарифов…")
-        self.import_house_data_button = QPushButton("Импорт площадей и тарифов…")
+        self.export_house_data_button = QPushButton("Экспорт данных в Excel…")
+        self.import_house_data_button = QPushButton("Импорт данных из Excel…")
         self.sync_all_management_button = QPushButton(
             "Загрузить сведения об управлении МКД из ГИС ЖКХ"
         )
@@ -203,7 +203,7 @@ class HousesPage(QWidget):
         self.files_actions_button = QPushButton("Импорт / Экспорт ▾")
         files_menu = QMenu(self.files_actions_button)
         files_menu.addAction(
-            "Экспорт Excel: шаблон площадей и тарифов…",
+            "Экспорт данных домов в Excel…",
             self.export_house_data_button.click,
         )
         files_menu.addAction(
@@ -1898,7 +1898,7 @@ class HousesPage(QWidget):
 
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Сохранить шаблон площадей и тарифов",
+            "Сохранить данные домов и реквизиты актов",
             "Данные домов.xlsx",
             "Excel (*.xlsx)",
         )
@@ -1916,6 +1916,7 @@ class HousesPage(QWidget):
                 Path(filename),
                 houses=houses,
                 tariffs_by_house=tariffs_by_house,
+                repository=self.repository,
             )
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Не удалось создать шаблон", error_text(exc, context=context_text(self)))
@@ -1924,9 +1925,9 @@ class HousesPage(QWidget):
         QMessageBox.information(
             self,
             "Шаблон создан",
-            "Файл содержит листы «Площади» и «Тарифы». Адреса уже заполнены. "
-            "На листе «Тарифы» один дом занимает одну строку, а изменения "
-            "тарифа заполняются вправо парами «Действует с / Тариф».",
+            "Файл содержит площади, тарифы, реквизиты домов, представителей собственников "
+            "и подписантов УО. Сохранённые сведения и адреса уже заполнены. "
+            "На листах представителей одна строка соответствует одному периоду полномочий.",
         )
 
     def _import_house_data(self) -> None:
@@ -1935,13 +1936,13 @@ class HousesPage(QWidget):
             QMessageBox.information(
                 self,
                 "Сначала выберите УО",
-                "Импорт площадей и тарифов выполняется для выбранной УО.",
+                "Импорт данных домов и подписантов выполняется для выбранной УО.",
             )
             return
 
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Импорт площадей и тарифов",
+            "Импорт данных домов и реквизитов актов",
             "",
             "Excel (*.xlsx)",
         )
@@ -1957,7 +1958,7 @@ class HousesPage(QWidget):
         houses = self.repository.list_houses(str(organization_id))
         explicit = {}
         unresolved_rows = []
-        for row in (*result.areas, *result.tariffs):
+        for row in (*result.areas, *result.tariffs, *result.houses, *(p for p in result.people if not p.ogrn)):
             try:
                 resolve_house_row(row, houses)
             except ValueError as exc:
@@ -1978,6 +1979,11 @@ class HousesPage(QWidget):
         area_changes: list[tuple[object, dict, dict]] = []
         tariff_changes: list[tuple[object, object, object | None]] = []
         unresolved: list[str] = []
+        from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore, HOUSE_ACT_FIELDS
+        from gis_jkh_assistant.gis_files.house_extra_data import prepare_person_change, PERSON_COLUMNS
+        requisites = ActRequisitesStore(self.repository)
+        person_changes = []
+        person_preview = []
 
         for row in result.areas:
             try:
@@ -2005,6 +2011,50 @@ class HousesPage(QWidget):
                     changes[field], previous[field] = value, current
             if changes:
                 area_changes.append((house, changes, previous))
+
+        for row in result.houses:
+            try:
+                house = resolve(row, f"Дома, строка {row.row_number}")
+                from gis_jkh_assistant.acceptance_act_details import address_parts
+                old_parts = address_parts(house.address)
+                old_parts.update({k:v for k,v in requisites.house_fields(house.id).items() if v})
+                changes, previous = {}, {}
+                for field, value in row.fields.items():
+                    current = old_parts.get(field, "") if field in HOUSE_ACT_FIELDS else getattr(house, field)
+                    if current != value:
+                        changes[field], previous[field] = value, current
+                start = changes.get("management_start_date", house.management_start_date)
+                end = changes.get("management_end_date", house.management_end_date)
+                if start and end and start > end:
+                    raise ValueError("Начало управления позже окончания.")
+                if changes:
+                    area_changes.append((house, changes, previous))
+            except ValueError as exc:
+                unresolved.append(str(exc))
+
+        organization = self.repository.get_organization(str(organization_id))
+        seen_people = set()
+        for row in result.people:
+            try:
+                if row.ogrn:
+                    if row.ogrn != organization.ogrn:
+                        raise ValueError("ОГРН подписанта не относится к выбранной УО.")
+                    owner, label = {"organization_id": organization.id}, organization.name
+                else:
+                    house = resolve(row, f"Представители домов, строка {row.row_number}")
+                    owner, label = {"house_id": house.id}, house.address
+                person_id, values, previous = prepare_person_change(self.repository, row, **owner)
+                key = (tuple(owner.items()), person_id or (values["full_name"].casefold(), values["valid_from"]))
+                if key in seen_people:
+                    raise ValueError("Повторная запись подписанта с тем же началом полномочий.")
+                seen_people.add(key)
+                different = [key for key in PERSON_COLUMNS if values.get(key, "") != previous.get(key, "")]
+                if different:
+                    person_changes.append((owner, person_id, values))
+                    person_preview.extend((label, PERSON_COLUMNS[key] + " — " + values["full_name"],
+                                           previous.get(key), values[key]) for key in different)
+            except ValueError as exc:
+                unresolved.append(f"Подписанты, строка {row.row_number}: {exc}")
 
         for row in result.tariffs:
             try:
@@ -2068,7 +2118,8 @@ class HousesPage(QWidget):
         new_tariffs = len(tariff_changes) - len(tariff_conflicts)
 
         preview = (
-            f"Площади будут обновлены: {len(area_changes)}\n"
+            f"Изменений карточек домов: {len(area_changes)}\n"
+            f"Записей представителей / подписантов: {len(person_changes)}\n"
             f"Новых точек тарифа: {new_tariffs}\n"
             f"Существующих точек тарифа будут изменены: {len(tariff_conflicts)}"
         )
@@ -2083,7 +2134,7 @@ class HousesPage(QWidget):
                     f"{existing.effective_from_label} = {existing.amount} → "
                     f"{row.start.input_label} = {row.amount}\n"
                 )
-        if not area_changes and not tariff_changes:
+        if not area_changes and not tariff_changes and not person_changes:
             QMessageBox.information(
                 self,
                 "Изменений нет",
@@ -2092,28 +2143,38 @@ class HousesPage(QWidget):
             return
 
         from .house_import_preview import HouseImportPreview
-        dialog = HouseImportPreview(area_changes, tariff_changes, preview, parent=self)
+        dialog = HouseImportPreview(area_changes, tariff_changes, preview, parent=self, other_changes=person_preview)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
             with self.repository.connection.atomic():
                 for house, fields, _old in area_changes:
-                    self.repository.update_house(house.id, **fields)
+                    act_fields = {k: v for k, v in fields.items() if k in HOUSE_ACT_FIELDS}
+                    house_fields = {k: v for k, v in fields.items() if k not in HOUSE_ACT_FIELDS}
+                    if any(k.startswith("management_") for k in house_fields):
+                        house_fields["management_data_source"] = "manual"
+                    if house_fields:
+                        self.repository.update_house(house.id, **house_fields)
+                    if act_fields:
+                        requisites.save_house_fields(house.id, act_fields)
                 for house, row, _existing in tariff_changes:
                     self.repository.upsert_house_tariff_change(
                         house_id=house.id, amount=row.amount,
                         start_year=row.start.value.year, start_month=row.start.value.month,
                         start_day=row.start.value.day, start_precision=row.start.precision,
                     )
+                for owner, person_id, values in person_changes:
+                    requisites.save_person(values, person_id=person_id, **owner)
         except (sqlite3.DatabaseError, ValueError) as exc:
-            QMessageBox.critical(self, "Импорт отменён", error_text(exc, effect="Изменения площадей и тарифов отменены целиком."))
+            QMessageBox.critical(self, "Импорт отменён", error_text(exc, effect="Все изменения этого импорта отменены целиком."))
             return
 
         self.refresh_houses()
         QMessageBox.information(
             self,
             "Импорт завершен",
-            f"Обновлено площадей: {len(area_changes)}\n"
+            f"Изменений карточек домов: {len(area_changes)}\n"
+            f"Записей представителей / подписантов: {len(person_changes)}\n"
             f"Изменено или добавлено тарифов: {len(tariff_changes)}",
         )
 

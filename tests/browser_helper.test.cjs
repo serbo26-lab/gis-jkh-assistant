@@ -394,6 +394,32 @@ test("loads the authorized organization with a read-only GET and narrow result",
   } });
 });
 
+for (const conflict of [false, true]) {
+  test(`act signatory import keeps conflicting GIS records explicit (${conflict})`, async () => {
+    const requests = [];
+    const context = organizationPage(async config => {
+      requests.push(config);
+      if (config.url.endsWith("/details")) {
+        assert.equal(config.method, "GET");
+        return {data: {guid: "org-version", ogrn: "1022600000000",
+          chiefLastName: "Иванов", chiefFirstName: "Иван", chiefMiddleName: "Иванович"}};
+      }
+      assert.equal(config.url, "/ppa/api/rest/services/ppa/organizations/additionalinfo");
+      assert.equal(config.method, "POST");
+      assert.deepEqual(JSON.parse(JSON.stringify(config.data)), {organizationGuids: ["org-version"]});
+      return {data: {additionalInfos: [{chiefInfo: {fio: conflict ? "Петров Пётр Петрович" : "Иванов Иван Иванович",
+        position: "Директор", email: "private@example.invalid", phones: ["private"]}}]}};
+    });
+    const reply = await vm.runInContext('runGisCommand({type: "get_organization_act_signatory", payload: {}})', context);
+    assert.equal(reply.ok, true);
+    assert.equal(requests.length, 2);
+    assert.equal(reply.result.ogrn, "1022600000000");
+    assert.equal(reply.result.candidates.length, conflict ? 2 : 1);
+    assert.equal(reply.result.candidates[0].position, conflict ? "" : "Директор");
+    assert.equal(JSON.stringify(reply).includes("private"), false);
+  });
+}
+
 test("uses full name for an organization without a short name", async () => {
   const context = organizationPage(async () => ({ data: {
     guid: "version", registryOrganizationRootEntityGuid: "root",

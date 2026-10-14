@@ -5,7 +5,7 @@ from gis_jkh_assistant.acceptance_act_pdf import (
 )
 
 
-def test_acceptance_act_omits_unit_column_when_units_are_unknown() -> None:
+def test_acceptance_act_keeps_prescribed_columns_when_units_are_unknown() -> None:
     rows = [
         AcceptanceActWorkRow(
             name="Услуга по управлению",
@@ -19,12 +19,10 @@ def test_acceptance_act_omits_unit_column_when_units_are_unknown() -> None:
         ),
     ]
 
-    assert acceptance_act_headers(rows) == (
-        "№ п/п",
-        "Наименование работы (услуги)",
-        "Периодичность",
-        "Стоимость факт., руб.",
-    )
+    headers = acceptance_act_headers(rows)
+    assert len(headers) == 5
+    assert headers[2] == "Ед. измерения"
+    assert "за единицу" in headers[3]
 
 
 def test_acceptance_act_includes_unit_column_when_available() -> None:

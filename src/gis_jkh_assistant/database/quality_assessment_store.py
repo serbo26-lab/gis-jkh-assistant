@@ -153,6 +153,12 @@ class QualityAssessmentStore:
                     REFERENCES quality_assessment_items(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS acceptance_act_snapshots (
+                act_id TEXT PRIMARY KEY REFERENCES quality_assessment_acts(id) ON DELETE CASCADE,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS ix_quality_acts_item
                 ON quality_assessment_acts(quality_item_id, created_at);
 

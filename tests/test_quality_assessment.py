@@ -503,6 +503,8 @@ def test_quality_automation_preserves_user_act_and_skips_its_row(tmp_path) -> No
     assert refreshed[1].days_count is None
     assert refreshed[1].cost_reduction is None
 
+    from act_test_data import populate_act_requisites
+    populate_act_requisites(repository, work_list)
     generated = generate_acceptance_act_for_period(
         store,
         period_id=period.id,

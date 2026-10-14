@@ -61,6 +61,8 @@ class Repository:
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
         self._create_schema()
+        from .act_requisites_store import initialize_act_schema
+        initialize_act_schema(self.connection)
 
     def close(self) -> None:
         self.connection.close()
