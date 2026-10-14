@@ -164,7 +164,7 @@ def prepare_person_change(repository, row, *, organization_id=None, house_id=Non
             raise ValueError("Служебный идентификатор подписанта принадлежит другому дому или УО.")
     if not matched:
         matched = [p for p in existing if p["full_name"].casefold() == str(row.fields.get("full_name", "")).casefold()
-                   and p["valid_from"] == row.fields.get("valid_from")]
+                   and p["valid_from"] == (row.fields.get("valid_from") or "")]
     if len(matched) > 1:
         raise ValueError("Несколько записей подписанта с одинаковыми ФИО и началом полномочий.")
     previous = matched[0] if matched else {}
@@ -172,5 +172,5 @@ def prepare_person_change(repository, row, *, organization_id=None, house_id=Non
     if "position" in row.fields and row.fields["position"] != previous.get("position"):
         if not row.fields.get("position_genitive") or row.fields["position_genitive"] == previous.get("position_genitive", ""):
             merged["position_genitive"] = ""
-    data = normalized_person(merged)
+    data = normalized_person(merged, organization=bool(organization_id))
     return previous.get("id"), data, previous

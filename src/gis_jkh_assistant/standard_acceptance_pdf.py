@@ -14,7 +14,9 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Image, KeepTogether, LongTable, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from .acceptance_act_details import suggested_position_genitive
+from .acceptance_act_details import (
+    CUSTOMER_NAME_PLACEHOLDER, CUSTOMER_PREMISES_PLACEHOLDER, suggested_position_genitive,
+)
 
 
 def amount_decimal(value):
@@ -73,6 +75,28 @@ def _customer_signature_placeholder(font_name):
     return drawing
 
 
+def _customer_preamble(customer):
+    if not customer.get("full_name"):
+        return (f"в лице уполномоченного представителя {CUSTOMER_NAME_PLACEHOLDER}, "
+                f"являющегося собственником помещения № {CUSTOMER_PREMISES_PLACEHOLDER}, "
+                "находящегося в данном многоквартирном доме")
+    name = customer.get("name_genitive") or customer["full_name"]
+    text = "в лице уполномоченного представителя " + name
+    if customer.get("premises"):
+        text += (f", являющегося собственником помещения № {customer['premises']}, "
+                 "находящегося в данном многоквартирном доме")
+    if customer.get("basis"):
+        text += ", действующего на основании " + customer["basis"]
+    return text
+
+
+def _customer_signature_label(customer):
+    if not customer.get("full_name"):
+        return "Заказчик — " + CUSTOMER_NAME_PLACEHOLDER
+    role = customer.get("role")
+    return "Заказчик — " + (role + ", " if role else "") + customer["full_name"]
+
+
 def build_standard_pdf(*, organization_name, house_address, act_number, act_date,
                        period_from, period_to, work_rows, details=None):
     from .acceptance_act_pdf import _ensure_fonts, _paragraph, _format_actual_cost, acceptance_act_headers
@@ -102,19 +126,14 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
               p("приемки оказанных услуг и (или) выполненных работ по содержанию и текущему ремонту общего имущества в многоквартирном доме", heading),
               Spacer(1, 3*mm)]
     story.append(Table([[p(details.get("locality") or blank), p(act_date, date_style)]], colWidths=[110*mm, 64*mm]))
-    customer_name = customer.get("name_genitive") or blank
     executor_name = executor.get("name_genitive") or blank
     executor_position_genitive = executor.get("position_genitive") or suggested_position_genitive(executor.get("position")) or blank
     executor_position = executor.get("position") or blank
     if len(executor_position) > 1 and executor_position[1].islower():
         executor_position = executor_position[0].lower() + executor_position[1:]
-    customer_gender = "являющейся" if customer.get("gender") == "female" else "являющегося"
-    customer_acting = "действующей" if customer.get("gender") == "female" else "действующего"
     executor_acting = "действующей" if executor.get("gender") == "female" else "действующего"
     story += [p(f"Собственники помещений в многоквартирном доме, расположенном по адресу: {house_address}, "
-                f"именуемые в дальнейшем «Заказчик», в лице {customer_name}, "
-                f"{customer_gender} собственником помещения № {customer.get('premises') or blank}, "
-                f"находящегося в данном многоквартирном доме, {customer_acting} на основании {customer.get('basis') or blank}, "
+                f"именуемые в дальнейшем «Заказчик», {_customer_preamble(customer)}, "
                 f"с одной стороны, и {organization_name} (далее — «Исполнитель»), "
                 f"в лице {executor_position_genitive} {executor_name}, "
                 f"{executor_acting} на основании {executor.get('basis') or blank}, с другой стороны, "
@@ -166,7 +185,7 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
                           if details.get("customer_signature_placeholder") else p("________________", small))
     signatures = Table([
         [p("Исполнитель — " + executor_position + " " + organization_name + " " + (executor.get("full_name") or blank), small), signature, stamp],
-        [p("Заказчик — " + (customer.get("role") or blank) + ", " + (customer.get("full_name") or blank), small), customer_signature, p("", small)],
+        [p(_customer_signature_label(customer), small), customer_signature, p("", small)],
     ], colWidths=[104*mm, 40*mm, 30*mm])
     signatures.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6)]))
     if details.get("customer_signature_placeholder"):

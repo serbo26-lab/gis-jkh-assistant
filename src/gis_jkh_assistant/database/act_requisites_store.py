@@ -44,11 +44,11 @@ def initialize_act_schema(connection):
         connection.commit()
 
 
-def normalized_person(values):
+def normalized_person(values, *, organization=True):
     result = {key: str(values.get(key) or "").strip() for key in PERSON_FIELDS}
     if not result["full_name"]:
         raise ValueError("Укажите ФИО подписанта.")
-    if not result["valid_from"]:
+    if organization and not result["valid_from"]:
         raise ValueError("Укажите дату начала полномочий. Дата изменения записи в ГИС не является датой назначения.")
     for key in ("valid_from", "valid_to", "basis_date"):
         if result[key]:
@@ -58,7 +58,7 @@ def normalized_person(values):
                 raise ValueError("Проверьте даты полномочий и документа-основания.") from exc
     if result["valid_to"] and result["valid_to"] < result["valid_from"]:
         raise ValueError("Окончание полномочий не может быть раньше начала.")
-    if not result["basis_kind"]:
+    if organization and not result["basis_kind"]:
         raise ValueError("Укажите основание полномочий.")
     if result["gender"] not in {"", "male", "female"}:
         raise ValueError("Согласование укажите как male или female.")
@@ -87,7 +87,7 @@ class ActRequisitesStore:
     def save_person(self, values, *, organization_id=None, house_id=None, person_id=None):
         if bool(organization_id) == bool(house_id):
             raise ValueError("Укажите одну УО или один дом.")
-        data = normalized_person(values)
+        data = normalized_person(values, organization=bool(organization_id))
         if person_id:
             previous = self.connection.execute("SELECT * FROM act_people WHERE id = ?", (person_id,)).fetchone()
             if previous is None or previous["organization_id"] != organization_id or previous["house_id"] != house_id:

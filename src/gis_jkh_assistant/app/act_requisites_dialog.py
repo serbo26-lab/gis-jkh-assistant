@@ -39,10 +39,12 @@ class ActPersonDialog(QDialog):
     def __init__(self, person=None, *, organization=False, parent=None):
         super().__init__(parent)
         person = person or {}
+        self.organization = organization
         self.setWindowTitle("Подписант УО" if organization else "Представитель собственников")
         self.resize(660, 650)
         root = QVBoxLayout(self)
-        hint = QLabel("Сроки относятся к полномочиям, а не к дате загрузки из ГИС. Окончание включается в период. Проверьте предложенное склонение ФИО.")
+        hint = QLabel("Сроки относятся к полномочиям, а не к дате загрузки из ГИС. Окончание включается в период. Проверьте предложенное склонение ФИО." if organization else
+                      "Укажите известные сведения. Без помещения блок о нём не печатается; без реквизитов основания фраза об основании не печатается. Даты ограничивают применение записи; пустые даты не задают ограничений. Запись сама по себе не подтверждает полномочия.")
         hint.setWordWrap(True)
         root.addWidget(hint)
         scroll = QScrollArea()
@@ -68,16 +70,16 @@ class ActPersonDialog(QDialog):
         self.role = QComboBox()
         self.role.addItems(["Руководитель", "Уполномоченный сотрудник"] if organization else
                            ["Председатель совета МКД", "Уполномоченный собственник"])
-        self.role.setCurrentText(person.get("role") or self.role.itemText(0))
+        self.role.setCurrentText(person.get("role") or (self.role.itemText(0) if organization else "Уполномоченный собственник"))
         form.addRow("Статус", self.role)
         self.gender = QComboBox()
-        self.gender.addItem("Уточните согласование…", "")
-        self.gender.addItem("Действующего", "male")
-        self.gender.addItem("Действующей", "female")
+        self.gender.addItem("Уточните согласование…" if organization else "Уточните род для склонения…", "")
+        self.gender.addItem("Действующего" if organization else "Мужской", "male")
+        self.gender.addItem("Действующей" if organization else "Женский", "female")
         name = str(person.get("full_name", ""))
         inferred = "female" if name.endswith(("вна", "чна")) else "male" if name.endswith(("вич", "ьич")) else ""
         self.gender.setCurrentIndex(self.gender.findData(person.get("gender") or inferred))
-        form.addRow("Согласование текста", self.gender)
+        form.addRow("Согласование текста" if organization else "Род ФИО для склонения", self.gender)
         suggest = QPushButton("Предложить склонение ФИО")
         suggest.clicked.connect(lambda: self.edits["name_genitive"].setText(suggested_genitive(
             self.edits["full_name"].text(), self.gender.currentData())))
@@ -86,9 +88,9 @@ class ActPersonDialog(QDialog):
         form.addRow("", suggest)
         self.basis = QComboBox()
         self.basis.addItems(["Выберите основание…", "Устав", "Доверенность", "Иное"] if organization else
-                            ["Выберите основание…", "Решение ОСС", "Доверенность", "Иное"])
+                            ["Не указано", "Решение ОСС", "Доверенность", "Иное"])
         self.basis.setCurrentText(person.get("basis_kind") or self.basis.itemText(0))
-        form.addRow("Основание полномочий *", self.basis)
+        form.addRow("Основание полномочий *" if organization else "Основание (если известно)", self.basis)
         for field, label in (("basis_number", "Номер основания"), ("basis_date", "Дата основания"),
                              ("basis_text", "Основание полным текстом"), ("valid_from", "Начало полномочий *"),
                              ("valid_to", "Окончание (включительно)")):
@@ -99,6 +101,8 @@ class ActPersonDialog(QDialog):
             if field in {"basis_date", "valid_from", "valid_to"}:
                 edit.setPlaceholderText("ДД.ММ.ГГГГ" if field != "valid_to" else "Пусто — срок не ограничен")
             self.edits[field] = edit
+            if not organization and field == "valid_from":
+                label = "Учитывать запись с (если известно)"
             form.addRow(label, edit)
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
@@ -122,7 +126,7 @@ class ActPersonDialog(QDialog):
             values[field] = iso_date(values[field])
         values.update(role=self.role.currentText(), gender=self.gender.currentData(),
                       basis_kind=self.basis.currentText() if self.basis.currentIndex() else "")
-        return normalized_person(values)
+        return normalized_person(values, organization=self.organization)
 
     def _save(self):
         try:
@@ -220,7 +224,7 @@ class ActRequisitesDialog(QDialog):
         self.table.setRowCount(len(self.people))
         for row, person in enumerate(self.people):
             for column, value in enumerate((person["full_name"] + (" — " + person["position"] if person["position"] else ""),
-                                             display_date(person["valid_from"]), display_date(person["valid_to"]) or "Без срока",
+                                             display_date(person["valid_from"]) or "Не указано", display_date(person["valid_to"]) or "Без срока",
                                              person["basis_text"] or person["basis_kind"])):
                 cell = QTableWidgetItem(value)
                 cell.setToolTip(value)

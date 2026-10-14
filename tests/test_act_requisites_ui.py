@@ -167,9 +167,16 @@ def test_pdf_preview_loads_document_and_closes_without_writing(desktop):
 
 
 @pytest.mark.parametrize("placeholder", [False, True])
-def test_manual_pdf_generation_attaches_document_links_and_requisites_together(desktop, monkeypatch, placeholder):
+@pytest.mark.parametrize("customer_state", ["complete", "missing", "partial"])
+def test_manual_pdf_generation_attaches_document_links_and_requisites_together(desktop, monkeypatch, placeholder, customer_state):
     from gis_jkh_assistant.app.quality_bulk_dialogs import QualityMonthActsDialog
     populate_act_requisites(desktop.repository, desktop.work_list)
+    if customer_state != "complete":
+        desktop.repository.connection.execute("DELETE FROM act_people WHERE house_id=?", (desktop.house.id,))
+        desktop.repository.connection.commit()
+        if customer_state == "partial":
+            ActRequisitesStore(desktop.repository).save_person({"full_name": "Иванова Мария Ивановна"},
+                house_id=desktop.house.id)
     ActRequisitesStore(desktop.repository).save_options(desktop.organization.id,
         customer_signature_placeholder=int(placeholder))
     page = workflows._select_page(desktop, 4)
@@ -192,6 +199,10 @@ def test_manual_pdf_generation_attaches_document_links_and_requisites_together(d
     assert snapshot["agreement_number"] == "TEST-1"
     assert snapshot["work_rows"][0]["actual_cost"] == "200"
     assert snapshot["customer_signature_placeholder"] is placeholder
+    assert snapshot["customer_data_missing"] is (customer_state == "missing")
+    if customer_state == "partial":
+        assert snapshot["customer"]["full_name"] == "Иванова Мария Ивановна"
+        assert snapshot["customer"]["basis"] == ""
     dialog.close()
     dialog.deleteLater()
 

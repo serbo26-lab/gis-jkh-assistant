@@ -331,9 +331,11 @@ class GenerateAcceptanceActDialog(QDialog):
             people = store.people_on_date(point, **owner)
             combo.blockSignals(True)
             combo.clear()
-            combo.addItem("Выберите…" if people else "Нет записи на эту дату", None)
+            empty_label = "Не указан — в PDF будут подстановки" if owner.get("house_id") else "Нет записи на эту дату"
+            combo.addItem("Выберите…" if people else empty_label, None)
             for person in people:
-                combo.addItem(person["full_name"] + " — с " + person["valid_from"], person["id"])
+                validity = " — с " + person["valid_from"] if person["valid_from"] else " — начало периода не указано"
+                combo.addItem(person["full_name"] + validity, person["id"])
             combo.setCurrentIndex(combo.findData(selected) if selected and combo.findData(selected) >= 0 else 1 if len(people) == 1 else 0)
             combo.blockSignals(False)
         self._party_status()
@@ -345,7 +347,8 @@ class GenerateAcceptanceActDialog(QDialog):
     def _party_status(self, *_):
         if self.repository is not None:
             details = self._details()
-            self.party_status.setText(" ".join(details["issues"]) if details["issues"] else
+            messages = details["issues"] + details["customer_notices"]
+            self.party_status.setText(" ".join(messages) if messages else
                                      "Стороны и договор заполнены. Проверьте ФИО и реквизиты в предпросмотре.")
 
     def selected_item_ids(self) -> list[str]:

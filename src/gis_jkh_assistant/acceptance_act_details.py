@@ -9,6 +9,10 @@ from decimal import Decimal, InvalidOperation
 from .database.act_requisites_store import ActRequisitesStore
 
 
+CUSTOMER_NAME_PLACEHOLDER = "[Данные скрыты в целях безопасности персональных данных]"
+CUSTOMER_PREMISES_PLACEHOLDER = "[Данные скрыты]"
+
+
 def iso_date(text):
     value = str(text or "").strip()
     if not value:
@@ -150,10 +154,12 @@ def address_parts(address):
     return result
 
 
-def basis_text(person):
+def basis_text(person, *, optional=False):
     if person.get("basis_text"):
         return person["basis_text"]
     kind = person.get("basis_kind") or ""
+    if optional and (not kind or not person.get("basis_number") or not person.get("basis_date")):
+        return ""
     result = {"Устав": "Устава", "Доверенность": "доверенности",
               "Решение ОСС": "решения общего собрания собственников (протокол"}.get(kind, kind)
     if person.get("basis_number"):
@@ -163,6 +169,19 @@ def basis_text(person):
     if kind == "Решение ОСС":
         result += ")"
     return result
+
+
+def customer_notices(customer):
+    if not customer:
+        return ["Представитель на дату акта не указан: в PDF будут подстановки вместо ФИО и помещения; основание не печатается."]
+    notices = []
+    if not customer.get("basis"):
+        notices.append("Основание представителя не заполнено полностью и не будет напечатано. Запись не подтверждает полномочия.")
+    if not customer.get("premises"):
+        notices.append("Номер помещения не указан: блок о помещении не печатается.")
+    if not customer.get("valid_from"):
+        notices.append("Начало периода записи представителя не указано. Проверьте применимость на дату акта.")
+    return notices
 
 
 def resolve_act_details(repository, house_id, act_date, *, executor_id=None, customer_id=None):
@@ -178,24 +197,22 @@ def resolve_act_details(repository, house_id, act_date, *, executor_id=None, cus
         candidates = store.people_on_date(point, **owner)
         if selected:
             candidates = [p for p in candidates if p["id"] == selected]
+        if not candidates and owner.get("house_id") and not selected:
+            return {}
         if len(candidates) != 1:
             issues.append(("Не указан " if not candidates else "Выберите одного: ") + label + ".")
             return {}
         person = dict(candidates[0])
         person["name_genitive"] = person.get("name_genitive") or suggested_genitive(person["full_name"], person.get("gender"))
         person["position_genitive"] = person.get("position_genitive") or suggested_position_genitive(person.get("position"))
-        person["basis"] = basis_text(person)
+        person["basis"] = basis_text(person, optional=bool(owner.get("house_id")))
         if not person.get("position") and owner.get("organization_id"):
             issues.append("У подписанта УО не указана должность.")
         elif owner.get("organization_id") and not person["position_genitive"]:
             issues.append("Уточните должность подписанта УО в родительном падеже.")
-        if not person.get("gender"):
+        if owner.get("organization_id") and not person.get("gender"):
             issues.append("Уточните согласование текста для подписанта: " + person["full_name"] + ".")
-        if owner.get("house_id") and not person.get("premises"):
-            issues.append("У представителя собственников не указан номер помещения.")
-        if owner.get("house_id") and not person.get("role"):
-            issues.append("Укажите статус представителя собственников.")
-        if person.get("basis_kind") != "Устав" and not person.get("basis_text") and not person.get("basis_date"):
+        if owner.get("organization_id") and person.get("basis_kind") != "Устав" and not person.get("basis_text") and not person.get("basis_date"):
             issues.append("Не заполнены реквизиты основания полномочий: " + person["full_name"] + ".")
         image = person.pop("signature", None)
         person["signature_base64"] = base64.b64encode(image).decode("ascii") if image else None
@@ -233,6 +250,7 @@ def resolve_act_details(repository, house_id, act_date, *, executor_id=None, cus
         agreement_number=house.management_agreement_number or "",
         agreement_date=display_date(agreement_date),
         executor=executor, customer=customer, issues=issues,
+        customer_data_missing=not bool(customer), customer_notices=customer_notices(customer),
         insert_images=bool(options["insert_images"]),
         customer_signature_placeholder=bool(options["customer_signature_placeholder"]),
         stamp_base64=base64.b64encode(options["stamp"]).decode("ascii") if options["stamp"] else None,
