@@ -1,10 +1,18 @@
 """The distributable is an allowlist, independent of files left by earlier builds."""
+import importlib.util
+from pathlib import Path
 import zipfile
 
 import pytest
 
 from gis_jkh_assistant.browser.helper_installation import read_bundle, verify_prepared
-from tools.package_windows import package_windows_build
+
+
+_spec = importlib.util.spec_from_file_location(
+    "package_windows", Path(__file__).resolve().parents[1] / "tools" / "package_windows.py")
+package_windows = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(package_windows)
+package_windows_build = package_windows.package_windows_build
 
 
 @pytest.mark.parametrize("include_readme", [True, False])
@@ -36,7 +44,6 @@ def test_package_contains_only_exe_helper_and_optional_user_guide(tmp_path, incl
 
 
 def test_failed_packaging_keeps_previous_archive(tmp_path, monkeypatch):
-    from tools import package_windows as module
     executable = tmp_path / "test.exe"
     executable.write_bytes(b"MZ TEST")
     output = tmp_path / "package.zip"
@@ -45,7 +52,7 @@ def test_failed_packaging_keeps_previous_archive(tmp_path, monkeypatch):
         raise OSError("TEST WRITE FAILURE")
     monkeypatch.setattr(zipfile.ZipFile, "write", fail)
     with pytest.raises(OSError, match="TEST WRITE FAILURE"):
-        module.package_windows_build(executable, output, include_readme=False)
+        package_windows_build(executable, output, include_readme=False)
     assert output.read_bytes() == b"PREVIOUS ARCHIVE"
     assert not list(tmp_path.glob(".windows-package-*"))
 
