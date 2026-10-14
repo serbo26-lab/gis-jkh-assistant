@@ -375,18 +375,8 @@ def refresh_houses(page) -> None:
     page.card_widget.setEnabled(not busy and bool(house))
     connection = _connection_reason(page)
     ready = bool(organization_id and not busy and not connection)
-    from .organization_sync import organization_import_reason
-    organization_reason = organization_import_reason(page)
-    page.load_organization_button.setEnabled(not organization_reason)
-    page.load_organization_button.setToolTip(organization_reason or "Реквизиты из открытого кабинета ГИС ЖКХ. Перед добавлением можно проверить.")
+    page.organization_context_label.setText(page.organization_combo.currentText() or "Не выбрана — откройте раздел «УО»")
     page.add_house_button.setEnabled(bool(organization_id) and not busy)
-    page.add_org_button.setEnabled(not busy)
-    page.edit_org_button.setEnabled(bool(organization_id) and not busy)
-    page.delete_org_button.setEnabled(bool(organization_id) and not busy)
-    page.organization_add_action.setEnabled(not busy)
-    page.organization_edit_action.setEnabled(bool(organization_id) and not busy)
-    page.organization_delete_action.setEnabled(bool(organization_id) and not busy)
-    page.organization_actions_button.setEnabled(not busy)
     page.gis_actions_button.setEnabled(ready)
     for button, action in (
         (page.sync_houses_button, page.sync_houses_action),
@@ -411,15 +401,10 @@ def refresh_houses(page) -> None:
         button.setEnabled(bool(organization_id) and not busy)
     page.delete_house_button.setEnabled(bool(house) and not busy)
     if not organization_id:
-        from_gis = not organization_reason
         page.workflow.show_step(
-            0,
-            "Добавьте управляющую организацию",
-            "Возьмите реквизиты из открытого кабинета ГИС и проверьте их перед добавлением. "
-            "Затем загрузите дома этой организации. Ручное добавление также доступно ниже."
-            if from_gis else "Работа начинается с УО. Добавьте её реквизиты вручную. " + organization_reason,
-            "organization_load" if from_gis else "organization",
-            "Добавить УО из ГИС" if from_gis else "Добавить УО вручную",
+            0, "Добавьте управляющую организацию",
+            "В разделе «УО» можно выбрать организацию, добавить её вручную или получить из ГИС ЖКХ.",
+            "organization", "Открыть раздел «УО»",
             reason="Дождитесь завершения операции." if busy else "",
         )
     elif not page.house_list.count():

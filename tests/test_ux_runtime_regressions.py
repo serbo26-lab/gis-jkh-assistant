@@ -149,7 +149,7 @@ def test_autosave_error_preserves_editor_blocks_navigation_and_close(desktop, me
     page.refresh_houses()
     assert page.address_edit.text() == "TEST UNSAVED ADDRESS"
     _select_page(desktop, 2)
-    assert desktop.window.pages.currentIndex() == 0
+    assert desktop.window.pages.currentIndex() == 1
     event = QCloseEvent()
     desktop.window.closeEvent(event)
     assert not event.isAccepted()

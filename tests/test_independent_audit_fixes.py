@@ -59,11 +59,11 @@ def test_mouse_navigation_rolls_back_current_and_selected_item(desktop, messages
     w = desktop.window
     p = _select_page(desktop, 0)
     monkeypatch.setattr(p, 'flush_pending_changes', lambda: False)
-    target = w.navigation.visualItemRect(w.navigation.item(5)).center()
+    target = w.navigation.visualItemRect(w.navigation.item(6)).center()
     QTest.mouseClick(w.navigation.viewport(), Qt.MouseButton.LeftButton, pos=target)
     QTest.qWait(20)
-    assert w.pages.currentIndex() == w.navigation.currentRow() == 0
-    assert w.navigation.selectedItems() == [w.navigation.item(0)]
+    assert w.pages.currentIndex() == w.navigation.currentRow() == 1
+    assert w.navigation.selectedItems() == [w.navigation.item(1)]
     monkeypatch.setattr(p, 'flush_pending_changes', lambda: True)
 
 

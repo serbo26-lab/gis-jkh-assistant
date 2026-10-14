@@ -168,6 +168,8 @@ def desktop(qt_app, tmp_path, monkeypatch, request):
 
 
 def _select_page(desktop, index):
+    """Select the existing workflow stage (0=houses), following the new UO page."""
+    index += 1
     desktop.window.navigation.setCurrentRow(index)
     _settle(desktop.app)
     return desktop.window.pages.widget(index)
@@ -685,7 +687,7 @@ def test_quality_without_fixation_guides_to_the_prerequisite(desktop):
     assert "Сначала заполните факт" in page.workflow.detail.text()
     assert "Фиксации работ и услуг" in page.workflow.detail.text()
     page.workflow.primary.click()
-    assert desktop.window.navigation.currentRow() == 3
+    assert desktop.window.navigation.currentRow() == 4
     assert desktop.window.fixation_page._current_work_list_id == desktop.work_list.id
     assert desktop.window.fixation_page._current_month == 2
 

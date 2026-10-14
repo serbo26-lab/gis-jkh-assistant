@@ -185,7 +185,7 @@ def test_settings_button_opens_single_dialog_and_reopens_status_timer(desktop, t
     monkeypatch.setattr(setup, "prepare_helper_near_program",
                         lambda bundle, _directory=None: original(bundle, tmp_path / "private-helper"))
     window = desktop.window
-    window.navigation.setCurrentRow(5)
+    window.navigation.setCurrentRow(6)
     _settle(desktop.app)
     before_context = window._normalized_context(window._shared_context)
     QTest.mouseClick(window.settings_page.helper_setup_button, Qt.MouseButton.LeftButton)

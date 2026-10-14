@@ -1,4 +1,4 @@
-"""The first application page: management organizations and houses."""
+"""House registry and house-related imports."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ from gis_jkh_assistant.work_lists.gis_sync import (
     prepare_gis_work_list_sync,
 )
 
-from .dialogs import HouseDialog, HouseTariffDialog, OrganizationDialog
+from .dialogs import HouseDialog, HouseTariffDialog
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .registry_layouts import adapt_houses
 from .registry_workflow import refresh_houses
@@ -126,11 +126,13 @@ class HousesPage(QWidget):
         self.organization_combo.setMinimumWidth(260)
         self.organization_combo.currentIndexChanged.connect(self._organization_changed)
         context_layout.addWidget(self.organization_combo, 1)
+        self.organization_context = context
+        self.organization_context_label = QLabel()
+        self.organization_context_label.setWordWrap(True)
+        self.organization_context_label.hide()
+        context_layout.addWidget(self.organization_context_label, 1)
         root.addWidget(context)
 
-        self.add_org_button = QPushButton("Добавить УО")
-        self.edit_org_button = QPushButton("Изменить УО")
-        self.delete_org_button = QPushButton("Удалить УО")
         self.import_button = QPushButton("Импорт домов из XLSX…")
         self.import_button.setToolTip(
             "Добавить дома из Excel-файла, который вы выгрузили из ГИС ЖКХ."
@@ -170,9 +172,6 @@ class HousesPage(QWidget):
             button.setEnabled(False)
             button.clicked.connect(lambda _checked=False, kind=kind: self.portfolio_import.start(kind))
 
-        self.add_org_button.clicked.connect(self._add_organization)
-        self.edit_org_button.clicked.connect(self._edit_organization)
-        self.delete_org_button.clicked.connect(self._delete_organization)
         self.import_button.clicked.connect(self._import_file)
         self.sync_houses_button.clicked.connect(self._sync_houses_from_gis)
         self.add_house_button.clicked.connect(self._add_house)
@@ -186,17 +185,6 @@ class HousesPage(QWidget):
         )
 
         actions = ActionToolbar()
-
-        self.organization_actions_button = QPushButton("Действия с УО ▾")
-        organization_menu = QMenu(self.organization_actions_button)
-        self.organization_add_action = organization_menu.addAction("Добавить УО")
-        self.organization_edit_action = organization_menu.addAction("Изменить УО")
-        self.organization_delete_action = organization_menu.addAction("Удалить УО")
-        self.organization_add_action.triggered.connect(self.add_org_button.click)
-        self.organization_edit_action.triggered.connect(self.edit_org_button.click)
-        self.organization_delete_action.triggered.connect(self.delete_org_button.click)
-        self.organization_actions_button.setMenu(organization_menu)
-        actions.add_widget(self.organization_actions_button)
 
         actions.add_widget(self.add_house_button)
 
@@ -1770,63 +1758,6 @@ class HousesPage(QWidget):
 
     def _set_save_status(self, text: str) -> None:
         self.save_status.setText("Сохранено локально" if text == "Сохранено" else text)
-
-    def _add_organization(self) -> None:
-        dialog = OrganizationDialog(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        try:
-            organization = self.repository.create_organization(**dialog.values())
-        except sqlite3.IntegrityError:
-            QMessageBox.warning(
-                self,
-                "УО уже существует",
-                "Управляющая организация с таким ОГРН уже есть.",
-            )
-            return
-        self.refresh_organizations(select_id=organization.id)
-
-    def _edit_organization(self) -> None:
-        organization_id = self.organization_combo.currentData()
-        if not organization_id:
-            return
-        organization = self.repository.get_organization(organization_id)
-        if not organization:
-            return
-        dialog = OrganizationDialog(self, organization)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        try:
-            self.repository.update_organization(organization_id, **dialog.values())
-        except sqlite3.IntegrityError:
-            QMessageBox.warning(
-                self,
-                "ОГРН уже используется",
-                "УО с таким ОГРН уже существует.",
-            )
-            return
-        self.refresh_organizations(select_id=organization_id)
-
-    def _delete_organization(self) -> None:
-        guard = getattr(self.window(), "can_delete_local_data", None)
-        if guard is not None and not guard():
-            return
-        organization_id = self.organization_combo.currentData()
-        if not organization_id:
-            return
-        organization = self.repository.get_organization(organization_id)
-        if not organization:
-            return
-        answer = QMessageBox.question(
-            self,
-            "Удалить управляющую организацию?",
-            f"Будет удалена УО «{organization.name}» и все ее дома из локальной базы. Продолжить?",
-        )
-        if answer != QMessageBox.Yes:
-            return
-        self.repository.delete_organization(organization_id)
-        self._current_house_id = None
-        self.refresh_organizations()
 
     def _add_house(self) -> None:
         organization_id = self.organization_combo.currentData()

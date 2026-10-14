@@ -5,6 +5,7 @@ import sqlite3
 from io import BytesIO
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -16,6 +17,7 @@ from gis_jkh_assistant.acceptance_act_details import (
     address_parts, display_date, iso_date, suggested_genitive, suggested_position_genitive,
 )
 from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore, normalized_person
+from .action_layout import ActionFlowLayout
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 
 
@@ -138,9 +140,12 @@ class ActPersonDialog(QDialog):
 
 
 class ActRequisitesDialog(QDialog):
-    def __init__(self, repository, *, organization_id=None, house_id=None, page=None):
+    def __init__(self, repository, *, organization_id=None, house_id=None, page=None, embedded=False):
         super().__init__(page)
+        if embedded:
+            self.setWindowFlags(Qt.WindowType.Widget)
         self.repository, self.page = repository, page
+        self._embedded = embedded
         self.store = ActRequisitesStore(repository)
         self.owner = {"organization_id": organization_id} if organization_id else {"house_id": house_id}
         self.organization_id, self.house_id = organization_id, house_id
@@ -148,10 +153,13 @@ class ActRequisitesDialog(QDialog):
         self.setWindowTitle("Реквизиты актов УО" if organization_id else "Представители и реквизиты акта дома")
         self.resize(920, 640)
         root = QVBoxLayout(self)
+        if embedded:
+            root.setContentsMargins(0, 0, 0, 0)
         title = repository.get_organization(organization_id).name if organization_id else repository.get_house(house_id).address
         context = QLabel(title)
         context.setWordWrap(True)
-        root.addWidget(context)
+        if not embedded:
+            root.addWidget(context)
         self.address_edits = {}
         if house_id:
             parts = address_parts(title)
@@ -169,7 +177,7 @@ class ActRequisitesDialog(QDialog):
         hint = QLabel("История полномочий: акт выбирает запись по своей дате. Если подходят несколько записей, подписанта нужно выбрать при подготовке. Старые акты не пересчитываются.")
         hint.setWordWrap(True)
         root.addWidget(hint)
-        actions = QHBoxLayout()
+        actions = ActionFlowLayout() if embedded else QHBoxLayout()
         for text, callback in (("Добавить период полномочий…", lambda: self._edit()),
                                ("Изменить запись…", lambda: self._edit(self._current()))):
             button = QPushButton(text)
@@ -189,7 +197,7 @@ class ActRequisitesDialog(QDialog):
         self.table.cellDoubleClicked.connect(lambda *_: self._edit(self._current()))
         root.addWidget(self.table, 1)
         if organization_id:
-            images = QHBoxLayout()
+            images = ActionFlowLayout() if embedded else QHBoxLayout()
             for label, callback in (("Подпись выбранного лица…", lambda: self._image("signature")),
                                     ("Печать УО…", lambda: self._image("stamp"))):
                 button = QPushButton(label)
@@ -213,10 +221,14 @@ class ActRequisitesDialog(QDialog):
             placeholder_hint = QLabel("Для новых ручных и автоматических актов этой УО. Заменяет только строку подписи заказчика; ФИО остаётся в акте.")
             placeholder_hint.setWordWrap(True)
             root.addWidget(placeholder_hint)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("Закрыть")
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        if embedded:
+            self.table.setMinimumHeight(100)
+            self.table.setMaximumHeight(150)
+        else:
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            buttons.button(QDialogButtonBox.StandardButton.Close).setText("Закрыть")
+            buttons.rejected.connect(self.reject)
+            root.addWidget(buttons)
         self._refresh()
 
     def _refresh(self):
@@ -291,6 +303,8 @@ class ActRequisitesDialog(QDialog):
             QMessageBox.warning(self, "Не удалось загрузить изображение", str(exc))
 
     def _load_chief(self):
+        if self._embedded and self.page.flush_pending_changes() is False:
+            return
         gateway = getattr(self.page, "integration_gateway", None)
         if gateway is None:
             return
@@ -331,10 +345,14 @@ class ActRequisitesDialog(QDialog):
         def finished():
             self._worker = None
             self.load_button.setEnabled(True)
+            if hasattr(self.page, "refresh_availability"):
+                self.page.refresh_availability()
         connect_result(worker, worker.succeeded, received)
         connect_result(worker, worker.failed, lambda error: QMessageBox.warning(self, "Не удалось получить руководителя", error))
         worker.finished.connect(finished)
         worker.start()
+        if hasattr(self.page, "refresh_availability"):
+            self.page.refresh_availability()
 
     def reject(self):
         if self._worker is not None and self._worker.isRunning():

@@ -13,6 +13,7 @@ from PySide6.QtGui import QFontDatabase  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyle, QStyleOptionComboBox  # noqa: E402
 
 from gis_jkh_assistant.app.houses_page import HousesPage  # noqa: E402
+from gis_jkh_assistant.app.organizations_page import OrganizationsPage  # noqa: E402
 from gis_jkh_assistant.app.styles import apply_theme  # noqa: E402
 from gis_jkh_assistant.app.ui_scale import apply_layout_scale  # noqa: E402
 from gis_jkh_assistant.app.work_lists_page import WorkListsPage  # noqa: E402
@@ -60,19 +61,20 @@ def registry(application, tmp_path):
     )
     gateway = Gateway()
     houses = HousesPage(repository, gateway)
+    organizations = OrganizationsPage(repository, houses, gateway)
     lists = WorkListsPage(repository, gateway)
-    for page in (houses, lists):
+    for page in (organizations, houses, lists):
         page.resize(1100, 760)
         page.show()
     lists.refresh_work_lists(select_id=work_list.id)
     application.processEvents()
     yield SimpleNamespace(
         repository=repository, organization=organization, house=house,
-        work_list=work_list, gateway=gateway, houses=houses, lists=lists,
+        work_list=work_list, gateway=gateway, organizations=organizations, houses=houses, lists=lists,
     )
     houses._autosave_timer.stop()
     lists._period_timer.stop()
-    for page in (houses, lists):
+    for page in (organizations, houses, lists):
         page.close()
         page.deleteLater()
     application.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -98,8 +100,9 @@ def command_surface(page, source):
 
 def test_dangerous_registry_commands_remain_named_and_reachable(registry):
     for page, buttons in (
+        (registry.organizations, (registry.organizations.delete_org_button,)),
         (registry.houses, (
-            registry.houses.delete_org_button, registry.houses.delete_house_button,
+            registry.houses.delete_house_button,
             registry.houses.delete_tariff_button,
         )),
         (registry.lists, (
@@ -211,8 +214,8 @@ def test_direct_house_danger_click_keeps_existing_confirmation(registry, monkeyp
     tariff = registry.repository.create_house_tariff(
         house_id=registry.house.id, amount="25", start_year=2026, start_month=1,
     )
-    page = registry.houses
-    page._refresh_tariffs(select_id=tariff.id)
+    registry.houses._refresh_tariffs(select_id=tariff.id)
+    page = registry.organizations if command == "delete_org_button" else registry.houses
     prompts = []
 
     def decline(*args, **_kwargs):

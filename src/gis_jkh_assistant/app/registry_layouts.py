@@ -437,17 +437,14 @@ def adapt_houses(page):
             widget.hide()
     # Existing commands and their legacy actions remain one execution path.
     # The visible surface puts organization-wide downloads in plain sight.
-    old_toolbar = page.organization_actions_button.parentWidget()
+    old_toolbar = page.files_actions_button.parentWidget()
     root.removeWidget(old_toolbar)
     old_toolbar.hide()
     page.gis_actions_button.setObjectName("")
     page.gis_actions_button.setText("Загрузка из ГИС ЖКХ")
-    page.organization_actions_button.setText("Управляющая организация")
     page.files_actions_button.setText("Файлы Excel")
     set_button_icon(page.files_actions_button, "files")
     page.add_house_button.setText("Добавить дом")
-    page.add_org_button.setText("Добавить УО вручную")
-    page.edit_org_button.setText("Изменить реквизиты УО")
     page.sync_houses_button.setText("Загрузить все дома УО")
     page.sync_all_management_button.setText("Загрузить управление всеми домами")
     page.sync_all_work_lists_button.setText("Загрузить перечни всех домов")
@@ -471,32 +468,11 @@ def adapt_houses(page):
     page.command_host = QWidget(page)
     page.command_host.hide()
     page.workflow = WorkflowPanel(("Реестр УО", "Выбрать дом", "Проверить карточку", "Перечни"))
-    page.workflow.register("organization", page.add_org_button)
-    page.load_organization_button = QPushButton("Добавить УО из ГИС", page.command_host)
-    set_button_icon(page.load_organization_button, "download")
-    def load_organization():
-        from .organization_sync import load_organization_from_gis
-        load_organization_from_gis(page)
-    page.load_organization_button.clicked.connect(load_organization)
-    page.workflow.register("organization_load", page.load_organization_button)
+    page.workflow.register("organization", lambda: page.workflow.navigateRequested.emit(-1))
     page.workflow.register("load", page.sync_houses_button)
     page.workflow.register("reset_search", page.search_edit.clear)
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(1))
     root.insertWidget(2, page.workflow)
-    page.organization_actions_button = ActionMenuButton("Действия с УО", "organization")
-    # The menu acts on the selected UO, so keep it beside the UO selector.
-    page.organization_combo.parentWidget().layout().addWidget(page.organization_actions_button)
-    page.organization_actions_button.show()
-    caption = page.organization_combo.parentWidget().layout().itemAt(0).widget()
-    caption.setText("УО")
-    caption.setToolTip("Управляющая организация")
-    page.organization_load_action = page.organization_actions_button.add_command(page.load_organization_button)
-    page.organization_add_action = page.organization_actions_button.add_command(page.add_org_button)
-    page.organization_edit_action = page.organization_actions_button.add_command(page.edit_org_button)
-    page.organization_actions_button.menu_model.addSeparator()
-    page.delete_org_button.setText("Удалить УО и её данные…")
-    style_danger_button(page.delete_org_button)
-    page.organization_delete_action = page.organization_actions_button.add_command(page.delete_org_button)
     page.bulk_actions_button = command_menu("Обновить все дома УО", (page.sync_all_management_button, page.sync_all_work_lists_button), name="sync")
     page.bulk_actions_button.setToolTip(
         "Обновить сведения об управлении и перечнях для домов выбранной УО."
@@ -506,10 +482,8 @@ def adapt_houses(page):
     files_menu.actions()[0].setText("Экспорт Excel: шаблон площадей и тарифов…")
     files_menu.actions()[1].setText("Импорт Excel: площади и тарифы…")
     page.import_houses_action.setText("Импорт Excel: дома из XLSX…")
-    for button in (page.add_org_button, page.edit_org_button, page.delete_org_button, page.sync_all_management_button, page.sync_all_work_lists_button):
+    for button in (page.sync_all_management_button, page.sync_all_work_lists_button):
         button.setParent(page.command_host)
-    page.organization_sync_card = QWidget(page.command_host)
-    page.manual_actions_card = QWidget(page.command_host)
     page.add_house_button.setText("Добавить дом вручную")
     page.import_button.setText("Импортировать дома из XLSX…")
     set_button_icon(page.import_button, "files")
@@ -550,14 +524,10 @@ def adapt_houses(page):
     page.export_house_data_button.setText("Экспорт данных в Excel…")
     page.import_house_data_button.setText("Импорт данных из Excel…")
     from .act_requisites_dialog import open_act_requisites
-    page.organization_actions_button.menu().addAction("Реквизиты актов и подписанты УО…",
-        lambda: open_act_requisites(page, organization=True))
     page.sync_houses_button.setText("Загрузить дома")
     page.sync_all_management_button.setText("Загрузить управление")
     page.sync_all_work_lists_button.setText("Загрузить перечни")
-    page.organization_combo.parentWidget().layout().addWidget(page.load_organization_button)
-    page.load_organization_button.show()
-    page.workflow.direct_keys = {"organization_load", "load"}
+    page.workflow.direct_keys = {"load"}
     page.workflow.detail.setText("Управление, перечни и площади можно загрузить отдельно; эти шаги необязательны.")
 
     # Preserve existing autosave widgets and signals while moving deletion to the detail.

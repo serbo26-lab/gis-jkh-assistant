@@ -117,7 +117,7 @@ def test_work_list_groups_remain_distinct_and_commands_reachable(desktop):
 
 def test_quality_group_labels_and_selected_work_act_action(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(4)
+    window.navigation.setCurrentRow(5)
     page = window.quality_page
     assert page.selection_actions.text().startswith("Оценка:")
     assert page.acts_actions.text().startswith("Документы:")

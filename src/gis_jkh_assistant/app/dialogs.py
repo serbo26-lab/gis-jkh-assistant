@@ -25,38 +25,23 @@ from gis_jkh_assistant.period_dates import parse_period_date
 from .widgets import SafeSpinBox
 
 
-class OrganizationDialog(QDialog):
+class OrganizationForm(QWidget):
+    """The existing four organization fields, shared by the page and add dialog."""
+
     def __init__(self, parent=None, organization: ManagementOrganization | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Управляющая организация")
-        self.setMinimumWidth(500)
-
         self.name_edit = QLineEdit(organization.name if organization else "")
         self.ogrn_edit = QLineEdit(organization.ogrn if organization else "")
         self.kpp_edit = QLineEdit((organization.kpp or "") if organization else "")
         self.comment_edit = QPlainTextEdit((organization.comment or "") if organization else "")
         self.comment_edit.setMaximumHeight(90)
 
-        form = QFormLayout()
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
         form.addRow("Наименование *", self.name_edit)
         form.addRow("ОГРН *", self.ogrn_edit)
         form.addRow("КПП", self.kpp_edit)
         form.addRow("Комментарий", self.comment_edit)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
-        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        save_button.setText("Сохранить")
-        save_button.setObjectName("PrimaryButton")
-        cancel_button.setText("Отмена")
-        save_button.clicked.connect(self._validate_and_accept)
-        cancel_button.clicked.connect(self.reject)
-
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(buttons)
 
     def values(self) -> dict[str, str | None]:
         return {
@@ -66,16 +51,49 @@ class OrganizationDialog(QDialog):
             "comment": self.comment_edit.toPlainText().strip() or None,
         }
 
-    def _validate_and_accept(self) -> None:
+    def validate(self) -> bool:
         if not self.name_edit.text().strip():
             QMessageBox.warning(self, "Не заполнено поле", "Укажите наименование УО.")
             self.name_edit.setFocus()
-            return
+            return False
         if not self.ogrn_edit.text().strip():
             QMessageBox.warning(self, "Не заполнено поле", "Укажите ОГРН УО.")
             self.ogrn_edit.setFocus()
-            return
-        super().accept()
+            return False
+        return True
+
+    def set_organization(self, organization: ManagementOrganization | None) -> None:
+        self.name_edit.setText(organization.name if organization else "")
+        self.ogrn_edit.setText(organization.ogrn if organization else "")
+        self.kpp_edit.setText((organization.kpp or "") if organization else "")
+        self.comment_edit.setPlainText((organization.comment or "") if organization else "")
+
+
+class OrganizationDialog(QDialog):
+    def __init__(self, parent=None, organization: ManagementOrganization | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Управляющая организация")
+        self.setMinimumWidth(500)
+        self.form = OrganizationForm(self, organization)
+        for name in ("name_edit", "ogrn_edit", "kpp_edit", "comment_edit"):
+            setattr(self, name, getattr(self.form, name))
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("Сохранить")
+        buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("PrimaryButton")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        buttons.accepted.connect(self._validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.form)
+        layout.addWidget(buttons)
+
+    def values(self) -> dict[str, str | None]:
+        return self.form.values()
+
+    def _validate_and_accept(self) -> None:
+        if self.form.validate():
+            super().accept()
 
 
 class HouseDialog(QDialog):

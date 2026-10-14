@@ -31,6 +31,7 @@ from gis_jkh_assistant.quality_assessment import (
 from .fixation_page import FixationPage
 from .houses_page import HousesPage
 from .icons import icon
+from .organizations_page import OrganizationsPage
 from .planning_page import PlanningPage
 from .quality_page import QualityAssessmentPage
 from .settings_page import SettingsPage
@@ -58,7 +59,7 @@ class MainWindow(QMainWindow):
         self.resize(1366, 768)
         self.setMinimumSize(720, 520)
         self._view_mode = "normal"
-        self._last_context_page_index = 0
+        self._last_context_page_index = 1
         self._applying_shared_context = False
         self._closing = False
         self._close_requested = False
@@ -105,7 +106,8 @@ class MainWindow(QMainWindow):
         self.navigation.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.navigation.setIconSize(QSize(20, 20))
         for title, name, description in (
-            ("Дома", "houses", "Управляющая организация и данные дома"),
+            ("УО", "organizations", "Организация, руководители и реквизиты актов"),
+            ("Дома", "houses", "Данные домов выбранной УО"),
             ("Перечни работ и услуг", "lists", "Перечни работ и услуг: состав и размещение"),
             ("Планирование", "planning", "План работ по размещённому перечню"),
             ("Фиксация работ и услуг", "fixation", "Фиксация выполненных работ и услуг по месяцам"),
@@ -160,11 +162,14 @@ class MainWindow(QMainWindow):
 
         self.pages = QStackedWidget()
         self.houses_page = HousesPage(repository, self.integration_gateway)
+        self.organizations_page = OrganizationsPage(repository, self.houses_page, self.integration_gateway)
+        self.houses_page.organization_context_label.show()
         self.work_lists_page = WorkListsPage(repository, self.integration_gateway)
         self.planning_page = PlanningPage(repository, self.integration_gateway)
         self.fixation_page = FixationPage(repository, self.integration_gateway)
         self.quality_page = QualityAssessmentPage(repository, self.integration_gateway)
         self.settings_page = SettingsPage(repository)
+        self.pages.addWidget(self.organizations_page)
         self.pages.addWidget(self.houses_page)
         self.pages.addWidget(self.work_lists_page)
         self.pages.addWidget(self.planning_page)
@@ -194,6 +199,8 @@ class MainWindow(QMainWindow):
                 workflow.navigateRequested.connect(
                     lambda index, source=name: self._workflow_navigation_requested(source, index)
                 )
+        self.organizations_page.workflow.navigateRequested.connect(
+            lambda index: self.navigation.setCurrentRow(index + 1))
         self._connect_shared_context_sources()
         self._next_step_panel_changed(self.settings_page.next_step_panel_enabled())
 
@@ -225,7 +232,7 @@ class MainWindow(QMainWindow):
                 self.helper_intro.hide()
             dismiss.clicked.connect(dismiss_intro)
             intro.addWidget(dismiss)
-            self.houses_page.page_content.layout().insertWidget(1, self.helper_intro)
+            self.organizations_page.page_content.layout().insertWidget(1, self.helper_intro)
         self._update_context_summary()
         self._update_display_layout(force=True)
 
@@ -471,14 +478,14 @@ class MainWindow(QMainWindow):
             self._update_context_notices()
             return
         current_index = self.pages.currentIndex()
-        if current_index not in range(5):
+        if current_index not in range(6):
             current_index = self._last_context_page_index
         source = {
-            0: "houses",
-            1: "work_lists",
-            2: "planning",
-            3: "fixation",
-            4: "quality",
+            1: "houses",
+            2: "work_lists",
+            3: "planning",
+            4: "fixation",
+            5: "quality",
         }.get(current_index, "houses")
         values = self._context_values(source)
         self._shared_context["organization_id"] = values["organization_id"]
@@ -528,9 +535,12 @@ class MainWindow(QMainWindow):
 
         if name == "houses":
             changed = page.organization_combo.currentData() != organization_id
+            if changed and not self.organizations_page.flush_pending_changes():
+                return
             self._set_combo_data(page.organization_combo, organization_id)
             if changed:
                 page._organization_changed()
+                self.organizations_page.refresh_current()
             if house_id is None:
                 if page.house_list.currentRow() >= 0:
                     page.house_list.blockSignals(True)
@@ -660,7 +670,8 @@ class MainWindow(QMainWindow):
                     if expected and values[field] != expected:
                         message = (
                             f"Общий выбор сохранён, но выбранный {label} недоступен в этом разделе. "
-                            "Проверьте выбор в разделе «Дома»."
+                            + ("Проверьте выбор в разделе «УО»." if field == "organization_id"
+                               else "Проверьте выбор в разделе «Дома».")
                         )
                         break
                 if not message and name != "houses" and selected_list_id:
@@ -838,6 +849,7 @@ class MainWindow(QMainWindow):
         )
 
         self.houses_page._refresh_workflow()
+        self.organizations_page.refresh_availability()
         self.work_lists_page._refresh_integration_status()
         self.planning_page._refresh_integration_status()
         self.fixation_page._refresh_integration_status()
@@ -864,11 +876,12 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, lambda: self._restore_navigation(previous))
                     return
         context_name = {
-            0: "houses",
-            1: "work_lists",
-            2: "planning",
-            3: "fixation",
-            4: "quality",
+            0: "houses",  # UO owns the houses registry's organization selector.
+            1: "houses",
+            2: "work_lists",
+            3: "planning",
+            4: "fixation",
+            5: "quality",
         }.get(index)
         if context_name is not None:
             self._last_context_page_index = index
@@ -882,12 +895,14 @@ class MainWindow(QMainWindow):
             page_busy = context_name is not None and self._page_is_busy(
                 self._page_by_context_name(context_name)
             )
-            if context_name is not None and index != 0 and not page_busy:
+            if context_name is not None and context_name != "houses" and not page_busy:
                 self._page_by_context_name(context_name).refresh_organizations()
             if context_name is not None and self.settings_page.shared_context_enabled():
                 self._apply_shared_context_to_page(context_name)
         finally:
             self._applying_shared_context = previous_guard
+        if index == 0:
+            self.organizations_page.refresh_current()
         self.pages.setCurrentIndex(index)
         target_page = self.pages.currentWidget()
         if (self.settings_page.shared_context_enabled()
@@ -911,7 +926,8 @@ class MainWindow(QMainWindow):
         month = getattr(source_page, "_current_month", None)
         scope = getattr(source_page, "scope_switcher", None)
         selected_scope = scope.scope() if scope is not None else None
-        self.navigation.setCurrentRow(index)
+        # Workflow panels retain their six-page targets; -1 opens the new UO page.
+        self.navigation.setCurrentRow(index + 1)
         if source not in monthly_names.values() or index not in monthly_names:
             return
         target_name = monthly_names[index]
@@ -1009,10 +1025,11 @@ class MainWindow(QMainWindow):
         if self._active_workers or getattr(self, "_result_callbacks", 0) or any(self._page_is_busy(page) for page in self._data_pages()):
             QMessageBox.information(self, "Выполняется операция", "Дождитесь завершения обмена с ГИС перед удалением локальных данных.")
             return False
-        return self.houses_page.flush_pending_changes() is not False
+        return (self.organizations_page.flush_pending_changes() is not False
+                and self.houses_page.flush_pending_changes() is not False)
 
     def _data_pages(self):
-        return (self.houses_page, self.work_lists_page, self.planning_page,
+        return (self.organizations_page, self.houses_page, self.work_lists_page, self.planning_page,
                 self.fixation_page, self.quality_page)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API

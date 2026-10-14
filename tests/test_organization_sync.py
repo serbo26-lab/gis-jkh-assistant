@@ -312,7 +312,7 @@ def test_real_window_import_adopts_new_org_and_preserves_existing_house_and_list
     monkeypatch.setattr(sync.OrganizationImportDialog, "exec", lambda _: QDialog.DialogCode.Accepted)
     window = main_window.MainWindow(repository)
     try:
-        page = window.houses_page
+        page = window.organizations_page
         assert page.load_organization_button.isEnabled()
         page.load_organization_button.click()
         worker = Worker.created[0]
@@ -327,7 +327,7 @@ def test_real_window_import_adopts_new_org_and_preserves_existing_house_and_list
         assert not window._page_is_busy(page)
         if existing_org:
             assert saved.id == original.id
-            assert page._current_house_id == house.id
+            assert window.houses_page._current_house_id == house.id
             assert window._shared_context["house_id"] == house.id
             assert window._shared_context["work_list_id"] == work_list.id
         else:
