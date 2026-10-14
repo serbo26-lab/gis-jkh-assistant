@@ -340,6 +340,31 @@ test("executes a request when the organization still matches the selected contex
   assert.equal(requests.filter(config => config.method === "POST").length, 1);
 });
 
+test("plan import preserves a foreign-year date for desktop validation", async () => {
+  const requests = [];
+  const context = organizationPage(async config => {
+    requests.push(config);
+    assert.equal(config.url, "/workplanning/api/rest/services/search/workplans");
+    return { data: { workPlan: {
+      guid: "historical-plan", workListGuid: "historical-list", year: 2022,
+      workPlanItems: [{ sortIndex: 1, work: { guid: "work", workName: "Test work" },
+        monthlyWorks: [{ monthYear: { month: 3, year: 2022 }, count: 1,
+          dates: [{ date: "01.01.2001 00:00:00:000" }] }]
+      }]
+    } } };
+  });
+  const reply = await vm.runInContext(
+    'runGisCommand({type: "load_work_plan", payload: {workListGuid: "historical-list", year: 2022}})', context
+  );
+  assert.equal(reply.ok, true);
+  assert.equal(reply.result.year, 2022);
+  assert.deepEqual(JSON.parse(JSON.stringify(reply.result.items[0].monthlyWorks)), [
+    { month: 3, count: 1, dates: ["2001-01-01"] }
+  ]);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "POST"); // Read-only search, no save/place endpoint.
+});
+
 test("loads the authorized organization with a read-only GET and narrow result", async () => {
   const requests = [];
   const context = organizationPage(async config => {

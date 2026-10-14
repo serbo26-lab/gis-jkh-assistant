@@ -141,6 +141,27 @@ def test_wrong_response_identity_is_rejected(source):
     assert repo.get_work_plan_for_list_year(work_list.id, 2026) is None
 
 
+def test_bad_historical_plan_date_is_explained_without_creating_a_plan(source):
+    repo, store, org, work_list = source
+    repo.update_work_list_period(work_list.id, start_year=2022, start_month=1,
+                                 end_year=2022, end_month=12)
+    job = imports.prepare_jobs(repo, store, org, "plan")[0]
+    remote = response("plan")
+    remote.update(year=2022, workListGuid=job.work_list_guid)
+    remote["items"][0].update(workName="Обслуживание оборудования", monthlyWorks=[
+        {"month": 1, "count": 1, "dates": ["2022-01-15"]},
+        {"month": 3, "count": 1, "dates": ["2001-01-01"]},
+    ])
+    before = list(repo.connection.iterdump())
+    with pytest.raises(ValueError) as raised:
+        imports.apply_job(repo, store, job, remote)
+    detail = str(raised.value)
+    for expected in ("Обслуживание оборудования", "строка 1", "01.01.2001", "03.2022"):
+        assert expected in detail
+    assert list(repo.connection.iterdump()) == before
+    assert repo.get_work_plan_for_list_year(work_list.id, 2022) is None
+
+
 def _queue(desktop, monkeypatch):
     page = desktop.window.houses_page
     queue = page.portfolio_import
@@ -186,6 +207,27 @@ def test_queue_continues_after_failure_and_retries_only_failed_jobs(desktop, mon
     QTest.qWait(30)
     assert [j.state for j in queue.jobs] == ["missing", "missing"]
     assert not queue.retry_button.isVisibleTo(page)
+
+
+def test_queue_reports_bad_date_and_continues_without_changing_existing_plan(desktop, monkeypatch):
+    page, queue, calls = _queue(desktop, monkeypatch)
+    before = list(desktop.repository.connection.iterdump())
+    remote = response("plan")
+    remote["items"][0].update(workName="Обслуживание оборудования", monthlyWorks=[
+        {"month": 3, "count": 1, "dates": ["2001-01-01"]},
+    ])
+    calls[0].succeeded.emit(remote)
+    calls[0].finish()
+    QTest.qWait(30)
+    assert len(calls) == 2
+    assert queue.jobs[0].state == "error"
+    assert "01.01.2001" in queue.jobs[0].detail and "03.2026" in queue.jobs[0].detail
+    assert list(desktop.repository.connection.iterdump()) == before
+    calls[1].succeeded.emit({"found": False})
+    calls[1].finish()
+    QTest.qWait(30)
+    assert not queue.running and [j.state for j in queue.jobs] == ["error", "missing"]
+    assert queue.retry_button.isVisibleTo(page)
 
 
 def test_stop_and_window_close_do_not_start_next_request(desktop, monkeypatch):

@@ -857,7 +857,14 @@ class PlanningPage(QWidget):
                 QMessageBox.critical(
                     self,
                     "Не удалось применить планирование",
-                    error_text(exc, context=context_text(self)),
+                    error_text(
+                        exc, context=context_text(self),
+                        effect="Импорт отменён целиком. Существующий локальный план сохранён. "
+                               "Изменений в ГИС ЖКХ не было.",
+                        recovery=("Проверьте даты и значения этой работы в плане ГИС ЖКХ. "
+                                  "Если там всё верно, сохраните подробности ошибки для поддержки.")
+                        if isinstance(exc, ValueError) else "",
+                    ),
                 )
                 return
 

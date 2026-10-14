@@ -42,9 +42,10 @@ def apply_remote_work_plan(
 
     # Validate the whole response before creating a plan or removing any values.
     normalized = []
-    for row in remote.get("items") or []:
+    for index, row in enumerate(remote.get("items") or [], start=1):
         if not isinstance(row, dict):
             raise ValueError("ГИС ЖКХ вернул некорректную строку плана.")
+        work = _clean(row.get("workName")) or _clean(row.get("workCode")) or f"Строка {index}"
         months = []
         seen = set()
         for value in row.get("monthlyWorks") or []:
@@ -62,9 +63,19 @@ def apply_remote_work_plan(
                 try:
                     parsed = date.fromisoformat(text)
                 except ValueError as exc:
-                    raise ValueError(f"Некорректная дата плана: {text}.") from exc
+                    raise ValueError(
+                        f"В плане ГИС ЖКХ за {int(year)} год у работы «{work}» "
+                        f"(строка {index}, месяц {number:02d}.{int(year)}) "
+                        f"указана некорректная дата: {text}."
+                    ) from exc
                 if parsed.year != int(year) or parsed.month != number:
-                    raise ValueError("Дата должна относиться к выбранному месяцу и году плана.")
+                    raise ValueError(
+                        f"В плане ГИС ЖКХ за {int(year)} год у работы «{work}» "
+                        f"(строка {index}) указана дата {parsed:%d.%m.%Y} "
+                        f"в месяце {number:02d}.{int(year)}. "
+                        "Дата должна относиться к этому месяцу и году. "
+                        "Импорт отменён целиком; локальный план не изменён."
+                    )
             if len(dates) > count:
                 raise ValueError("Количество в месяце не может быть меньше числа выбранных дат.")
             months.append(dict(value, month=number, count=count, dates=dates))

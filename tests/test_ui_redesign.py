@@ -25,6 +25,28 @@ def test_compact_connection_keeps_readiness_and_session_errors_explicit(desktop,
     assert desktop.window.integration_status.toolTip() == desktop.window.settings_page.connection_status.text()
 
 
+def test_sidebar_explains_tab_mode_and_tracks_connected_browsers(desktop, monkeypatch):
+    window = desktop.window
+    assert window.context_mode_label.text() == "Режим вкладок:\nОбщий выбор"
+    window.settings_page.independent_radio.click()
+    assert window.context_mode_label.text() == "Режим вкладок:\nНезависимый выбор"
+    window.settings_page.shared_radio.click()
+    assert window.context_mode_label.text() == "Режим вкладок:\nОбщий выбор"
+    status = IntegrationStatus(True, True, True, helper_version="0.1.31",
+                               browser_names=("Google Chrome", "Microsoft Edge"))
+    monkeypatch.setattr(desktop.gateway, "status", lambda: status)
+    window._refresh_integration_status()
+    settle(desktop.app)
+    assert window.integration_browser.isVisibleTo(window)
+    assert window.integration_browser.text() == "Браузеры: Google Chrome, Microsoft Edge"
+    assert window.integration_browser.text() in window.settings_page.connection_status.text()
+    assert window.context_card.geometry().bottom() < window.integration_card.geometry().top()
+    assert window.integration_card.geometry().bottom() < window.height()
+    status = IntegrationStatus(True, False, False)
+    window._refresh_integration_status()
+    assert not window.integration_browser.isVisibleTo(window)
+
+
 def settle(app):
     for _ in range(5):
         app.processEvents()

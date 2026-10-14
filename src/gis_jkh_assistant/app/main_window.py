@@ -149,6 +149,11 @@ class MainWindow(QMainWindow):
         self.integration_status.setObjectName("SidebarStatusText")
         self.integration_status.setWordWrap(True)
         integration_layout.addWidget(self.integration_status)
+        self.integration_browser = QLabel()
+        self.integration_browser.setObjectName("SidebarStatusText")
+        self.integration_browser.setWordWrap(True)
+        self.integration_browser.hide()
+        integration_layout.addWidget(self.integration_browser)
 
         sidebar_layout.addWidget(self.integration_card)
         layout.addWidget(sidebar)
@@ -610,16 +615,18 @@ class MainWindow(QMainWindow):
 
     def _update_context_summary(self) -> None:
         if not self.settings_page.shared_context_enabled():
-            self.context_mode_label.setText("Независимый выбор")
-            self.context_mode_label.setToolTip("Режим выбора можно изменить в настройках")
+            self.context_mode_label.setText("Режим вкладок:\nНезависимый выбор")
+            self.context_mode_label.setToolTip(
+                "Каждый раздел запоминает свой выбор. Изменить режим можно в настройках."
+            )
             return
         house_id = self._shared_context.get("house_id")
         house = self.repository.get_house(str(house_id)) if house_id else None
-        year = self._shared_context.get("year")
-        title = "Общий выбор" + (f" • {year}" if year else "")
         address = house.address if house else "Выберите дом"
-        self.context_mode_label.setText(title)
-        self.context_mode_label.setToolTip(f"{title}\n{address}")
+        self.context_mode_label.setText("Режим вкладок:\nОбщий выбор")
+        self.context_mode_label.setToolTip(
+            "Выбор переносится между разделами. Изменить режим можно в настройках.\n" + address
+        )
 
     def _update_context_notices(self) -> None:
         enabled = self.settings_page.shared_context_enabled()
@@ -807,6 +814,21 @@ class MainWindow(QMainWindow):
                  "Обновите браузерный помощник" if "требуется" in text.lower() else
                  "Ошибка продления сессии" if status.session_keep_alive_error else
                  text.split("\n")[0])
+        browser_names = status.browser_names
+        browser_text = (
+            ("Браузер: " if len(browser_names) == 1 else "Браузеры: ") + ", ".join(browser_names)
+            if browser_names and browser_names != ("Браузер не определён",)
+            else "Браузер не определён"
+        )
+        browser_connected = status.running and status.helper_connected
+        self.integration_browser.setText(browser_text)
+        self.integration_browser.setVisible(browser_connected)
+        self.integration_browser.setToolTip(
+            "Помощники с открытой вкладкой ГИС ЖКХ."
+            if status.gis_page_ready else "Подключённые браузерные помощники."
+        )
+        if browser_connected:
+            text += "\n" + browser_text
         self.integration_status.setText(brief)
         self.integration_status.setToolTip(text)
         self.integration_status.setStyleSheet(f"color: {color(tone)};")
