@@ -148,7 +148,7 @@ class FeeGenerationDialog(QDialog):
         rows = []
         starts = []
         for house in self.houses:
-            tariffs = self.repository.list_house_tariffs(house.id)
+            tariffs = self.repository.list_effective_house_tariffs(house.id)
             starts.extend(tariff.effective_from_date for tariff in tariffs)
             context = self.store.context(house.id)
             rows.append(((house.address, len(tariffs), f"Договоров: {len(context['contracts'])}; протоколов: {len(context['protocols'])}"), bool(tariffs)))

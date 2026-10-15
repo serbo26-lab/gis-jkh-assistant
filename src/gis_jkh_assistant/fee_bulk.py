@@ -82,7 +82,7 @@ def prepare_candidates(repository, store, organization_id, house_ids, start, end
             upper = min(upper, management_end - timedelta(days=1))
         contracts = [item for item in store.context(house_id)["contracts"]
                      if item.get("fiasHouseGuid") == house.fias_house_guid]
-        for tariff in repository.list_house_tariffs(house_id):
+        for tariff in repository.list_effective_house_tariffs(house_id):
             first = max(lower, tariff.effective_from_date)
             last = min(upper, tariff.effective_to_date or upper)
             if first > last:

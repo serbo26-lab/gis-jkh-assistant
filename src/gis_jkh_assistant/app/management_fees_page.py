@@ -364,7 +364,7 @@ class ManagementFeesPage(QWidget):
     def _new(self):
         if not self._house_id or not self.flush_pending_changes():
             return
-        tariffs = self.repository.list_house_tariffs(self._house_id)
+        tariffs = self.repository.list_effective_house_tariffs(self._house_id)
         if not tariffs:
             QMessageBox.information(self, "Нет тарифа", "Сначала заполните тариф дома в разделе «Дома».")
             return
@@ -667,7 +667,7 @@ class ManagementFeesPage(QWidget):
         if not self._can_start_bulk():
             return
         houses = self.repository.list_houses(self.organization_combo.currentData())
-        if not any(self.repository.list_house_tariffs(house.id) for house in houses):
+        if not any(self.repository.list_effective_house_tariffs(house.id) for house in houses):
             QMessageBox.information(self, "Нет тарифов", "Сначала заполните тарифы домов в разделе «Дома».")
             return
         dialog = FeeGenerationDialog(self)

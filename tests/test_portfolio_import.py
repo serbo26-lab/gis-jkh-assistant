@@ -261,10 +261,10 @@ def test_buttons_become_available_after_lists_without_requiring_prior_imports(de
     repo = desktop.repository
     repo.update_work_list_gis_state(desktop.work_list.id, gis_status="DRAFT")
     page._refresh_workflow()
-    assert all(not b.isEnabled() for b in page.portfolio_import_buttons.values())
+    assert all(not page.portfolio_import_buttons[kind].isEnabled() for kind in ("plan", "fixation", "quality"))
     repo.update_work_list_gis_state(desktop.work_list.id, gis_status="APPROVED")
     page._refresh_workflow()
-    assert all(b.isEnabled() for b in page.portfolio_import_buttons.values())
+    assert all(page.portfolio_import_buttons[kind].isEnabled() for kind in ("plan", "fixation", "quality"))
     desktop.gateway.ready = False
     page._refresh_workflow()
     assert all(not b.isEnabled() for b in page.portfolio_import_buttons.values())

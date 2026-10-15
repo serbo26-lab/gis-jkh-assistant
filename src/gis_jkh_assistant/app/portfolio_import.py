@@ -1,6 +1,6 @@
-"""Read-only GIS import across an organization's existing work-list periods.
+"""Read-only GIS import of work-list periods and placed house fees.
 
-Only the three existing load commands are issued. Local content is never
+Only existing load commands are issued. Local content is never
 replaced by this initial-fill workflow; individual pages retain that option.
 """
 
@@ -25,11 +25,13 @@ KINDS = {
     "plan": ("планирования", "load_work_plan", 90.0),
     "fixation": ("фиксации", "load_work_fixation", 120.0),
     "quality": ("оценок качества", "load_quality_assessment", 150.0),
+    "fees": ("размещённых тарифов и оснований", "load_management_fees", 180.0),
 }
 STATES = {
     "pending": "Будет проверен", "loaded": "Загружено", "missing": "Не найдено",
     "protected": "Пропуск: локальные данные", "unplaced": "Не размещено в ГИС",
     "error": "Ошибка", "stopped": "Остановлено",
+    "review": "Требует проверки",
 }
 
 
@@ -46,12 +48,17 @@ class ImportJob:
     fias: str | None
     state: str = "pending"
     detail: str = ""
+    organization_id: str | None = None
 
     @property
     def period(self):
+        if self.kind == "fees":
+            return "Все периоды"
         return f"{self.month:02d}.{self.year}" if self.month else str(self.year)
 
     def payload(self):
+        if self.kind == "fees":
+            return {"fiasHouseGuid": self.fias}
         result = {"workListGuid": self.work_list_guid, "year": self.year}
         if self.month is not None:
             result.update(month=self.month, fiasHouseCode=self.fias)
@@ -70,6 +77,8 @@ def eligible_lists(repository, organization_id):
 
 def protected_reason(repository, store, job):
     """Inspect without creating periods or modifying their plan snapshots."""
+    if job.kind == "fees":
+        return ""  # Local change points have priority when GIS intervals are read.
     if job.kind == "plan":
         period = repository.get_work_plan_for_list_year(job.work_list_id, job.year)
         content = period and (
@@ -102,6 +111,14 @@ def prepare_jobs(repository, store, organization_id, kind):
     if kind not in KINDS:
         raise ValueError("Неизвестный раздел импорта")
     jobs = []
+    if kind == "fees":
+        for house in repository.list_houses(organization_id):
+            job = ImportJob(kind, house.id, house.address, "", "", "Все договоры", 0, None,
+                            house.fias_house_guid, organization_id=organization_id)
+            if not job.fias:
+                job.state, job.detail = "error", "У дома нет кода ФИАС. Сначала загрузите дома из ГИС."
+            jobs.append(job)
+        return jobs
     for house, work_list in eligible_lists(repository, organization_id):
         points = ([(year, None) for year in range(work_list.start_year, work_list.end_year + 1)]
                   if kind == "plan" else period_months(work_list))
@@ -119,6 +136,26 @@ def prepare_jobs(repository, store, organization_id, kind):
 
 def apply_job(repository, store, job, remote):
     """Recheck local changes when the response arrives; apply one atomic unit."""
+    if job.kind == "fees":
+        from gis_jkh_assistant.database.house_fee_tariffs import conflicting_periods, save_snapshot
+        from gis_jkh_assistant.management_fees import ManagementFeeStore
+        with repository.connection.atomic():
+            house = repository.get_house(job.house_id)
+            if not house or house.organization_id != job.organization_id or house.fias_house_guid != job.fias:
+                raise ValueError("УО или код ФИАС дома изменились. Результат не применён.")
+            count = save_snapshot(repository, job.house_id, remote)
+            placed = dict(remote, records=[entry for entry in remote["records"]
+                                          if entry["record"].get("status") == "APPROVED"])
+            ManagementFeeStore(repository).import_remote(job.house_id, placed)
+            segments = [item for item in repository.list_effective_house_tariffs(job.house_id) if item.gis_fee_guid]
+            conflicts = conflicting_periods(repository, job.house_id)
+        job.state = "loaded" if count else "missing"
+        job.detail = (f"Размещённых сведений: {count}; участков тарифа из ГИС: {len(segments)}. "
+                      "Локальные тарифы сохранены и имеют приоритет.")
+        if conflicts:
+            job.state = "review"
+            job.detail += f" Конфликтующих пар периодов ГИС: {conflicts}; спорные участки не используются. Проверьте раздел сведений о плате."
+        return
     if not isinstance(remote, dict) or not isinstance(remote.get("found"), bool):
         raise ValueError("Некорректный ответ ГИС: отсутствует признак found.")
     if not remote["found"]:
@@ -163,12 +200,17 @@ class ImportReviewDialog(QDialog):
         layout = QVBoxLayout(self)
         summary = QLabel(
             f"УО: {organization_name}\nДомов: {len({j.house_id for j in jobs})}; "
-            f"перечней: {len({j.work_list_id for j in jobs})}; периодов: {len(jobs)}."
+            + ("Все размещённые периоды платы и основания." if jobs and jobs[0].kind == "fees" else
+               f"перечней: {len({j.work_list_id for j in jobs})}; периодов: {len(jobs)}.")
         )
         summary.setWordWrap(True)
         layout.addWidget(summary)
         if preview:
             hint = QLabel(
+                "Будут загружены размещённые сведения о плате и основания для всех перечисленных домов. "
+                "Проекты и аннулированные записи не заполняют тарифы. Локальные тарифы имеют приоритет "
+                "на пересечениях; точные даты ГИС сохраняются. Скан-копии оснований не скачиваются. "
+                "Изменений в ГИС не производится." if jobs and jobs[0].kind == "fees" else
                 "Будут последовательно проверены все периоды указанных перечней. "
                 "Импортируются только размещённые сведения. Существующие локальные данные, акты и фото "
                 "пропускаются без перезаписи. Изменений в ГИС не производится. "
@@ -179,7 +221,8 @@ class ImportReviewDialog(QDialog):
             layout.addWidget(hint)
         table = QTableWidget(len(jobs), 5)
         self.table = table
-        table.setHorizontalHeaderLabels(["Дом", "Перечень", "Период", "Результат", "Подробности"])
+        table.setHorizontalHeaderLabels(["Дом", "Договоры" if jobs and jobs[0].kind == "fees" else "Перечень",
+                                         "Период", "Результат", "Подробности"])
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setWordWrap(False)
@@ -190,7 +233,8 @@ class ImportReviewDialog(QDialog):
                 item.setToolTip(value)
                 table.setItem(row, column, item)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        for column, width in enumerate((245, 165, 80, 205, 300)):
+        widths = (310, 120, 115, 170, 250) if jobs and jobs[0].kind == "fees" else (245, 165, 80, 205, 300)
+        for column, width in enumerate(widths):
             table.setColumnWidth(column, width)
         table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(table, 1)
@@ -257,6 +301,12 @@ class PortfolioImport(QObject):
         if not self._can_start():
             return
         page = self.page
+        if kind == "fees":
+            from gis_jkh_assistant.management_fees import helper_supports_fees
+            status = page.integration_gateway.status()
+            if not helper_supports_fees(status.helper_version):
+                QMessageBox.information(page, "Обновите помощник", "Для загрузки платы нужен помощник 0.1.33 или новее.")
+                return
         organization_id = page.organization_combo.currentData()
         if not organization_id:
             return
@@ -266,7 +316,9 @@ class PortfolioImport(QObject):
             QMessageBox.warning(page, "Не удалось подготовить импорт", str(exc))
             return
         if not jobs:
-            QMessageBox.information(page, "Нет перечней для импорта", "Сначала загрузите размещённые перечни выбранной УО из ГИС ЖКХ.")
+            QMessageBox.information(page, "Нет домов для импорта" if kind == "fees" else "Нет перечней для импорта",
+                                    "Сначала загрузите дома выбранной УО из ГИС ЖКХ." if kind == "fees" else
+                                    "Сначала загрузите размещённые перечни выбранной УО из ГИС ЖКХ.")
             return
         dialog = ImportReviewDialog(jobs, page.organization_combo.currentText(), preview=True, parent=page)
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
@@ -327,7 +379,7 @@ class PortfolioImport(QObject):
                 job.state, job.detail = "protected", reason
                 self._timer.start(0)
                 return
-            if job.month is not None and not job.fias:
+            if (job.month is not None or job.kind == "fees") and not job.fias:
                 raise ValueError("У дома нет идентификатора ФИАС. В разделе «Дома» нажмите «Загрузить дома».")
             if self.page.organization_combo.currentData() != self.organization_id:
                 raise ValueError("Выбранная УО изменилась; запрос не отправлен.")
@@ -381,16 +433,18 @@ class PortfolioImport(QObject):
 
     def _finish_ui(self):
         self.running = False
+        if self.jobs and self.jobs[0].kind == "fees":
+            self.page._refresh_tariffs()
         counts = Counter(job.state for job in self.jobs)
         text = (
             f"Импорт {'остановлен' if counts['stopped'] else 'завершён'}. "
             f"Загружено: {counts['loaded']}; не найдено: {counts['missing']}; "
             f"локальные данные пропущены: {counts['protected']}; не размещено: {counts['unplaced']}; "
-            f"ошибки: {counts['error']}; не выполнено: {counts['stopped']}."
+            f"ошибки: {counts['error']}; требуют проверки: {counts['review']}; не выполнено: {counts['stopped']}."
         )
         self.page._workflow_busy = False
         self.page._finish_bulk_operation(text)
-        self.page.bulk_status_strip.outcome(text, tone="warning" if counts['error'] or counts['stopped'] else "success")
+        self.page.bulk_status_strip.outcome(text, tone="warning" if counts['error'] or counts['stopped'] or counts['review'] else "success")
         self.stop_button.hide()
         self.retry_button.setVisible(bool(counts['error']))
         self.continue_button.setVisible(bool(counts['stopped']))
