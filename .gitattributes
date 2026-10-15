@@ -1,0 +1,2 @@
+# Preserve the supplied SVG assets byte-for-byte on Windows and Linux.
+src/gis_jkh_assistant/app/assets/icons/**/*.svg -text

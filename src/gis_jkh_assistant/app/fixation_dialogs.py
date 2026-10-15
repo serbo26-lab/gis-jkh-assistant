@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import sqlite3
+from .icons import bind_icons, set_button_icon
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -77,6 +78,8 @@ class FixationPhotoDialog(QDialog):
         actions = QHBoxLayout()
         add_button = QPushButton("Добавить фото")
         remove_button = style_danger_button(QPushButton("Удалить выбранное фото"))
+        set_button_icon(add_button, "camera")
+        set_button_icon(remove_button, "trash")
         remove_button.setEnabled(False)
         self.list.currentItemChanged.connect(lambda *_: remove_button.setEnabled(self.list.currentItem() is not None))
         actions.addWidget(add_button)
@@ -245,6 +248,7 @@ class AddUnplannedWorkDialog(QDialog):
         photo_header.addWidget(QLabel("Фотографические изображения"))
         self.add_photo_button = QPushButton("Добавить фото")
         self.remove_photo_button = style_danger_button(QPushButton("Удалить выбранное фото"))
+        bind_icons(self, add_photo_button="camera", remove_photo_button="trash")
         photo_header.addStretch(1)
         photo_header.addWidget(self.add_photo_button)
         photo_header.addWidget(self.remove_photo_button)

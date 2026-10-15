@@ -37,6 +37,7 @@ from gis_jkh_assistant.work_fixation import (
     validate_fact_numbers,
 )
 from .monthly_commands import operation_months
+from .icons import set_button_icon
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .fixation_dialogs import AddUnplannedWorkDialog, FixationPhotoDialog
@@ -346,6 +347,7 @@ class FixationPage(QWidget):
                 photo_button = QPushButton(
                     f"Фото ({len(photos)})" if photos else "Фото"
                 )
+                set_button_icon(photo_button, "camera", size=16)
                 photo_button.clicked.connect(
                     lambda _checked=False, item_id=item.id: self._open_planned_photos(item_id)
                 )
@@ -439,6 +441,7 @@ class FixationPage(QWidget):
                 photo_button = QPushButton(
                     f"Фото ({len(photos)})" if photos else "Фото"
                 )
+                set_button_icon(photo_button, "camera", size=16)
                 photo_button.clicked.connect(
                     lambda _checked=False, item_id=item.id: self._open_unplanned_photos(item_id)
                 )
@@ -446,6 +449,7 @@ class FixationPage(QWidget):
 
                 remove_button = QPushButton("Удалить")
                 style_danger_button(remove_button)
+                set_button_icon(remove_button, "trash", size=16)
                 remove_button.clicked.connect(
                     lambda _checked=False, item_id=item.id: self._delete_unplanned(item_id)
                 )

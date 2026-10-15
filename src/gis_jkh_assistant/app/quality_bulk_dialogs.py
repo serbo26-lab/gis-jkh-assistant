@@ -5,6 +5,7 @@ from dataclasses import asdict
 import sqlite3
 
 from .error_messages import context_text, error_text
+from .icons import set_button_icon
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
@@ -69,6 +70,8 @@ class SelectActWorksDialog(QDialog):
         included = QPushButton("Все включённые в оценку")
         select_all = QPushButton("Выбрать все")
         clear = QPushButton("Снять все")
+        for button in (included, select_all, clear):
+            set_button_icon(button, "check-all")
         actions.addWidget(included)
         actions.addWidget(select_all)
         actions.addWidget(clear)
@@ -248,6 +251,8 @@ class GenerateAcceptanceActDialog(QDialog):
         included = QPushButton("Все включённые в оценку")
         select_all = QPushButton("Выбрать все")
         clear = QPushButton("Снять все")
+        for button in (included, select_all, clear):
+            set_button_icon(button, "check-all")
         quick.addWidget(included)
         quick.addWidget(select_all)
         quick.addWidget(clear)
@@ -455,6 +460,9 @@ class QualityMonthActsDialog(QDialog):
         apply_all = QPushButton("Применить к N включённым работам")
         save_copy = QPushButton("Сохранить копию файла…")
         delete = style_danger_button(QPushButton("Удалить акт"))
+        for button, name in ((add, "plus"), (generate, "wand"), (apply_to, "check-all"),
+                             (apply_all, "check-all"), (save_copy, "copy"), (delete, "trash")):
+            set_button_icon(button, name)
         self.selection_buttons = (apply_to, apply_all, delete)
         self.save_copy_button = save_copy
         self.list.currentItemChanged.connect(self._update_actions)

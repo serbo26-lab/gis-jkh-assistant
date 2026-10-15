@@ -63,6 +63,7 @@ class WorkTemplatesDialog(QDialog):
         layout.addWidget(self.empty_guidance)
 
         buttons = ActionFlowLayout()
+        from .icons import bind_icons
         self.import_button = QPushButton("Импортировать состав из Excel")
         self.import_button.setObjectName("PrimaryButton")
         self.save_current_button = QPushButton("Сохранить текущий перечень как шаблон…")
@@ -73,6 +74,8 @@ class WorkTemplatesDialog(QDialog):
         self.rename_button = QPushButton("Переименовать")
         self.delete_button = style_danger_button(QPushButton("Удалить шаблон"))
         self.close_button = QPushButton("Закрыть")
+        bind_icons(self, import_button="excel", save_current_button="save",
+                   rename_button="edit", delete_button="trash")
 
         self.import_button.clicked.connect(self._import_excel)
         self.save_current_button.clicked.connect(self._save_from_current)

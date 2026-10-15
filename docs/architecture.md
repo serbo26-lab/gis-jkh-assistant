@@ -81,13 +81,15 @@ $savedBuildPath = $env:PATH
 try {
     $pythonDirectory = Split-Path -Parent $buildPython
     $env:PATH = "$pythonDirectory;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
-    & $buildPython -m PyInstaller --clean --noconfirm --onefile --windowed --paths src --collect-data gis_jkh_assistant.browser --name "GIS JKH Assistant" src/gis_jkh_assistant/__main__.py
+    & $buildPython -m PyInstaller --clean --noconfirm --onefile --windowed --paths src --collect-data gis_jkh_assistant.browser --collect-data gis_jkh_assistant.app --name "GIS JKH Assistant" src/gis_jkh_assistant/__main__.py
     if ($LASTEXITCODE -ne 0) { throw "Ошибка сборки EXE" }
 } finally {
     $env:PATH = $savedBuildPath
 }
 & $buildPython -B tools/package_windows.py
 ```
+
+SVG-иконки находятся в `app/assets/icons/light` и `dark` и включаются в EXE через `--collect-data gis_jkh_assistant.app`. Файлы сохранены без изменений из предоставленного комплекта; их контрольные суммы проверяются тестом. При чтении Qt нормализуется регистр тега `lineargradient`, иначе градиенты тёмного набора не отображаются. Формы и цвета иконок не меняются.
 
 Собирайте в отдельном Python-окружении. Каталоги сторонних инструментов в `PATH` могут подменить DLL при упаковке: при локальной проверке библиотека ICU из Poppler вызвала ошибку загрузки Qt. Для контрольной сборки использован `PATH` с каталогом виртуального окружения и системными каталогами Windows.
 

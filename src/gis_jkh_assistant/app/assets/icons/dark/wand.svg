@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_wand" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#EC4899"></stop><stop offset="100%" stop-color="#8B5CF6"></stop></lineargradient></defs>
+<rect fill="#161B26" height="18" rx="4" stroke="#2D3748" stroke-width="1.5" width="18" x="3" y="3"></rect>
+<path d="M7 17L17 7" stroke="url(#d_wand)" stroke-linecap="round" stroke-width="2"></path>
+<path d="M14 7h3v3" stroke="url(#d_wand)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"></path>
+<circle cx="8.5" cy="9.5" fill="#EC4899" r="1.2"></circle>
+<circle cx="15.5" cy="15.5" fill="#8B5CF6" r="1.2"></circle>
+</svg>

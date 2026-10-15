@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_copy" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#38BDF8"></stop><stop offset="100%" stop-color="#818CF8"></stop></lineargradient></defs>
+<rect fill="#202738" height="11" rx="2.5" stroke="#2D3748" stroke-width="1.5" width="11" x="4" y="4"></rect>
+<rect fill="#161B26" height="11" rx="2.5" stroke="#2D3748" stroke-width="1.5" width="11" x="9" y="9"></rect>
+<line stroke="url(#d_copy)" stroke-linecap="round" stroke-width="1.8" x1="12" x2="17" y1="13" y2="13"></line>
+<line stroke="url(#d_copy)" stroke-linecap="round" stroke-width="1.8" x1="12" x2="15.5" y1="16" y2="16"></line>
+</svg>

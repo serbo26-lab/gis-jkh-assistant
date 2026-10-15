@@ -45,6 +45,8 @@ class WorkDirectorySelectionDialog(QDialog):
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel("Поиск"))
         self.search_edit = QLineEdit()
+        from .icons import set_search_icon
+        set_search_icon(self.search_edit)
         self.search_edit.setPlaceholderText("Наименование, код, вид работы или единица измерения")
         search_row.addWidget(self.search_edit, 1)
         root.addLayout(search_row)

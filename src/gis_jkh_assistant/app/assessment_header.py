@@ -35,10 +35,10 @@ class AssessmentHeader(ReadableHeader):
             button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             button.installEventFilter(self)
             button.setToolTip(label + ". Акты и значения перерасчёта сохраняются.")
-            set_button_icon(button, "check", semantic, 16)
+            set_button_icon(button, "check-all", semantic, 16)
             button.show()
         self.parent().horizontalHeaderItem(0).setToolTip(
-            "Выбор работ для оценки. Зелёная галочка — отметить все; красная — снять все отметки."
+            "Выбор работ для оценки. Левая кнопка — отметить все; правая — снять все отметки."
         )
         self.updateGeometry()
         self._queue_fit()

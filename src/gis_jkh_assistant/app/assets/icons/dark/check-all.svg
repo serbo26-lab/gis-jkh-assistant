@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_chkall" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#818CF8"></stop><stop offset="100%" stop-color="#C084FC"></stop></lineargradient></defs>
+<rect fill="#161B26" height="18" rx="4" stroke="#2D3748" stroke-width="1.5" width="18" x="3" y="3"></rect>
+<path d="M7 12.5l2.5 2.5 5.5-5.5" stroke="url(#d_chkall)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"></path>
+<path d="M12.5 15l4.5-4.5" stroke="#64748B" stroke-linecap="round" stroke-width="1.7"></path>
+</svg>

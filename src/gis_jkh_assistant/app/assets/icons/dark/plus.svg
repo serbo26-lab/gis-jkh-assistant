@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_plus" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#6366F1"></stop><stop offset="100%" stop-color="#A855F7"></stop></lineargradient></defs>
+<circle cx="12" cy="12" fill="#161B26" r="9" stroke="#2D3748" stroke-width="1.5"></circle>
+<line stroke="url(#d_plus)" stroke-linecap="round" stroke-width="2" x1="12" x2="12" y1="8" y2="16"></line>
+<line stroke="url(#d_plus)" stroke-linecap="round" stroke-width="2" x1="8" x2="16" y1="12" y2="12"></line>
+</svg>

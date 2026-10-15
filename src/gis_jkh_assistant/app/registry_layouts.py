@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .action_layout import ActionFlowLayout, PairedActionBar
 from .page_layouts import command, command_menu, context_for, page_root, table, viewport_table, workspace_card
-from .icons import set_button_icon
+from .icons import bind_icons, set_action_icon, set_button_icon, set_search_icon
 from .registry_workflow import check_work_list, refresh_work_lists, replace_from_template
 from .widgets import SafeComboBox, SafeSpinBox, ensure_combo_chevron
 from .workflow_widgets import (
@@ -89,13 +89,13 @@ class WorkListDetailsCard(SectionCard):
 
 def disclosure(title: str, body: QWidget, root, *, expanded: bool = False) -> QPushButton:
     toggle = QPushButton(f"Показать {title[:1].lower() + title[1:]}")
-    set_button_icon(toggle, "chevron_down")
+    set_button_icon(toggle, "chevron_down", size=20)
     toggle.setCheckable(True)
     toggle.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
     def change(expanded):
         body.setVisible(expanded)
         toggle.setText(f"{'Скрыть' if expanded else 'Показать'} {title[:1].lower() + title[1:]}")
-        set_button_icon(toggle, "chevron_up" if expanded else "chevron_down")
+        set_button_icon(toggle, "chevron_up" if expanded else "chevron_down", size=20)
         toggle.setAccessibleDescription("Разворачивает или скрывает дополнительные поля")
         body.updateGeometry()
         if root.parentWidget():
@@ -125,6 +125,7 @@ def build_work_lists(page):
     page.registry_combo.setParent(page.command_host)
     page.registry_combo.hide()
     page.creation_toggle = QPushButton("Новый перечень…")
+    set_button_icon(page.creation_toggle, "plus")
     page.creation_toggle.setCheckable(True)
 
     for field in context.fields:
@@ -448,12 +449,13 @@ def adapt_houses(page):
     page.sync_houses_button.setText("Загрузить все дома УО")
     page.sync_all_management_button.setText("Загрузить управление всеми домами")
     page.sync_all_work_lists_button.setText("Загрузить перечни всех домов")
-    set_button_icon(page.sync_houses_button, "houses")
-    set_button_icon(page.sync_all_management_button, "organization")
-    set_button_icon(page.sync_all_work_lists_button, "lists")
-    set_button_icon(page.sync_all_plans_button, "planning")
-    set_button_icon(page.sync_all_fixations_button, "fixation")
-    set_button_icon(page.sync_all_quality_button, "quality")
+    bind_icons(page, sync_houses_button="download-cloud", sync_all_management_button="download-cloud",
+               sync_all_work_lists_button="download-cloud", sync_all_plans_button="download-cloud",
+               sync_all_fixations_button="download-cloud", sync_all_quality_button="download-cloud",
+               add_house_button="plus", export_house_data_button="excel", import_house_data_button="excel",
+               sync_management_button="sync", add_tariff_button="plus", edit_tariff_button="edit",
+               retry_save_button="save")
+    set_search_icon(page.search_edit)
     page.sync_management_button.setText("Обновить управление из ГИС")
     page.sync_management_button.setMinimumWidth(0)
     page.splitter.setSizes([300, 780])
@@ -482,6 +484,8 @@ def adapt_houses(page):
     files_menu.actions()[0].setText("Экспорт Excel: шаблон площадей и тарифов…")
     files_menu.actions()[1].setText("Импорт Excel: площади и тарифы…")
     page.import_houses_action.setText("Импорт Excel: дома из XLSX…")
+    for action in files_menu.actions():
+        set_action_icon(action, "excel")
     for button in (page.sync_all_management_button, page.sync_all_work_lists_button):
         button.setParent(page.command_host)
     page.add_house_button.setText("Добавить дом вручную")
@@ -541,6 +545,7 @@ def adapt_houses(page):
     page.house_detail_title.setWordWrap(True)
     page.card_layout.addWidget(page.house_detail_title)
     page.act_requisites_button = QPushButton("Представители собственников и реквизиты акта…")
+    set_button_icon(page.act_requisites_button, "signature")
     page.act_requisites_button.clicked.connect(lambda: open_act_requisites(page))
     page.card_layout.addWidget(page.act_requisites_button)
     section = None
@@ -573,7 +578,7 @@ def adapt_houses(page):
                     and isinstance(layout.itemAt(0).widget(), QLabel)
                     and layout.itemAt(0).widget().text() == "Тарифы по периодам"
                 ):
-                    section = SectionCard("Тарифы")
+                    section = SectionCard("Тарифы", icon_name="tariffs")
                     section.setObjectName("HouseSection")
                     page.card_layout.addWidget(section)
                     while layout.count():
@@ -585,6 +590,7 @@ def adapt_houses(page):
                     section.actions.addWidget(page.edit_tariff_button)
                     page.delete_tariff_button.setText("Удалить тариф")
                     style_danger_button(page.delete_tariff_button)
+                    set_button_icon(page.delete_tariff_button, "trash")
                     section.actions.addWidget(page.delete_tariff_button)
                     continue
                 if isinstance(layout, QFormLayout):
@@ -602,6 +608,7 @@ def adapt_houses(page):
     danger.body.addWidget(hint)
     danger.actions.addWidget(page.delete_house_button)
     style_danger_button(page.delete_house_button)
+    set_button_icon(page.delete_house_button, "trash")
     page.card_layout.addWidget(danger)
     page.operation_status = page.bulk_status_strip
     page.bulk_status_strip.hide()
