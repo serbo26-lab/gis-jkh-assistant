@@ -18,7 +18,9 @@ from gis_jkh_assistant.gis_integration import IntegrationError
 from .action_layout import ActionFlowLayout
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .icons import set_button_icon
-from .workflow_widgets import OperationStatus, SectionCard, style_danger_button
+from .workflow_widgets import CommandGroup, OperationStatus, SectionCard, style_danger_button
+from .fee_bulk_dialogs import FeeGenerationDialog, FeeQueueDialog
+from .fee_bulk_queue import FeeQueue
 
 
 def display_date(value):
@@ -47,6 +49,7 @@ class ManagementFeesPage(QWidget):
         self._worker = None
         self._protocol = None
         self._save_error = False
+        self._queue_running = False
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         self.page_content = QWidget()
@@ -75,9 +78,34 @@ class ManagementFeesPage(QWidget):
             set_button_icon(button, name)
             actions.addWidget(button)
         body.addLayout(actions)
+        self.bulk_group = CommandGroup("Массовая работа по домам выбранной УО")
+        self.bulk_load_button = QPushButton("Загрузить сведения по домам…")
+        self.bulk_generate_button = QPushButton("Сформировать проекты по тарифам…")
+        self.bulk_save_button = QPushButton("Сохранить проекты в ГИС…")
+        self.bulk_approve_button = QPushButton("Разместить проекты в ГИС…")
+        for button, glyph in ((self.bulk_load_button, "download-cloud"),
+                              (self.bulk_generate_button, "wand"),
+                              (self.bulk_save_button, "upload-cloud"),
+                              (self.bulk_approve_button, "upload-cloud")):
+            set_button_icon(button, glyph)
+            self.bulk_group.actions.addWidget(button)
+        body.addWidget(self.bulk_group)
         self.operation_status = OperationStatus()
         self.operation_status.hide()
         body.addWidget(self.operation_status)
+        self.queue_summary = QLabel()
+        self.queue_summary.setWordWrap(True)
+        self.queue_summary.hide()
+        body.addWidget(self.queue_summary)
+        queue_commands = ActionFlowLayout()
+        self.queue_stop_button = QPushButton("Остановить после текущего запроса")
+        self.queue_continue_button = QPushButton("Продолжить остальные")
+        self.queue_results_button = QPushButton("Результаты очереди…")
+        for button in (self.queue_stop_button, self.queue_continue_button, self.queue_results_button):
+            queue_commands.addWidget(button)
+            button.hide()
+        set_button_icon(self.queue_results_button, "services")
+        body.addLayout(queue_commands)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(("Период платы", "Руб./м² в месяц", "Основание", "Договор", "Состояние"))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -170,10 +198,19 @@ class ManagementFeesPage(QWidget):
         self.save_button.clicked.connect(lambda: self._send("save_management_fee_project"))
         self.approve_button.clicked.connect(lambda: self._send("approve_management_fee"))
         self.annul_button.clicked.connect(lambda: self._send("annul_management_fee"))
+        self.fee_queue = FeeQueue(self)
+        self.fee_queue.changed.connect(self._update_queue_ui)
+        self.bulk_generate_button.clicked.connect(self._generate_bulk)
+        self.bulk_load_button.clicked.connect(lambda: self._start_bulk("load"))
+        self.bulk_save_button.clicked.connect(lambda: self._start_bulk("save"))
+        self.bulk_approve_button.clicked.connect(lambda: self._start_bulk("approve"))
+        self.queue_stop_button.clicked.connect(self.fee_queue.request_stop)
+        self.queue_continue_button.clicked.connect(self._resume_bulk)
+        self.queue_results_button.clicked.connect(self._show_queue_results)
         self.refresh_organizations()
 
     def refresh_organizations(self):
-        if self._integration_busy or not self.flush_pending_changes():
+        if self._integration_busy or self._queue_running or not self.flush_pending_changes():
             return
         old = self.organization_combo.currentData()
         self.organization_combo.blockSignals(True)
@@ -327,7 +364,7 @@ class ManagementFeesPage(QWidget):
     def _new(self):
         if not self._house_id or not self.flush_pending_changes():
             return
-        tariffs = self.repository.list_house_tariffs(self._house_id)
+        tariffs = self.repository.list_effective_house_tariffs(self._house_id)
         if not tariffs:
             QMessageBox.information(self, "Нет тарифа", "Сначала заполните тариф дома в разделе «Дома».")
             return
@@ -428,7 +465,7 @@ class ManagementFeesPage(QWidget):
         self._run("load_fee_protocols", self._payload(), loaded)
 
     def _send(self, command):
-        if self._integration_busy or not self.flush_pending_changes():
+        if self._integration_busy or self._queue_running or not self.flush_pending_changes():
             return
         record = self._record()
         if not record or record["pending"]:
@@ -508,7 +545,7 @@ class ManagementFeesPage(QWidget):
         self._refresh_table(self._record_id)
 
     def _run(self, command, payload, callback):
-        if self._integration_busy:
+        if self._integration_busy or self._queue_running:
             return
         try:
             worker = GisIntegrationWorker(self.integration_gateway, command, payload, timeout=180, parent=self)
@@ -540,7 +577,7 @@ class ManagementFeesPage(QWidget):
         self._refresh_integration_status()
 
     def _refresh_integration_status(self):
-        busy = self._integration_busy or self._workflow_busy
+        busy = self._integration_busy or self._workflow_busy or self._queue_running
         record = self._record()
         remote = record["remote"] if record else None
         pending = bool(record and record["pending"])
@@ -601,3 +638,85 @@ class ManagementFeesPage(QWidget):
         else:
             reason = "Размер платы копируется из «Домов». Основание выбирается из протоколов ГИС. Проект и размещение — отдельные операции."
         self.reason.setText(reason)
+        organization_id = self.organization_combo.currentData()
+        bulk_connected = bool(status and status.gis_page_ready and helper_supports_fees(status.helper_version))
+        self.bulk_generate_button.setEnabled(bool(organization_id) and not busy)
+        for button in (self.bulk_load_button, self.bulk_save_button, self.bulk_approve_button):
+            button.setEnabled(bool(organization_id) and bulk_connected and not busy)
+        self._update_queue_ui()
+
+    def _can_start_bulk(self, *, require_connection=False):
+        window = self.window()
+        pages = getattr(window, "_data_pages", lambda: (self,))()
+        if (getattr(window, "_closing", False) or getattr(window, "_close_requested", False)
+                or self._queue_running or self._integration_busy or self._workflow_busy
+                or any(getattr(window, "_page_is_busy", lambda _page: False)(page) for page in pages)
+                or getattr(window, "_active_workers", None)):
+            QMessageBox.information(self, "Выполняется операция", "Дождитесь завершения текущей операции.")
+            return False
+        if not self.organization_combo.currentData():
+            return False
+        if require_connection:
+            status = self.integration_gateway.status() if self.integration_gateway else None
+            if not status or not status.gis_page_ready or not helper_supports_fees(status.helper_version):
+                QMessageBox.information(self, "Подключите ГИС ЖКХ", "Откройте кабинет нужной УО и подключите помощник версии 0.1.33 или новее.")
+                return False
+        return all(page.flush_pending_changes() is not False for page in pages)
+
+    def _generate_bulk(self):
+        if not self._can_start_bulk():
+            return
+        houses = self.repository.list_houses(self.organization_combo.currentData())
+        if not any(self.repository.list_effective_house_tariffs(house.id) for house in houses):
+            QMessageBox.information(self, "Нет тарифов", "Сначала заполните тарифы домов в разделе «Дома».")
+            return
+        dialog = FeeGenerationDialog(self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        created = dialog.created
+        dialog.deleteLater()
+        if accepted:
+            selected = next((record_id for house_id, record_id in created if house_id == self._house_id), self._record_id)
+            self._refresh_table(selected)
+            self.operation_status.outcome(
+                f"Создано локальных проектов: {len(created)}. Проверьте договоры и основания, затем сохраните проекты в ГИС отдельной очередью.", tone="success")
+
+    def _start_bulk(self, action):
+        from gis_jkh_assistant.fee_bulk import prepare_jobs
+        if not self._can_start_bulk(require_connection=True):
+            return
+        organization_id = self.organization_combo.currentData()
+        houses = self.repository.list_houses(organization_id)
+        jobs = prepare_jobs(self.repository, self.store, organization_id, [house.id for house in houses], action)
+        if not jobs:
+            QMessageBox.information(self, "Нет записей", "Сначала сформируйте проекты по тарифам или загрузите сведения из ГИС.")
+            return
+        dialog = FeeQueueDialog(self, jobs)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        selected = dialog.selected_jobs()
+        dialog.deleteLater()
+        if (accepted and self._can_start_bulk(require_connection=True)
+                and self.organization_combo.currentData() == organization_id):
+            self.fee_queue.start(selected)
+
+    def _resume_bulk(self):
+        if (self._can_start_bulk(require_connection=True) and self.fee_queue.jobs
+                and self.fee_queue.jobs[0].organization_id == self.organization_combo.currentData()):
+            self.fee_queue.resume()
+
+    def _show_queue_results(self):
+        dialog = FeeQueueDialog(self, self.fee_queue.jobs, preview=False)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _update_queue_ui(self):
+        queue = self.fee_queue
+        self.queue_summary.setVisible(bool(queue.jobs))
+        current = next((job for job in queue.jobs if job.state == "running"), None)
+        organization = self.repository.get_organization(queue.jobs[0].organization_id) if queue.jobs else None
+        scope = f"УО: {organization.name}. " if organization else ""
+        self.queue_summary.setText(scope + queue.summary() + (f"\nСейчас: {current.address}" if current else ""))
+        self.queue_stop_button.setVisible(queue.running)
+        self.queue_stop_button.setEnabled(not queue.stop_requested)
+        self.queue_continue_button.setVisible(not queue.running and any(job.state == "stopped" for job in queue.jobs))
+        self.queue_continue_button.setEnabled(bool(queue.jobs and queue.jobs[0].organization_id == self.organization_combo.currentData()))
+        self.queue_results_button.setVisible(bool(queue.jobs) and not queue.running)

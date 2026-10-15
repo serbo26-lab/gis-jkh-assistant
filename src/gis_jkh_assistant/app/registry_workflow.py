@@ -390,6 +390,17 @@ def refresh_houses(page) -> None:
     from .portfolio_import import eligible_lists
     has_lists = bool(organization_id and eligible_lists(page.repository, organization_id))
     for kind, button in page.portfolio_import_buttons.items():
+        if kind == "fees":
+            from gis_jkh_assistant.management_fees import helper_supports_fees
+            status = page.integration_gateway.status() if page.integration_gateway else None
+            supported = bool(status and helper_supports_fees(status.helper_version))
+            has_houses = bool(organization_id and page.repository.list_houses(organization_id))
+            button.setEnabled(ready and supported and has_houses)
+            button.setToolTip("Дождитесь завершения операции." if busy else connection
+                              or ("Обновите помощник до 0.1.33 или новее." if not supported else "")
+                              or ("Сначала загрузите дома выбранной УО." if not has_houses else "")
+                              or "Размещённые тарифы и основания всех домов УО. Локальные тарифы не перезаписываются; перечни не требуются.")
+            continue
         reason = ("Дождитесь завершения операции." if busy else connection
                   or ("Сначала загрузите размещённые перечни из ГИС ЖКХ." if not has_lists else ""))
         button.setEnabled(ready and has_lists)

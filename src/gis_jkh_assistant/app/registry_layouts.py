@@ -452,6 +452,7 @@ def adapt_houses(page):
     bind_icons(page, sync_houses_button="download-cloud", sync_all_management_button="download-cloud",
                sync_all_work_lists_button="download-cloud", sync_all_plans_button="download-cloud",
                sync_all_fixations_button="download-cloud", sync_all_quality_button="download-cloud",
+               sync_all_fees_button="download-cloud",
                add_house_button="plus", export_house_data_button="excel", import_house_data_button="excel",
                sync_management_button="sync", add_tariff_button="plus", edit_tariff_button="edit",
                retry_save_button="save")

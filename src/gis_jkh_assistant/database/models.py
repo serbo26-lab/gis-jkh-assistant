@@ -89,6 +89,8 @@ class HouseTariff:
     end_day: int = 31
     created_at: str | None = None
     updated_at: str | None = None
+    gis_fee_guid: str | None = None
+    basis_label: str = ""
 
     @property
     def effective_from_date(self) -> date:

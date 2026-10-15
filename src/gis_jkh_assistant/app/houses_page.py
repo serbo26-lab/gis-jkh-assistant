@@ -163,10 +163,12 @@ class HousesPage(QWidget):
         self.sync_all_plans_button = QPushButton("Загрузить планирование")
         self.sync_all_fixations_button = QPushButton("Загрузить фиксацию")
         self.sync_all_quality_button = QPushButton("Загрузить оценки качества")
+        self.sync_all_fees_button = QPushButton("Загрузить тарифы и основания")
         self.portfolio_import_buttons = {
             "plan": self.sync_all_plans_button,
             "fixation": self.sync_all_fixations_button,
             "quality": self.sync_all_quality_button,
+            "fees": self.sync_all_fees_button,
         }
         for kind, button in self.portfolio_import_buttons.items():
             button.setEnabled(False)
@@ -228,7 +230,7 @@ class HousesPage(QWidget):
         root.addWidget(actions)
 
         house_data_hint = QLabel(
-            'Импорт из ГИС относится к выбранной УО. Площади и тарифы загружаются из Excel в строке «Импорт локальный». Дождитесь завершения одной загрузки перед следующей.'
+            'Импорт из ГИС относится к выбранной УО. Тарифы можно загрузить из размещённых сведений ГИС; площади и ручные тарифы — из Excel. Дождитесь завершения одной загрузки перед следующей.'
         )
         house_data_hint.setWordWrap(True)
         house_data_hint.setObjectName("Muted")
@@ -412,15 +414,16 @@ class HousesPage(QWidget):
         tariff_hint = QLabel(
             "Добавляйте новую строку только когда тариф меняется. "
             "Можно указать месяц (08.2025 = с 01.08.2025) или точную дату "
-            "(10.08.2025). Последнее значение действует до следующего изменения."
+            "(10.08.2025). Последнее локальное значение действует до следующего изменения. "
+            "Размещённые тарифы ГИС видны только на незаполненных участках и сохраняют точные даты."
         )
         tariff_hint.setWordWrap(True)
         tariff_hint.setObjectName("Muted")
         self.card_layout.addWidget(tariff_hint)
 
-        self.tariffs_table = QTableWidget(0, 3)
+        self.tariffs_table = QTableWidget(0, 4)
         self.tariffs_table.setHorizontalHeaderLabels(
-            ["Действует с", "Действует до", "Тариф, руб./м² в месяц"]
+            ["Действует с", "Действует до", "Тариф, руб./м² в месяц", "Источник"]
         )
         self.tariffs_table.verticalHeader().setVisible(False)
         self.tariffs_table.setSelectionBehavior(
@@ -438,12 +441,14 @@ class HousesPage(QWidget):
         tariff_header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         tariff_header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         tariff_header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        tariff_header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.card_layout.addWidget(self.tariffs_table)
 
         self.add_tariff_button.clicked.connect(self._add_tariff)
         self.edit_tariff_button.clicked.connect(self._edit_tariff)
         self.delete_tariff_button.clicked.connect(self._delete_tariff)
         self.tariffs_table.itemDoubleClicked.connect(lambda _item: self._edit_tariff())
+        self.tariffs_table.itemSelectionChanged.connect(self._tariff_selection_changed)
 
         service_title = QLabel("Служебное")
         service_title.setObjectName("SectionTitle")
@@ -707,14 +712,12 @@ class HousesPage(QWidget):
         if not self._current_house_id:
             return
 
-        tariffs = self.repository.list_house_tariffs(self._current_house_id)
+        tariffs = self.repository.list_effective_house_tariffs(self._current_house_id)
         for tariff in tariffs:
             row = self.tariffs_table.rowCount()
             self.tariffs_table.insertRow(row)
 
-            start_item = QTableWidgetItem(
-                f"{tariff.start_month:02d}.{tariff.start_year}"
-            )
+            start_item = QTableWidgetItem(tariff.effective_from_label)
             start_item.setData(Qt.UserRole, tariff.id)
             self.tariffs_table.setItem(row, 0, start_item)
             self.tariffs_table.setItem(
@@ -723,12 +726,31 @@ class HousesPage(QWidget):
                 QTableWidgetItem(tariff.effective_to_label),
             )
             self.tariffs_table.setItem(row, 2, QTableWidgetItem(tariff.amount))
+            source = QTableWidgetItem("ГИС ЖКХ" if tariff.gis_fee_guid else "Локально")
+            source.setToolTip((f"Размещённые сведения. Основание: {tariff.basis_label}. "
+                               "Для изменения создайте локальный тариф; он получит приоритет.")
+                              if tariff.gis_fee_guid else "Введён вручную или импортирован из Excel. Имеет приоритет перед ГИС.")
+            self.tariffs_table.setItem(row, 3, source)
 
             if select_id == tariff.id:
                 self.tariffs_table.selectRow(row)
 
         if self.tariffs_table.rowCount() and self.tariffs_table.currentRow() < 0:
             self.tariffs_table.selectRow(0)
+        self._tariff_selection_changed()
+
+    def _selected_tariff(self):
+        tariff_id = self._selected_tariff_id()
+        return next((item for item in self.repository.list_effective_house_tariffs(self._current_house_id)
+                     if item.id == tariff_id), None) if self._current_house_id and tariff_id else None
+
+    def _tariff_selection_changed(self):
+        tariff = self._selected_tariff()
+        imported = bool(tariff and tariff.gis_fee_guid)
+        self.edit_tariff_button.setText("Задать локальный…" if imported else "Изменить")
+        self.edit_tariff_button.setEnabled(bool(tariff))
+        self.delete_tariff_button.setEnabled(bool(tariff) and not imported)
+        self.delete_tariff_button.setToolTip("Сведения ГИС не удаляются здесь. Локальный тариф имеет приоритет." if imported else "")
 
     def _selected_tariff_id(self) -> str | None:
         row = self.tariffs_table.currentRow()
@@ -766,14 +788,18 @@ class HousesPage(QWidget):
         tariff_id = self._selected_tariff_id()
         if not tariff_id:
             return
-        tariff = self.repository.get_house_tariff(tariff_id)
+        tariff = self._selected_tariff()
         if not tariff:
             return
         dialog = HouseTariffDialog(self, tariff)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            self.repository.update_house_tariff(tariff_id, **dialog.values())
+            if tariff.gis_fee_guid:
+                created = self.repository.create_house_tariff(house_id=tariff.house_id, **dialog.values())
+                tariff_id = created.id
+            else:
+                self.repository.update_house_tariff(tariff_id, **dialog.values())
         except (sqlite3.DatabaseError, ValueError) as exc:
             QMessageBox.critical(self, "Не удалось изменить тариф", error_text(exc, context=context_text(self)))
             return
@@ -783,8 +809,8 @@ class HousesPage(QWidget):
         tariff_id = self._selected_tariff_id()
         if not tariff_id:
             return
-        tariff = self.repository.get_house_tariff(tariff_id)
-        if not tariff:
+        tariff = self._selected_tariff()
+        if not tariff or tariff.gis_fee_guid:
             return
         answer = QMessageBox.question(
             self,

@@ -65,6 +65,8 @@ class Repository:
         initialize_act_schema(self.connection)
         from gis_jkh_assistant.management_fees import initialize_fee_schema
         initialize_fee_schema(self.connection)
+        from .house_fee_tariffs import initialize_schema
+        initialize_schema(self.connection)
 
     def close(self) -> None:
         self.connection.close()
@@ -767,6 +769,10 @@ class Repository:
         ).fetchone()
         return self._house_tariff_from_row(row) if row else None
 
+    def list_effective_house_tariffs(self, house_id: str) -> list[HouseTariff]:
+        from .house_fee_tariffs import visible_tariffs
+        return visible_tariffs(self, house_id, self.list_house_tariffs(house_id))
+
     def create_house_tariff(
         self,
         *,
@@ -952,7 +958,7 @@ class Repository:
     ) -> HouseTariff | None:
         """Return the tariff effective on one exact calendar date."""
 
-        candidates = self.list_house_tariffs(house_id)
+        candidates = self.list_effective_house_tariffs(house_id)
         active = [
             item
             for item in candidates
@@ -981,27 +987,22 @@ class Repository:
             _last_day_of_month(end_year, end_month),
         )
 
-        candidates = self.list_house_tariffs(house_id)
-        active = [
-            item
-            for item in candidates
-            if item.effective_from_date <= period_start
-        ]
-        if not active:
-            return None
-
-        current = active[-1]
-        later_changes = [
-            item
-            for item in candidates
-            if period_start < item.effective_from_date <= period_end
-        ]
-        if any(
-            not _numeric_text_equal(item.amount, current.amount)
-            for item in later_changes
-        ):
-            return None
-        return current
+        current = None
+        cursor = period_start
+        for item in self.list_effective_house_tariffs(house_id):
+            finish = item.effective_to_date or date.max
+            if finish < cursor:
+                continue
+            if item.effective_from_date > cursor:
+                return None
+            if current is None:
+                current = item
+            elif not _numeric_text_equal(item.amount, current.amount):
+                return None
+            if finish >= period_end:
+                return current
+            cursor = finish + timedelta(days=1)
+        return None
 
     def _assert_unique_tariff_start(
         self,
