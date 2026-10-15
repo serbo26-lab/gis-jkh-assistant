@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .error_messages import context_text, error_text
+from .icons import bind_icons
 
 import mimetypes
 from pathlib import Path
@@ -230,6 +231,7 @@ class QualityActsDialog(QDialog):
         actions = QHBoxLayout()
         self.add_button = QPushButton("Добавить акт")
         self.delete_button = style_danger_button(QPushButton("Отвязать акт от работы"))
+        bind_icons(self, add_button="plus", delete_button="trash")
         self.add_button.setEnabled(self.editable)
         self.delete_button.setEnabled(False)
         self.list.currentItemChanged.connect(lambda *_: self.delete_button.setEnabled(self.editable and self.list.currentItem() is not None))

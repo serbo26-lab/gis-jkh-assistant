@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_ban" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#EF4444"></stop><stop offset="100%" stop-color="#F43F5E"></stop></lineargradient></defs>
+<circle cx="12" cy="12" fill="#161B26" r="9" stroke="#2D3748" stroke-width="1.5"></circle>
+<path d="M9 9l6 6M15 9l-6 6" stroke="url(#d_ban)" stroke-linecap="round" stroke-width="2"></path>
+</svg>

@@ -225,6 +225,8 @@ class HelperSetupDialog(QDialog):
         self.open_browser = QPushButton("Открыть страницу расширений")
         self.open_browser.clicked.connect(self._open_browser)
         self.copy_url = QPushButton("Копировать адрес расширений")
+        from .icons import set_button_icon
+        set_button_icon(self.copy_url, "copy")
         self.copy_url.clicked.connect(lambda: self._copy(
             self.extensions_url.text(),
             "Адрес скопирован. В браузере нажмите Ctrl+L (адресная строка), "
@@ -251,6 +253,7 @@ class HelperSetupDialog(QDialog):
         self.open_folder = QPushButton("Показать папку помощника")
         self.open_folder.clicked.connect(self._open_folder)
         self.copy_path = QPushButton("Копировать путь")
+        set_button_icon(self.copy_path, "copy")
         self.copy_path.clicked.connect(self._copy_path)
         self._actions(body, self.open_folder, self.copy_path)
         body.addWidget(self._label(

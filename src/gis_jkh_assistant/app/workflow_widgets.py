@@ -9,9 +9,8 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
-from .icons import icon, set_button_icon
+from .icons import set_action_icon, set_button_icon, set_label_icon
 from .action_layout import ActionFlowLayout
-from .styles import color
 from .widgets import StatusStrip
 
 
@@ -311,7 +310,8 @@ class ContextBar(QFrame):
 
 
 class SectionCard(QFrame):
-    def __init__(self, title: str = "", parent=None, *, fit_content=False, reserve_height=False):
+    def __init__(self, title: str = "", parent=None, *, fit_content=False, reserve_height=False,
+                 icon_name=None):
         super().__init__(parent)
         self.setObjectName("Card")
         self.body = ReservedVBoxLayout(self) if fit_content or reserve_height else QVBoxLayout(self)
@@ -323,7 +323,15 @@ class SectionCard(QFrame):
             label = QLabel(title)
             label.setObjectName("SectionTitle")
             label.setWordWrap(True)
-            self.body.addWidget(label)
+            if icon_name:
+                heading = QHBoxLayout()
+                glyph = QLabel()
+                set_label_icon(glyph, icon_name, 18)
+                heading.addWidget(glyph)
+                heading.addWidget(label, 1)
+                self.body.addLayout(heading)
+            else:
+                self.body.addWidget(label)
         self.body.addLayout(self.actions)
         if fit_content:
             self.height_guard = ContentHeightGuard(self)
@@ -383,6 +391,9 @@ class ActionMenuButton(QPushButton):
     def add_command(self, button: QPushButton, *, when=None, text: str | None = None):
         action = self.menu_model.addAction(text or button.text())
         action.setIcon(button.icon())
+        if name := button.property("iconName"):
+            set_action_icon(action, name, int(button.property("iconBaseSize") or 18),
+                            button.property("iconSemantic") or "muted_text")
         action.setProperty("followCommandText", text is None)
         action.triggered.connect(button.click)
         self.entries.append((action, button, when))
@@ -403,6 +414,9 @@ class ActionMenuButton(QPushButton):
             action.setVisible(when is None or bool(when()))
             action.setToolTip(button.toolTip())
             action.setIcon(button.icon())
+            if name := button.property("iconName"):
+                set_action_icon(action, name, int(button.property("iconBaseSize") or 18),
+                                button.property("iconSemantic") or "muted_text")
 
 
 class DangerZone(ActionMenuButton):
@@ -567,7 +581,7 @@ class WorkflowPanel(QFrame):
             prefix = "" if state == "done" else f"{index + 1}. "
             label.setText(f"{prefix}{label.property('stepTitle')}")
             status_icon = self.step_icons[index]
-            status_icon.setPixmap(icon("check", color("success"), 16).pixmap(16, 16))
+            set_label_icon(status_icon, "check")
             status_icon.setVisible(state == "done")
             repolish(label)
         self.title.setText(title)
@@ -581,10 +595,13 @@ class WorkflowPanel(QFrame):
         enabled = command is not None and (not isinstance(command, QPushButton) or command.isEnabled())
         self.primary.setEnabled(enabled and not reason)
         self.primary.setToolTip(reason or detail)
-        glyph = {"check": "quality", "fill": "planning", "form": "quality", "acts": "act",
+        glyph = {"check": "check", "fill": "wand", "form": "wand", "acts": "wand",
                  "review_acts": "act", "resume": "sync", "sync": "sync", "new": "add",
-                 "create": "add", "organization": "organization", "add": "add",
+                 "create": "add", "organization": "plus", "organization_load": "download-cloud", "add": "add",
+                 "load": "download-cloud", "save": "save",
                  "context": "lists", "fixation": "fixation", "missing": "next", "plan": "planning"}.get(key, "upload")
+        if isinstance(command, QPushButton) and command.property("iconName"):
+            glyph = command.property("iconName")
         set_button_icon(self.primary, "next" if key and key.startswith("next") else glyph, "on_accent")
         self.primary.setAccessibleName(text)
         self.reason.setText(reason)

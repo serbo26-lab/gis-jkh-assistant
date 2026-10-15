@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_tasks" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#10B981"></stop><stop offset="100%" stop-color="#06B6D4"></stop></lineargradient></defs>
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="#161B26" stroke="#2D3748" stroke-width="1.5"></path>
+<polyline fill="#202738" points="14 2 14 8 20 8" stroke="#2D3748" stroke-width="1.5"></polyline>
+<line stroke="#64748B" stroke-linecap="round" stroke-width="1.5" x1="8" x2="12" y1="13" y2="13"></line>
+<polyline points="8 17 11 20 17 14" stroke="url(#d_tasks)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></polyline>
+</svg>

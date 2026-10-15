@@ -12,6 +12,7 @@ from gis_jkh_assistant.database import Repository
 from .page_layouts import page_root
 from .error_messages import error_text
 from .workflow_widgets import SectionCard
+from .icons import set_button_icon, set_label_icon
 
 _SHARED_CONTEXT_KEY = "ui.shared_context_enabled"
 _THEME_KEY = "ui.theme"
@@ -62,6 +63,8 @@ class SettingsPage(QWidget):
         appearance = SectionCard("Оформление")
         self.light_radio = QRadioButton("Светлая тема")
         self.dark_radio = QRadioButton("Тёмная тема")
+        set_button_icon(self.light_radio, "sun")
+        set_button_icon(self.dark_radio, "moon")
         themes = QButtonGroup(self)
         themes.setExclusive(True)
         themes.addButton(self.light_radio)
@@ -105,7 +108,12 @@ class SettingsPage(QWidget):
         connection = SectionCard("Связь с ГИС ЖКХ")
         self.connection_status = QLabel("Проверка подключения…")
         self.connection_status.setWordWrap(True)
-        connection.body.addWidget(self.connection_status)
+        status_row = QHBoxLayout()
+        self.connection_icon = QLabel()
+        set_label_icon(self.connection_icon, "pulse")
+        status_row.addWidget(self.connection_icon)
+        status_row.addWidget(self.connection_status, 1)
+        connection.body.addLayout(status_row)
         explanation = QLabel(
             "Откройте ГИС ЖКХ в браузере, войдите и включите помощник. "
             "Локальная работа доступна без подключения."
@@ -129,6 +137,7 @@ class SettingsPage(QWidget):
         connection.body.addWidget(self.recovery_steps)
 
         self.helper_setup_button = QPushButton("Установить / настроить помощник…")
+        set_button_icon(self.helper_setup_button, "browser-helper")
         self.helper_setup_button.setAccessibleName("Настроить браузерный помощник")
         self.helper_setup_button.clicked.connect(self.helperSetupRequested.emit)
         connection.body.addWidget(self.helper_setup_button, 0)

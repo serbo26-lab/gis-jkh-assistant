@@ -19,6 +19,7 @@ from gis_jkh_assistant.acceptance_act_details import (
 from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore, normalized_person
 from .action_layout import ActionFlowLayout
 from .gis_integration_worker import GisIntegrationWorker, connect_result
+from .icons import set_button_icon
 
 
 def load_act_image(path):
@@ -178,13 +179,15 @@ class ActRequisitesDialog(QDialog):
         hint.setWordWrap(True)
         root.addWidget(hint)
         actions = ActionFlowLayout() if embedded else QHBoxLayout()
-        for text, callback in (("Добавить период полномочий…", lambda: self._edit()),
-                               ("Изменить запись…", lambda: self._edit(self._current()))):
+        for text, name, callback in (("Добавить период полномочий…", "plus", lambda: self._edit()),
+                                     ("Изменить запись…", "edit", lambda: self._edit(self._current()))):
             button = QPushButton(text)
+            set_button_icon(button, name)
             button.clicked.connect(callback)
             actions.addWidget(button)
         if organization_id:
             self.load_button = QPushButton("Получить руководителя из ГИС…")
+            set_button_icon(self.load_button, "download-cloud")
             self.load_button.clicked.connect(self._load_chief)
             actions.addWidget(self.load_button)
         actions.addStretch(1)
@@ -198,9 +201,10 @@ class ActRequisitesDialog(QDialog):
         root.addWidget(self.table, 1)
         if organization_id:
             images = ActionFlowLayout() if embedded else QHBoxLayout()
-            for label, callback in (("Подпись выбранного лица…", lambda: self._image("signature")),
-                                    ("Печать УО…", lambda: self._image("stamp"))):
+            for label, name, callback in (("Подпись выбранного лица…", "signature", lambda: self._image("signature")),
+                                          ("Печать УО…", "stamp", lambda: self._image("stamp"))):
                 button = QPushButton(label)
+                set_button_icon(button, name)
                 button.clicked.connect(callback)
                 images.addWidget(button)
             self.insert_images = QCheckBox("Вставлять загруженные изображения в новые акты")

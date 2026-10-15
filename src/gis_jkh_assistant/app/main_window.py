@@ -27,7 +27,7 @@ from gis_jkh_assistant.quality_assessment import (
 
 from .fixation_page import FixationPage
 from .houses_page import HousesPage
-from .icons import icon
+from .icons import icon, set_button_icon, set_label_icon
 from .management_fees_page import ManagementFeesPage
 from .organizations_page import OrganizationsPage
 from .planning_page import PlanningPage
@@ -143,7 +143,12 @@ class MainWindow(QMainWindow):
         self.integration_status = QLabel("Проверка подключения…")
         self.integration_status.setObjectName("SidebarStatusText")
         self.integration_status.setWordWrap(True)
-        integration_layout.addWidget(self.integration_status)
+        connection_row = QHBoxLayout()
+        self.integration_icon = QLabel()
+        set_label_icon(self.integration_icon, "pulse")
+        connection_row.addWidget(self.integration_icon)
+        connection_row.addWidget(self.integration_status, 1)
+        integration_layout.addLayout(connection_row)
         self.integration_browser = QLabel()
         self.integration_browser.setObjectName("SidebarStatusText")
         self.integration_browser.setWordWrap(True)
@@ -219,6 +224,7 @@ class MainWindow(QMainWindow):
             label.setObjectName("Muted")
             intro.addWidget(label, 1)
             setup = QPushButton("Настроить помощник…")
+            set_button_icon(setup, "browser-helper")
             setup.clicked.connect(self._open_helper_setup)
             intro.addWidget(setup)
             dismiss = QPushButton("Продолжить локально")

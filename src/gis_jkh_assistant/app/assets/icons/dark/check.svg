@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_chk" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#10B981"></stop><stop offset="100%" stop-color="#34D399"></stop></lineargradient></defs>
+<circle cx="12" cy="12" fill="#161B26" r="9" stroke="#2D3748" stroke-width="1.5"></circle>
+<polyline points="8 12.2 11 15.2 16 9.5" stroke="url(#d_chk)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1"></polyline>
+</svg>

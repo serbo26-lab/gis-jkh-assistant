@@ -69,7 +69,8 @@ class ManagementFeesPage(QWidget):
         self.load_button = QPushButton("Загрузить сведения из ГИС")
         self.new_button = QPushButton("Новый проект из тарифа…")
         self.delete_button = QPushButton("Удалить локальный проект…")
-        for button, name in ((self.load_button, "download"), (self.new_button, "add"), (self.delete_button, "danger")):
+        style_danger_button(self.delete_button)
+        for button, name in ((self.load_button, "download-cloud"), (self.new_button, "file-template"), (self.delete_button, "trash")):
             set_button_icon(button, name)
             actions.addWidget(button)
         body.addLayout(actions)
@@ -116,6 +117,7 @@ class ManagementFeesPage(QWidget):
         self.protocol_text.setProperty("flowFullText", True)
         self.protocol_button = QPushButton("Выбрать протокол из ГИС…")
         self.refresh_protocols_button = QPushButton("Обновить протоколы")
+        set_button_icon(self.refresh_protocols_button, "sync")
         for item in (self.protocol_text, self.protocol_button, self.refresh_protocols_button):
             basis.addWidget(item)
         form.addRow("Основание", basis)
@@ -133,8 +135,8 @@ class ManagementFeesPage(QWidget):
         self.approve_button.setObjectName("PrimaryButton")
         style_danger_button(self.annul_button)
         for button, name in ((self.edit_button, "edit"), (self.cancel_edit_button, "edit"),
-                             (self.local_button, "check"), (self.save_button, "upload"),
-                             (self.approve_button, "upload"), (self.annul_button, "danger")):
+                             (self.local_button, "save"), (self.save_button, "upload-cloud"),
+                             (self.approve_button, "upload-cloud"), (self.annul_button, "ban")):
             set_button_icon(button, name)
             commands.addWidget(button)
         self.editor.body.addLayout(commands)

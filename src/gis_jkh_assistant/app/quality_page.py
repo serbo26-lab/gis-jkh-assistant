@@ -33,6 +33,7 @@ from gis_jkh_assistant.quality_assessment import (
     quality_reduction,
 )
 from .monthly_commands import operation_months
+from .icons import set_button_icon
 from gis_jkh_assistant.work_planning import active_months_for_work_list
 
 from .gis_integration_worker import GisIntegrationWorker, connect_result
@@ -246,6 +247,7 @@ class QualityAssessmentPage(QWidget):
 
                 acts = self.store.list_acts(item.id)
                 button = QPushButton(f"Акты: {len(acts)}")
+                set_button_icon(button, "act", size=16)
                 button.clicked.connect(
                     lambda _checked=False, item_id=item.id: self._open_acts(item_id)
                 )

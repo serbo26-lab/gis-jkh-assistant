@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from .widgets import SafeComboBox, ScopeSwitcher
 from .action_layout import ActionFlowLayout
-from .icons import set_button_icon
+from .icons import set_action_icon, set_button_icon
 from .workflow_widgets import (
     ActionMenuButton, CommandGroup, ContextBar, OperationStatus, PageHeader, SectionCard, WorkflowPanel,
     WorkspaceCard, WorkspaceSplitter,
@@ -20,6 +20,28 @@ MONTHS = (
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
 )
+
+COMMAND_ICONS = {
+    **dict.fromkeys(("create_button", "add_works_button", "add_unplanned_button",
+                     "upload_acts_button"), "plus"),
+    **dict.fromkeys(("load_gis_button", "load_month_button", "load_period_button",
+                     "load_gis_lists_button"), "download-cloud"),
+    **dict.fromkeys(("publish_button", "publish_month_button", "publish_period_button",
+                     "project_save_button", "save_editable_gis_button", "approve_gis_button",
+                     "upload_to_gis_button"), "upload-cloud"),
+    **dict.fromkeys(("clear_button", "clear_month_button", "clear_period_button",
+                     "clear_values_button", "clear_period_values_button", "clear_works_button"), "eraser"),
+    **dict.fromkeys(("distribute_button", "fill_month_button", "fill_period_button",
+                     "form_month_button", "form_period_button", "auto_act_month_button",
+                     "auto_act_period_button", "create_act_button", "lazy_fill_button"), "wand"),
+    **dict.fromkeys(("templates_button", "replace_from_template_button",
+                     "load_export_template_button"), "file-template"),
+    **dict.fromkeys(("save_button", "save_period_button", "save_as_template_button"), "save"),
+    "create_from_current_button": "copy", "delete_button": "trash", "remove_works_button": "trash",
+    "directory_button": "services", "load_export_template_file_button": "excel", "export_button": "excel",
+    "sync_gis_button": "sync", "cancel_gis_button": "ban", "cancel_button": "ban",
+    "include_all_button": "check-all", "exclude_all_button": "check-all", "month_acts_button": "act",
+}
 
 
 def month_button_text(month, state, compact=False):
@@ -125,6 +147,8 @@ def command(page, name: str, text: str, handler=None) -> QPushButton:
     if name.startswith(("clear_", "cancel_", "delete_", "remove_", "replace_")):
         button.setObjectName("DangerButton")
         set_button_icon(button, "danger", "danger")
+    if name in COMMAND_ICONS:
+        set_button_icon(button, COMMAND_ICONS[name])
     button.hide()
     setattr(page, name, button)
     if handler is not None:
@@ -311,6 +335,7 @@ def build_planning(page, table_class):
     page.plan_actions.setParent(page.command_host)
     page.plan_actions.hide()
     page.dates_button = QPushButton("Даты выбранной ячейки…")
+    set_button_icon(page.dates_button, "calendar")
     page.dates_button.setToolTip("Открыть конкретные даты выбранного месяца: Alt+D или двойной щелчок")
     for button in (page.distribute_button, page.dates_button, page.clear_button):
         card.actions.addWidget(button)
@@ -345,8 +370,10 @@ def build_planning(page, table_class):
     page.dates_shortcut.activated.connect(open_dates)
     page.table.cell_actions = QMenu(page.table)
     dates_action = page.table.cell_actions.addAction("Даты выбранной ячейки… (Alt+D)")
+    set_action_icon(dates_action, "calendar")
     dates_action.triggered.connect(open_dates)
     clear_action = page.table.cell_actions.addAction("Очистить выделенные ячейки (Del)")
+    set_action_icon(clear_action, "eraser")
     clear_action.triggered.connect(page._clear_selected_cells)
     def show_cell_menu(position=None):
         dates_available()
@@ -623,6 +650,7 @@ def _quality_data(page, root):
     page.table.setProperty("preferredVisibleRows", 5)
     page.table.setProperty("compactTable", True)
     page.selected_act_button = QPushButton("Акт выбранной работы…")
+    set_button_icon(page.selected_act_button, "act")
     page.selected_act_button.setProperty("compactCommand", True)
     page.selected_act_button.setToolTip(
         "Открыть документы, связанные с выбранной работой."
@@ -638,6 +666,7 @@ def _quality_data(page, root):
     page.month_acts_summary.setObjectName("Muted")
     page.month_acts_summary.setWordWrap(True)
     help_button = QPushButton("Об актах…")
+    set_button_icon(help_button, "act")
     help_button.setProperty("compactCommand", True)
     help_button.setToolTip("Акты и перерасчёт: правила подготовки документов")
     help_button.setCheckable(True)

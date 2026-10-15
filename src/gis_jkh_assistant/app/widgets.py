@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .icons import icon
+from .icons import icon, set_label_icon
 from .styles import color
 
 
@@ -318,6 +318,10 @@ class StatusStrip(QFrame):
         self.label = QLabel(text)
         self.label.setObjectName("StatusStripText")
         self.label.setWordWrap(True)
+        self.state_icon = QLabel()
+        set_label_icon(self.state_icon, "check")
+        self.state_icon.hide()
+        row.addWidget(self.state_icon)
         row.addWidget(self.label, 1)
 
         self.progress = QProgressBar()
@@ -334,6 +338,7 @@ class StatusStrip(QFrame):
 
     def set_text(self, text: str) -> None:
         self.label.setText(text)
+        self.state_icon.setVisible(bool(text) and self.property("tone") == "success")
 
     def add_action(self, widget: QWidget) -> QWidget:
         self.actions.addWidget(widget)

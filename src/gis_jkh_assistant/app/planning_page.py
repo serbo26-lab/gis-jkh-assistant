@@ -43,6 +43,7 @@ from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .page_layouts import build_planning
 from .workflow_presenter import mark_plan_synced, plan_fingerprint, refresh_planning
 from .styles import color
+from .icons import bind_icons
 
 
 _MONTH_HEADERS = (
@@ -139,6 +140,7 @@ class MonthDatesDialog(QDialog):
         self.add_button = QPushButton("Добавить дату")
         self.remove_button = QPushButton("Удалить выбранную")
         self.clear_button = QPushButton("Очистить даты")
+        bind_icons(self, add_button="plus", remove_button="trash", clear_button="eraser")
         actions.addWidget(self.add_button)
         actions.addWidget(self.remove_button)
         actions.addWidget(self.clear_button)

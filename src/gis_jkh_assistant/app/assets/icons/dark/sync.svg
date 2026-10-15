@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_sync" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#38BDF8"></stop><stop offset="100%" stop-color="#6366F1"></stop></lineargradient></defs>
+<circle cx="12" cy="12" fill="#161B26" r="9" stroke="#2D3748" stroke-width="1.5"></circle>
+<path d="M16 10a4.5 4.5 0 0 0-7.5-1.5M8 14a4.5 4.5 0 0 0 7.5 1.5" stroke="url(#d_sync)" stroke-linecap="round" stroke-width="1.9"></path>
+<polyline points="16 7 16 10 13 10" stroke="url(#d_sync)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></polyline>
+<polyline points="8 17 8 14 11 14" stroke="url(#d_sync)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></polyline>
+</svg>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+<defs><lineargradient id="d_qual" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#FBBF24"></stop><stop offset="100%" stop-color="#F59E0B"></stop></lineargradient></defs>
+<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="#161B26" stroke="#2D3748" stroke-linejoin="round" stroke-width="1.5"></path>
+<polyline points="8.5 12 11 14.5 15.5 9.5" stroke="url(#d_qual)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></polyline>
+</svg>
