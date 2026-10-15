@@ -134,8 +134,10 @@ def test_pdf_placeholder_replaces_only_customer_line_and_fits_next_to_requisites
     document.load(str(file))
     assert document.pageCount() == 1
     text = document.getAllText(0).text()
-    assert "Петрова Мария Ивановна" in text
-    assert "Иванов Иван Иванович" in text
+    # Available fonts may wrap full names between words without losing text.
+    normalized_text = " ".join(text.split())
+    assert "Петрова Мария Ивановна" in normalized_text
+    assert "Иванов Иван Иванович" in normalized_text
     assert "Исполнитель" in text and "Заказчик" in text
     assert (b"/Subtype /Image" in content) == images
     first_line = "Данные скрыты в целях безопасности"
