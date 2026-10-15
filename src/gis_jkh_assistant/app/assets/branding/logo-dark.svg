@@ -1,0 +1,43 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="darkTile" x1="28" y1="24" x2="228" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A2233"/>
+      <stop offset="1" stop-color="#101722"/>
+    </linearGradient>
+
+    <linearGradient id="darkHouse" x1="64" y1="72" x2="186" y2="202" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E4EBF7"/>
+      <stop offset="1" stop-color="#A7B5D2"/>
+    </linearGradient>
+
+    <linearGradient id="darkSpark" x1="178" y1="70" x2="210" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#35C8FF"/>
+      <stop offset="0.52" stop-color="#3F86FF"/>
+      <stop offset="1" stop-color="#7758FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="14" y="14" width="228" height="228" rx="46" fill="url(#darkTile)" stroke="#2D3748" stroke-width="6"/>
+
+  <path d="M72 141L123 99C126 96.6 130 96.6 133 99L191 147"
+        stroke="url(#darkHouse)"
+        stroke-width="16"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <rect x="170" y="104" width="14" height="24" rx="5" fill="url(#darkHouse)"/>
+
+  <rect x="78" y="126" width="82" height="76" rx="10" fill="url(#darkHouse)"/>
+  <rect x="171" y="145" width="42" height="57" rx="9" fill="url(#darkHouse)"/>
+
+  <rect x="96" y="143" width="18" height="18" rx="4" fill="#161B26"/>
+  <rect x="128" y="143" width="18" height="18" rx="4" fill="#161B26"/>
+  <rect x="96" y="173" width="18" height="18" rx="4" fill="#161B26"/>
+  <rect x="128" y="173" width="18" height="18" rx="4" fill="#161B26"/>
+
+  <rect x="184" y="156" width="16" height="20" rx="4" fill="#161B26"/>
+  <rect x="184" y="183" width="16" height="20" rx="4" fill="#161B26"/>
+
+  <path d="M196 70C197.8 84 200.8 87.2 214 89C200.8 90.8 197.8 94 196 108C194.2 94 191.2 90.8 178 89C191.2 87.2 194.2 84 196 70Z"
+        fill="url(#darkSpark)"/>
+</svg>

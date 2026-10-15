@@ -44,7 +44,8 @@ def test_sections_and_direct_organization_commands(desktop):
     page.workflow.primary.click()
     workflows._settle(desktop.app)
     assert window.pages.currentWidget() is window.houses_page
-    assert window.houses_page.organization_context_label.isVisibleTo(window.houses_page)
+    assert window.houses_page.organization_context.isHidden()
+    assert window.organization_caption.text().replace("\n", " ") == desktop.organization.name
 
 
 @pytest.mark.parametrize("shared", [True, False])
@@ -99,7 +100,7 @@ def test_failed_basic_save_keeps_edits_and_blocks_selection_navigation_and_close
     assert desktop.window.pages.currentWidget() is desktop.window.houses_page
 
 
-def test_entering_uo_applies_shared_selection_deferred_while_houses_were_busy(desktop):
+def test_hidden_page_selector_cannot_replace_global_uo(desktop):
     window, repo = desktop.window, desktop.repository
     other = repo.create_organization(name="Другая вымышленная УО", ogrn="1022600000541")
     repo.create_house(organization_id=other.id, address="Вымышленная улица, 2")
@@ -109,12 +110,15 @@ def test_entering_uo_applies_shared_selection_deferred_while_houses_were_busy(de
     window.work_lists_page.refresh_organizations()
     combo = window.work_lists_page.organization_combo
     combo.setCurrentIndex(combo.findData(other.id))
-    assert window._shared_context["organization_id"] == other.id
+    assert window._shared_context["organization_id"] == desktop.organization.id
     assert window.organizations_page.organization_combo.currentData() == desktop.organization.id
     window.houses_page._workflow_busy = False
+    window.navigation.setCurrentRow(1)
+    window.navigation.setCurrentRow(2)
+    assert combo.currentData() == desktop.organization.id
     window.navigation.setCurrentRow(0)
-    assert window.organizations_page.organization_combo.currentData() == other.id
-    assert window.organizations_page.form.name_edit.text() == other.name
+    assert window.organizations_page.organization_combo.currentData() == desktop.organization.id
+    assert window.organizations_page.form.name_edit.text() == desktop.organization.name
 
 
 def test_manual_add_and_delete_keep_existing_confirmation_and_other_data(desktop, monkeypatch):

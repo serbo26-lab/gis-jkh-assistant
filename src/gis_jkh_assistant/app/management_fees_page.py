@@ -58,8 +58,9 @@ class ManagementFeesPage(QWidget):
         title.setObjectName("Title")
         body.addWidget(title)
         context = QHBoxLayout()
-        self.organization_combo, self.house_combo = QComboBox(), QComboBox()
-        for label, combo in (("УО", self.organization_combo), ("Дом", self.house_combo)):
+        self.organization_combo, self.house_combo = QComboBox(self), QComboBox()
+        self.organization_combo.hide()
+        for label, combo in (("Дом", self.house_combo),):
             context.addWidget(QLabel(label))
             combo.setMinimumContentsLength(12)
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)

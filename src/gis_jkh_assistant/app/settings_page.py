@@ -34,7 +34,7 @@ class SettingsPage(QWidget):
         self.save_status.setText("Изменения настроек сохраняются автоматически")
         context = SectionCard("Рабочий контекст")
         hint = QLabel(
-            "Общий выбор сохраняет УО, дом, перечень и год при переходах между разделами."
+            "УО выбирается в разделе «УО» и действует во всей программе. Общий выбор переносит дом, перечень и год между разделами."
         )
         hint.setWordWrap(True)
         hint.setObjectName("Muted")
@@ -48,7 +48,7 @@ class SettingsPage(QWidget):
         context.body.addWidget(self.shared_radio)
         context.body.addWidget(self.independent_radio)
         self.context_explanation = QLabel(
-            "В общем режиме выбор переносится между разделами. В независимом каждый раздел запоминает собственный дом и период."
+            "УО общая для всех разделов и выбирается в разделе «УО». В общем режиме дом, перечень и период переносятся между разделами. В независимом каждый раздел запоминает свой выбор."
         )
         self.context_explanation.setWordWrap(True)
         self.context_explanation.setObjectName("Muted")

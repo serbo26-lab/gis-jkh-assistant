@@ -30,6 +30,8 @@ _GLYPHS = {
 
 def asset_path(name: str) -> Path:
     theme = "dark" if tokens() is THEMES["dark"] else "light"
+    if name == "app-logo":
+        return ASSET_ROOT.parent / "branding" / f"logo-{theme}.svg"
     return ASSET_ROOT / theme / f"{ALIASES.get(name, name)}.svg"
 
 
