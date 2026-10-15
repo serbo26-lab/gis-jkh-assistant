@@ -89,7 +89,7 @@ def test_theme_switch_requests_matching_caption_and_preserves_normal_window(desk
 
 def test_runtime_size_preserves_context_saved_edits_and_busy_queue(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(4)
+    window.navigation.setCurrentRow(3)
     planning = window.planning_page
     planning.table.item(0, 3).setText("3")
     plan_item = desktop.repository.list_work_plan_items(planning._current_plan_id)[0]
@@ -145,7 +145,7 @@ def test_old_enlargement_preference_does_not_reactivate_hidden_setting(qt_app, t
 
 def test_table_photo_and_delete_controls_resize_without_reloading_busy_period(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(5)
+    window.navigation.setCurrentRow(4)
     page = window.fixation_page
     period_id = page._current_period_id
     item = desktop.repository.list_work_fixation_items(period_id)[0]
@@ -180,7 +180,7 @@ def test_table_photo_and_delete_controls_resize_without_reloading_busy_period(de
 
 def test_quality_act_control_resizes_while_current_period_is_busy(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(6)
+    window.navigation.setCurrentRow(5)
     page = window.quality_page
     period, item = workflow_tests._include_quality(page, 1)
     workflow_tests._add_acceptance_act(page, item)
@@ -225,10 +225,11 @@ def test_pages_fit_desktop_at_selected_ui_size(desktop, theme, percent, size):
                     index, percent, size, button.text(), button.height(), button.minimumSizeHint().height(),
                 )
         for row in range(window.navigation.count()):
-            rect = window.navigation.visualItemRect(window.navigation.item(row))
+            view = window.navigation.item_view(row)
+            rect = view.visualItemRect(window.navigation.item(row))
             text = window.navigation.item(row).text()
             available = window.sidebar.width() - round(54 * percent / 100)
             wrapped = window.navigation.fontMetrics().boundingRect(0, 0, available, 1000, Qt.TextFlag.TextWordWrap, text)
             assert rect.height() >= wrapped.height()
-            assert window.navigation.viewport().rect().contains(rect)
-        assert window.navigation.verticalScrollBar().maximum() == 0
+            assert view.viewport().rect().contains(rect)
+        assert all(view.verticalScrollBar().maximum() == 0 for view in window.navigation.views)

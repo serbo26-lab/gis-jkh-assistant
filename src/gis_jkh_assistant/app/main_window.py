@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QSize, QTimer, Qt
-from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QMainWindow,
     QPushButton,
@@ -36,6 +33,7 @@ from .organizations_page import OrganizationsPage
 from .planning_page import PlanningPage
 from .quality_page import QualityAssessmentPage
 from .settings_page import SettingsPage
+from .sidebar_navigation import SidebarNavigation
 from .styles import apply_theme, color
 from .ui_scale import apply_layout_scale, scaled
 from .window_chrome import apply_window_theme
@@ -99,27 +97,20 @@ class MainWindow(QMainWindow):
         workflow_caption.setObjectName("ContextCaption")
         sidebar_layout.addWidget(workflow_caption)
 
-        self.navigation = QListWidget()
-        self.navigation.setObjectName("Navigation")
-        self.navigation.setFrameShape(QFrame.NoFrame)
-        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.navigation.setWordWrap(True)
-        self.navigation.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.navigation.setIconSize(QSize(20, 20))
-        for title, name, description in (
-            ("УО", "organizations", "Организация, руководители и реквизиты актов"),
-            ("Дома", "houses", "Данные домов выбранной УО"),
-            ("Информация о размере платы", "fees", "Плата по договору управления и основания из ГИС"),
-            ("Перечни работ и услуг", "lists", "Перечни работ и услуг: состав и размещение"),
-            ("Планирование", "planning", "План работ по размещённому перечню"),
-            ("Фиксация работ и услуг", "fixation", "Фиксация выполненных работ и услуг по месяцам"),
-            ("Оценка качества", "quality", "Оценка качества, акты и размещение"),
-            ("Настройки", "settings", "Рабочий контекст и оформление"),
-        ):
-            item = QListWidgetItem(icon(name, color("muted_text")), title)
-            item.setData(Qt.ItemDataRole.UserRole, name)
-            item.setToolTip(description)
-            self.navigation.addItem(item)
+        groups = (
+            (("УО", "organizations", "Организация, руководители и реквизиты актов"),
+             ("Дома", "houses", "Данные домов выбранной УО")),
+            (("Перечни работ и услуг", "lists", "Перечни работ и услуг: состав и размещение"),
+             ("Планирование", "planning", "План работ по размещённому перечню"),
+             ("Фиксация работ и услуг", "fixation", "Фиксация выполненных работ и услуг по месяцам"),
+             ("Оценка качества", "quality", "Оценка качества, акты и размещение")),
+            (("Информация о размере платы", "fees", "Плата по договору управления и основания из ГИС"),),
+            (("Настройки", "settings", "Рабочий контекст и оформление"),),
+        )
+        self.navigation = SidebarNavigation([
+            [(title, icon(name, color("muted_text")), name, description)
+             for title, name, description in group] for group in groups
+        ])
         sidebar_layout.addWidget(self.navigation, 1)
 
         self.context_card = QFrame()
@@ -174,11 +165,11 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage(repository)
         self.pages.addWidget(self.organizations_page)
         self.pages.addWidget(self.houses_page)
-        self.pages.addWidget(self.management_fees_page)
         self.pages.addWidget(self.work_lists_page)
         self.pages.addWidget(self.planning_page)
         self.pages.addWidget(self.fixation_page)
         self.pages.addWidget(self.quality_page)
+        self.pages.addWidget(self.management_fees_page)
         self.pages.addWidget(self.settings_page)
         layout.addWidget(self.pages, 1)
 
@@ -874,7 +865,7 @@ class MainWindow(QMainWindow):
         if self.pages.currentIndex() != index:
             return
         blocked = self.navigation.blockSignals(True)
-        self.navigation.setCurrentRow(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        self.navigation.setCurrentRow(index)
         self.navigation.blockSignals(blocked)
 
     def _navigation_changed(self, index: int) -> None:
@@ -983,8 +974,6 @@ class MainWindow(QMainWindow):
             self._view_mode = mode
             # Density changes layout, never the user's chosen text size.
             self.navigation.ensurePolished()
-            icon_size = scaled(20, self._ui_scale)
-            self.navigation.setIconSize(QSize(icon_size, icon_size))
             self.sidebar.setFixedWidth(min(272, round(228 + 88 * (self._ui_scale - 1))))
             # Below this width the two-pane house form and context selectors
             # cannot provide all controls. Never advertise an unusable size.
@@ -992,12 +981,6 @@ class MainWindow(QMainWindow):
             self.sidebar_layout.setContentsMargins(*(
                 scaled(value, self._ui_scale) for value in (8, 10, 8, 10)
             ))
-            metrics = self.navigation.fontMetrics()
-            text_width = self.sidebar.width() - scaled(54, self._ui_scale)
-            for index in range(self.navigation.count()):
-                item = self.navigation.item(index)
-                rect = metrics.boundingRect(0, 0, text_width, 1000, Qt.TextFlag.TextWordWrap, item.text())
-                item.setSizeHint(QSize(0, rect.height() + scaled(20, self._ui_scale)))
             self.integration_layout.setContentsMargins(*(
                 scaled(value, self._ui_scale) for value in (10, 9, 10, 9)
             ))
@@ -1019,14 +1002,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_navigation_metrics(self) -> None:
         """Measure after stylesheet/layout settles, including the selected font."""
-        font = QFont(self.navigation.font())
-        font.setBold(True)
-        metrics = QFontMetrics(font)
-        width = self.navigation.viewport().width() - self.navigation.iconSize().width() - scaled(26, self._ui_scale)
-        for index in range(self.navigation.count()):
-            item = self.navigation.item(index)
-            rect = metrics.boundingRect(0, 0, max(1, width), 1000, Qt.TextFlag.TextWordWrap, item.text())
-            item.setSizeHint(QSize(0, rect.height() + scaled(20, self._ui_scale)))
+        self.navigation.refresh_metrics(scaled(20, self._ui_scale))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self._update_display_layout()

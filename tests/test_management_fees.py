@@ -246,7 +246,7 @@ def test_fee_section_preserves_shared_work_list_and_year(desktop, monkeypatch):
     page = fee_page(desktop, monkeypatch)
     assert page.house_combo.currentData() == desktop.house.id
     assert window._shared_context == before
-    assert window.navigation.item(2).text() == "Информация о размере платы"
+    assert window.navigation.item(6).text() == "Информация о размере платы"
     for index, target in enumerate((window.houses_page, window.work_lists_page, window.planning_page,
                                     window.fixation_page, window.quality_page, window.settings_page)):
         window._navigate_workflow_target(index)
