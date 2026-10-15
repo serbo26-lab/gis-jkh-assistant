@@ -32,6 +32,11 @@ function fixture(options = {}) {
     if (url.includes("/managements/versions/")) return {data: contractDto};
     if (url.includes("/protocol/search-lite")) return {data: {items: state.protocols, total: state.protocols.length}};
     if (url.startsWith(base + "/search;")) return {data: {items: state.records, totalCount: state.records.length}};
+    if (url === base + "/" && ["POST", "PUT"].includes(method) && options.periodValidationError) {
+      const data = {title: "LogicValidationException", details: {
+        logicExceptionType: "MP_NOT_CORRESPOND_MANAGEMENT_AGR_PERIOD", type: "MP_NOT_CORRESPOND_MANAGEMENT_AGR_PERIOD"}};
+      throw {status: 400, data: options.rawValidationError ? JSON.stringify(data) : data};
+    }
     if (url === base + "/" && method === "POST") {
       assert.equal(config.transformResponse[0]("fee-root"), "fee-root",
         "a bare UUID advertised as JSON must bypass Angular's default JSON parser");
@@ -272,3 +277,46 @@ test("an unchanged already-published amendment does not create a redundant draft
   assert.equal(writes(f.calls).length, 0);
   assert.equal(f.calls.filter(call => call.url === base + "/fee-root").length, 1);
 });
+
+for (const editing of [false, true]) {
+  test(`rejects a ${editing ? "published amendment" : "new tariff"} before management starts, as recorded in the boundary HAR`, async () => {
+    // Cached contract says January; fresh GIS metadata says July. The helper
+    // must enforce the fresh boundary without sending a fee POST/PUT.
+    const f = fixture({contract: {effectiveDate: "01.07.2020"},
+      records: editing ? [remote({status: "APPROVED"})] : []});
+    const before = JSON.stringify(f.state.records);
+    const reply = await f.run("save_management_fee_project", {
+      document: {...document, start: editing ? "2020-06-01" : "2020-01-01",
+        end: editing ? "2021-06-30" : "2020-02-01"},
+      ...(editing ? {remoteGuid: "fee-root", lastUpdate: "revision-1"} : {})});
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /срок управления/);
+    assert.match(reply.error, /01\.07\.2020/);
+    assert.equal(writes(f.calls).length, 0);
+    assert.equal(JSON.stringify(f.state.records), before);
+  });
+}
+
+test("accepts the exact first day of management without shifting the tariff's day precision", async () => {
+  const f = fixture({contract: {effectiveDate: "01.07.2020"}});
+  const reply = await f.run("save_management_fee_project", {document: {...document, start: "2020-07-01", end: "2021-06-30"}});
+  assert.equal(reply.ok, true, reply.error);
+  assert.deepEqual(writes(f.calls)[0].data.period, {from: "01.07.2020", to: "30.06.2021"});
+});
+
+for (const editing of [false, true]) {
+  for (const raw of [false, true]) {
+    test(`explains the recorded HTTP400 period rejection for ${editing ? "PUT" : "POST"} with ${raw ? "raw" : "parsed"} JSON`, async () => {
+      const f = fixture({periodValidationError: true, rawValidationError: raw,
+        records: editing ? [remote({status: "APPROVED", managementPayment: "14.00"})] : []});
+      const before = JSON.stringify(f.state.records);
+      const reply = await f.run("save_management_fee_project", editing ? {remoteGuid: "fee-root", lastUpdate: "revision-1"} : {});
+      assert.equal(reply.ok, false);
+      assert.match(reply.error, /ГИС отклонила период платы/);
+      assert.match(reply.error, /Обновите сведения о договоре/);
+      assert.doesNotMatch(reply.error, /MP_NOT_CORRESPOND|LogicValidationException/);
+      assert.equal(writes(f.calls).length, 1);
+      assert.equal(JSON.stringify(f.state.records), before);
+    });
+  }
+}

@@ -46,7 +46,13 @@ def validate_document(document):
         value = contract.get(key)
         if value and ((key == "from" and boundary < date.fromisoformat(value))
                       or (key == "to" and boundary > date.fromisoformat(value))):
-            raise ValueError("Период платы выходит за срок управления домом по выбранному договору.")
+            def label(iso):
+                return date.fromisoformat(iso).strftime("%d.%m.%Y") if iso else "не указано"
+            raise ValueError(
+                f"Период платы {label(document['start'])} — {label(document['end'])} "
+                "выходит за срок управления домом по выбранному договору: "
+                f"{label(contract.get('from'))} — {label(contract.get('to'))}. Проверьте даты."
+            )
     protocol = document.get("protocol") or {}
     if not protocol.get("votingGuid") or not protocol.get("votingVersionGuid"):
         raise ValueError("Выберите протокол из ГИС. Без основания нельзя сохранить проект в ГИС.")

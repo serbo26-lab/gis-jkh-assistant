@@ -304,6 +304,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 async function runGisCommand(command) {
   function readableError(error) {
     const data = error?.data;
+    let validationData = data;
+    if (typeof validationData === "string") {
+      try { validationData = JSON.parse(validationData); } catch (_) { /* Plain-text error response. */ }
+    }
+    const logicType = validationData?.details?.logicExceptionType || validationData?.details?.type;
+    if (error?.status === 400 && logicType === "MP_NOT_CORRESPOND_MANAGEMENT_AGR_PERIOD") {
+      return "ГИС отклонила период платы: он не соответствует сроку управления домом по договору. " +
+        "Обновите сведения о договоре и проверьте даты начала и окончания платы.";
+    }
     const candidates = [
       data?.message,
       data?.error,
@@ -2570,8 +2579,12 @@ async function runGisCommand(command) {
       if (type === "save_management_fee_project") {
         desired.amount = feeAmount(desired.amount);
         desired.start = feeDate(desired.start); desired.end = feeDate(desired.end);
-        if (desired.start > desired.end || (contract.from && desired.start < contract.from) ||
-            (contract.to && desired.end > contract.to)) throw new Error("Период платы выходит за срок управления домом.");
+        if (desired.start > desired.end) throw new Error("Окончание периода платы не может быть раньше начала.");
+        if ((contract.from && desired.start < contract.from) || (contract.to && desired.end > contract.to)) {
+          throw new Error(`Период платы ${feeLocalDate(desired.start)} — ${feeLocalDate(desired.end)} ` +
+            `выходит за срок управления домом по договору: ${contract.from ? feeLocalDate(contract.from) : "не указано"} — ` +
+            `${contract.to ? feeLocalDate(contract.to) : "не указано"}. Обновите сведения о договоре и проверьте даты.`);
+        }
         const protocols = await feeProtocols(payload, contract);
         const protocol = protocols.find(item => item.votingGuid === desired.protocol?.votingGuid &&
           item.votingVersionGuid === desired.protocol?.votingVersionGuid &&

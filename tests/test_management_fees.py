@@ -68,6 +68,17 @@ def test_basis_is_required_only_for_remote_workflow(store):
     assert not helper_supports_fees("1.0")
 
 
+@pytest.mark.parametrize("period", [("2020-06-01", "2021-06-30"), ("2020-01-01", "2020-02-01")])
+def test_recorded_periods_before_management_are_rejected_with_readable_boundaries(period):
+    contract = dict(CONTRACT, **{"from": "2020-07-01", "to": "2027-06-30"})
+    with pytest.raises(ValueError) as exc:
+        validate_document(dict(DOCUMENT, contract=contract, start=period[0], end=period[1]))
+    assert "01.07.2020 — 30.06.2027" in str(exc.value)
+    assert "Проверьте даты" in str(exc.value)
+    valid = dict(DOCUMENT, contract=contract, start="2020-07-01", end="2021-06-30")
+    assert validate_document(valid)["start"] == "2020-07-01"
+
+
 def test_import_is_atomic_and_preserves_local_tariffs_and_history(store):
     fee_store, house_id = store
     repo = fee_store.repository
@@ -195,6 +206,38 @@ def fee_page(desktop, monkeypatch):
     page.store.import_remote(desktop.house.id, context())
     page._refresh_table()
     return page
+
+
+@pytest.mark.parametrize("editing", [False, True])
+def test_invalid_management_period_keeps_local_input_and_never_starts_exchange(desktop, monkeypatch, editing):
+    page = fee_page(desktop, monkeypatch)
+    contract = dict(CONTRACT, **{"from": "2020-07-01", "to": "2027-06-30"})
+    page.store.save_context(desktop.house.id, {"contracts": [contract], "protocols": [PROTOCOL]})
+    if editing:
+        loaded = context(remote(status="APPROVED"))
+        loaded["contracts"] = [contract]
+        page.store.import_remote(desktop.house.id, loaded)
+        page._refresh_table()
+        page.edit_button.click()
+    else:
+        record_id = page.store.save_local(desktop.house.id, dict(DOCUMENT, contract=contract))
+        page._refresh_table(record_id)
+    record_id = page._record_id
+    before = page._record()["remote"]
+    page.start_edit.setDate(QDate(2020, 6, 1))
+    page.end_edit.setDate(QDate(2021, 6, 30))
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: messages.append(a[2]))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(management_fees_page, "GisIntegrationWorker",
+                        lambda *a, **kw: pytest.fail("Invalid local dates must not start a worker"))
+    page._send("save_management_fee_project")
+    assert "01.07.2020 — 30.06.2027" in messages[0]
+    assert page.start_edit.date() == QDate(2020, 6, 1)
+    assert page.store.get(record_id)["document"]["start"] == "2020-06-01"
+    assert page.store.get(record_id)["remote"] == before
+    assert not page.store.get(record_id)["pending"]
+    assert page._worker is None
 
 
 def test_fee_section_preserves_shared_work_list_and_year(desktop, monkeypatch):
