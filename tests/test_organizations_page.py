@@ -18,8 +18,8 @@ qt_app = workflows.qt_app
 def test_sections_and_direct_organization_commands(desktop):
     window = desktop.window
     assert [window.navigation.item(i).text() for i in range(window.navigation.count())] == [
-        "УО", "Дома", "Информация о размере платы", "Перечни работ и услуг", "Планирование",
-        "Фиксация работ и услуг", "Оценка качества", "Настройки",
+        "УО", "Дома", "Перечни работ и услуг", "Планирование",
+        "Фиксация работ и услуг", "Оценка качества", "Информация о размере платы", "Настройки",
     ]
     page = window.organizations_page
     assert window.pages.currentWidget() is page
@@ -104,7 +104,7 @@ def test_entering_uo_applies_shared_selection_deferred_while_houses_were_busy(de
     other = repo.create_organization(name="Другая вымышленная УО", ogrn="1022600000541")
     repo.create_house(organization_id=other.id, address="Вымышленная улица, 2")
     window.houses_page.refresh_organizations()
-    window.navigation.setCurrentRow(3)
+    window.navigation.setCurrentRow(2)
     window.houses_page._workflow_busy = True
     window.work_lists_page.refresh_organizations()
     combo = window.work_lists_page.organization_combo
