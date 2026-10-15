@@ -1,0 +1,216 @@
+"""Local tariff-derived fee projects and reviewed, house-scoped queue entries."""
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+import json
+
+from .acceptance_act_details import iso_date
+from .management_fees import amount_text, validate_document
+
+
+@dataclass
+class FeeCandidate:
+    house_id: str
+    address: str
+    tariff_id: str
+    document: dict
+    detail: str = ""
+    blocked: bool = False
+
+    @property
+    def key(self):
+        return (self.house_id, self.tariff_id, self.document["start"], self.document["end"])
+
+
+def _date(value):
+    return date.fromisoformat(iso_date(value)) if value else None
+
+
+def protocol_applies(protocol, fias):
+    return bool(protocol and protocol.get("eligible") and not protocol.get("cancelled")
+                and protocol.get("votingGuid") and protocol.get("votingVersionGuid")
+                and fias and fias in protocol.get("fiasHouseCodes", []))
+
+
+def available_protocols(repository, store, organization_id, house_ids):
+    """Merge only identical GIS identities, never protocols with equal labels."""
+    values = {}
+    for house_id in house_ids:
+        house = repository.get_house(house_id)
+        if not house or house.organization_id != organization_id:
+            raise ValueError("Дом не относится к выбранной УО.")
+        for item in store.context(house_id)["protocols"]:
+            if not protocol_applies(item, house.fias_house_guid):
+                continue
+            key = (item["votingGuid"], item["votingVersionGuid"])
+            if key not in values:
+                values[key] = deepcopy(item)
+            else:
+                values[key]["fiasHouseCodes"] = sorted(set(values[key]["fiasHouseCodes"]) | set(item["fiasHouseCodes"]))
+    return list(values.values())
+
+
+def _overlap_reason(store, house_id, start, end):
+    for record in store.list(house_id):
+        document = record["document"]
+        try:
+            old_start, old_end = _date(document.get("start")), _date(document.get("end"))
+        except ValueError:
+            return "Сначала проверьте существующий проект с некорректным периодом."
+        if old_start is None or old_end is None:
+            return "Уже есть незаполненный проект. Проверьте его перед повторным формированием."
+        if old_start <= end and start <= old_end:
+            return "Уже есть проект или сведения за пересекающийся период. Существующая запись сохранена."
+    return ""
+
+
+def prepare_candidates(repository, store, organization_id, house_ids, start, end, protocol=None):
+    if end < start:
+        raise ValueError("Окончание периода не может быть раньше начала.")
+    candidates = []
+    for house_id in dict.fromkeys(house_ids):
+        house = repository.get_house(house_id)
+        if not house or house.organization_id != organization_id:
+            raise ValueError("Дом не относится к выбранной УО.")
+        lower, upper = start, end
+        management_start, management_end = _date(house.management_start_date), _date(house.management_end_date)
+        if management_start:
+            lower = max(lower, management_start)
+        if management_end:
+            if management_end <= lower:
+                continue
+            upper = min(upper, management_end - timedelta(days=1))
+        contracts = [item for item in store.context(house_id)["contracts"]
+                     if item.get("fiasHouseGuid") == house.fias_house_guid]
+        for tariff in repository.list_house_tariffs(house_id):
+            first = max(lower, tariff.effective_from_date)
+            last = min(upper, tariff.effective_to_date or upper)
+            if first > last:
+                continue
+            boundaries = {first, last + timedelta(days=1)} if last < date.max else {first}
+            for contract in contracts:
+                for value, increment in ((contract.get("from"), False), (contract.get("to"), True)):
+                    boundary = _date(value)
+                    if boundary == date.max and increment:
+                        continue
+                    if boundary and increment and boundary < date.max:
+                        boundary += timedelta(days=1)
+                    if boundary and first < boundary <= last:
+                        boundaries.add(boundary)
+            points = sorted(boundaries)
+            for index, begin in enumerate(points):
+                if begin > last:
+                    continue
+                finish = points[index + 1] - timedelta(days=1) if index + 1 < len(points) else last
+                matches = [item for item in contracts
+                           if (not item.get("from") or _date(item["from"]) <= begin)
+                           and (not item.get("to") or _date(item["to"]) >= finish)]
+                contract = deepcopy(matches[0]) if len(matches) == 1 else None
+                selected_protocol = deepcopy(protocol) if protocol_applies(protocol, house.fias_house_guid) else None
+                amount_error = ""
+                try:
+                    amount = amount_text(tariff.amount)
+                except ValueError as exc:
+                    amount, amount_error = tariff.amount, str(exc)
+                document = {"amount": amount, "start": begin.isoformat(),
+                            "end": finish.isoformat(), "contract": contract, "protocol": selected_protocol}
+                reason = _overlap_reason(store, house_id, begin, finish) or amount_error
+                warnings = []
+                if not contract:
+                    warnings.append("Выберите договор" if matches else "Загрузите договоры из ГИС или выберите договор")
+                if not selected_protocol:
+                    warnings.append("Выберите протокол для этого дома")
+                if contract and selected_protocol:
+                    try:
+                        validate_document(document)
+                    except ValueError as exc:
+                        warnings.append(str(exc))
+                candidates.append(FeeCandidate(house_id, house.address, tariff.id, document,
+                                               reason or "; ".join(warnings) or "Готов к сохранению в ГИС", bool(reason)))
+    return candidates
+
+
+def create_projects(repository, store, organization_id, house_ids, start, end, protocol, selected_candidates):
+    """Recheck live data and create the reviewed selection in one transaction."""
+    created = []
+    with repository.connection.atomic():
+        candidates = {item.key: item for item in prepare_candidates(
+            repository, store, organization_id, house_ids, start, end, protocol)}
+        seen = set()
+        for reviewed in selected_candidates:
+            candidate = candidates.get(reviewed.key)
+            if (candidate is None or candidate.blocked or candidate.document != reviewed.document
+                    or reviewed.key in seen):
+                raise ValueError("Тарифы или проекты изменились. Обновите предварительный просмотр.")
+            seen.add(reviewed.key)
+            record_id = store.save_local(candidate.house_id, candidate.document)
+            created.append((candidate.house_id, record_id))
+    return created
+
+
+def record_signature(record):
+    return json.dumps((record["document"], record["remote_guid"],
+                       (record["remote"] or {}).get("lastUpdate")), sort_keys=True, ensure_ascii=False)
+
+
+def transfer_reason(repository, record, organization_id, action):
+    house = repository.get_house(record["house_id"])
+    if not house or house.organization_id != organization_id:
+        return "Дом не относится к выбранной УО."
+    if not house.fias_house_guid:
+        return "Загрузите код ФИАС дома из ГИС."
+    if record["pending"]:
+        return "Результат прежней отправки не установлен. Сначала загрузите сведения из ГИС."
+    remote = record["remote"] or {}
+    if remote and remote.get("status") != "DRAFT":
+        return "Массовая отправка работает только с проектами; размещённые и аннулированные записи пропускаются."
+    if remote and (remote.get("hasOtherDetails") or remote.get("type") != "BY_PROTOCOL"
+                   or not remote.get("protocolFromVoting") or len(remote.get("ownerVotingList") or []) != 1):
+        return "Основание этой записи доступно только для просмотра."
+    if action == "approve" and (not remote or record["dirty"]):
+        return "Сначала сохраните проект и локальные правки в ГИС."
+    if action == "save" and remote and not record["dirty"]:
+        return "Проект уже сохранён в ГИС без локальных правок."
+    try:
+        document = validate_document(record["document"])
+        if document["contract"]["fiasHouseGuid"] != house.fias_house_guid:
+            return "Договор относится к другому дому."
+    except (ValueError, KeyError, TypeError) as exc:
+        return str(exc)
+    return ""
+
+
+@dataclass
+class FeeJob:
+    organization_id: str
+    house_id: str
+    address: str
+    action: str
+    record_id: str | None = None
+    document: dict = field(default_factory=dict)
+    signature: str = ""
+    state: str = "ready"
+    detail: str = ""
+    fias: str | None = None
+    unresolved: int = 0
+
+
+def prepare_jobs(repository, store, organization_id, house_ids, action):
+    if action not in {"load", "save", "approve"}:
+        raise ValueError("Неизвестная операция с проектами платы.")
+    jobs = []
+    for house_id in dict.fromkeys(house_ids):
+        house = repository.get_house(house_id)
+        if not house or house.organization_id != organization_id:
+            raise ValueError("Дом не относится к выбранной УО.")
+        if action == "load":
+            reason = "Загрузите код ФИАС дома." if not house.fias_house_guid else ""
+            jobs.append(FeeJob(organization_id, house.id, house.address, action,
+                               state="blocked" if reason else "ready", detail=reason, fias=house.fias_house_guid))
+            continue
+        for record in store.list(house_id):
+            reason = transfer_reason(repository, record, organization_id, action)
+            jobs.append(FeeJob(organization_id, house.id, house.address, action, record["id"],
+                               deepcopy(record["document"]), record_signature(record),
+                               "blocked" if reason else "ready", reason, house.fias_house_guid))
+    return jobs
