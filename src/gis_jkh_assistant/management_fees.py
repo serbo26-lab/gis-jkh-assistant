@@ -141,7 +141,10 @@ class ManagementFeeStore:
             old = self.get(record_id)
             if not old or old["house_id"] != house_id:
                 raise ValueError("Проект относится к другому дому.")
-            if old["pending"] or (old["remote"] and old["remote"]["status"] != "DRAFT"):
+            remote = old["remote"]
+            editable = (not remote or remote["status"] == "DRAFT"
+                        or (remote["status"] == "APPROVED" and old["dirty"]))
+            if old["pending"] or not editable:
                 raise ValueError("Этот документ нельзя редактировать.")
             with self.connection:
                 self.connection.execute("UPDATE management_fee_records SET document=?,dirty=1 WHERE id=?",
@@ -152,6 +155,23 @@ class ManagementFeeStore:
                 self.connection.execute("INSERT INTO management_fee_records(id,house_id,document) VALUES (?,?,?)",
                                         (record_id, house_id, json.dumps(document, ensure_ascii=False)))
         return record_id
+
+    def begin_published_edit(self, record_id):
+        """An explicit local amendment, retaining the published optimistic-lock snapshot."""
+        row = self.get(record_id)
+        remote = row["remote"] if row else None
+        if (not remote or remote["status"] != "APPROVED" or row["pending"]
+                or remote.get("hasOtherDetails") or remote.get("type") != "BY_PROTOCOL"
+                or not remote.get("protocolFromVoting") or len(remote.get("ownerVotingList") or []) != 1):
+            raise ValueError("Изменять можно только размещённые сведения с поддерживаемым основанием. Аннулированные сведения недоступны для изменения.")
+        with self.connection:
+            self.connection.execute("UPDATE management_fee_records SET dirty=1 WHERE id=?", (record_id,))
+
+    def discard_local_edits(self, record_id):
+        row = self.get(record_id)
+        if not row or not row["remote"] or row["pending"]:
+            raise ValueError("Сначала проверьте результат отправки в ГИС.")
+        self.apply_remote(record_id, row["remote"], row["document"]["contract"])
 
     def mark_pending(self, record_id):
         with self.connection:
@@ -165,6 +185,11 @@ class ManagementFeeStore:
                 or house.fias_house_guid != contract.get("fiasHouseGuid")
                 or not remote.get("guid") or remote.get("status") not in STATUSES):
             raise ValueError("Ответ ГИС не соответствует выбранному дому или договору.")
+        if row["remote_guid"] and row["remote_guid"] != remote["guid"]:
+            raise ValueError("Ответ ГИС относится к другой записи о плате.")
+        previous = row["remote"] or {}
+        if previous.get("status") == "TERMINATED" and remote.get("status") != "TERMINATED":
+            raise ValueError("Аннулированная запись не может быть восстановлена. Загрузите актуальное состояние из ГИС.")
         document = document_from_remote(remote, contract)
         with self.connection:
             # A refresh may already have cached the result of an uncertain create.
@@ -180,6 +205,7 @@ class ManagementFeeStore:
     def import_remote(self, house_id, context):
         """Atomic refresh; do not overwrite local edits or forget vanished/history records."""
         contracts = {(c["versionGuid"], c["objectRootGuid"]): c for c in context["contracts"]}
+        preserved = 0
         with self.connection.atomic():
             self.save_context(house_id, {"contracts": context["contracts"], "protocols": context["protocols"]})
             for envelope in context["records"]:
@@ -188,6 +214,13 @@ class ManagementFeeStore:
                 if contract is None:
                     raise ValueError("Ответ ГИС не соответствует выбранному дому или договору.")
                 existing = next((r for r in self.list(house_id) if r["remote_guid"] == remote["guid"]), None)
+                if existing and existing["dirty"] and remote.get("status") == "TERMINATED":
+                    # Annulment is terminal. Keep unsent edits as a separate local
+                    # project, never as a way to restore the annulled document.
+                    self.save_local(house_id, existing["document"])
+                    self.apply_remote(existing["id"], remote, contract)
+                    preserved += 1
+                    continue
                 if existing and existing["dirty"]:
                     # A rejected/uncertain update must not discard the user's edited form.
                     if not existing["pending"] or fingerprint(existing["document"]) != fingerprint(document_from_remote(remote, contract)):
@@ -204,6 +237,7 @@ class ManagementFeeStore:
                     existing = candidates[0] if len(candidates) == 1 and len(matches) == 1 else None
                 record_id = existing["id"] if existing else self.save_local(house_id, {})
                 self.apply_remote(record_id, remote, contract)
+        return preserved
 
     def delete_local(self, record_id):
         row = self.get(record_id)

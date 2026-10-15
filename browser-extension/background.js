@@ -2543,6 +2543,19 @@ async function runGisCommand(command) {
     }
     async function feeCommand(payload, type) {
       if (!payload.organizationContext?.ogrn) throw new Error("Выберите УО перед обменом сведениями о плате.");
+      if (type === "save_and_approve_management_fee") {
+        // The GIS UI's direct-placement action is also save -> read -> approval.
+        // These are two server operations, not one atomic mutation.
+        const saved = await feeCommand(payload, "save_management_fee_project");
+        if (saved.record.status === "APPROVED") return saved;
+        try {
+          return await feeCommand({...payload, contract: saved.contract,
+            remoteGuid: saved.record.guid, lastUpdate: saved.record.lastUpdate}, "approve_management_fee");
+        } catch (error) {
+          throw new Error("Проект сохранён в ГИС. Размещение не подтверждено. " +
+            (error?.message || error?.data?.message || "Загрузите сведения и проверьте состояние проекта."));
+        }
+      }
       if (type === "load_management_fees") {
         const contracts = await feeContracts(payload), records = [];
         for (const contract of contracts) {
@@ -2570,7 +2583,7 @@ async function runGisCommand(command) {
           if (feeMatches(current, desired) && ["DRAFT", "APPROVED"].includes(current.status)) {
             return {record: normalizeFee(current), contract};
           }
-          if (current.status !== "DRAFT" || !current.lastUpdate || current.lastUpdate !== payload.lastUpdate ||
+          if (!["DRAFT", "APPROVED"].includes(current.status) || !current.lastUpdate || current.lastUpdate !== payload.lastUpdate ||
               current.type !== "BY_PROTOCOL" || current.protocolFromVoting !== true ||
               current.ownerVotingGuidList?.length !== 1 || normalizeFee(current).hasOtherDetails) {
             throw new Error("Проект изменён в ГИС или использует другой способ выбора основания. Загрузите актуальные сведения.");
@@ -2582,7 +2595,8 @@ async function runGisCommand(command) {
           if (existing.length) throw new Error("За этот период уже есть сведения в ГИС. Загрузите их перед повторным сохранением.");
         }
         const body = {...(current || {}), agreementRootGuid: contract.guid,
-          agreementType: "MANAGEMENT", type: "BY_PROTOCOL", status: "DRAFT",
+          // Recorded PUT keeps APPROVED in the request. GIS creates DRAFT v+1.
+          agreementType: "MANAGEMENT", type: "BY_PROTOCOL", status: current?.status || "DRAFT",
           versionInfo: current?.versionInfo || {versionNumber: "1", versionDateTime:
             `${String(new Date().getDate()).padStart(2, "0")}.${String(new Date().getMonth() + 1).padStart(2, "0")}.${new Date().getFullYear()}`},
           period: {from: feeLocalDate(desired.start), to: feeLocalDate(desired.end)},
@@ -2603,7 +2617,13 @@ async function runGisCommand(command) {
       }
       const current = await feeDetails(payload.remoteGuid, contract);
       if (type === "approve_management_fee") {
-        if (current.status === "APPROVED") return {record: normalizeFee(current), contract};
+        if (current.status === "APPROVED") {
+          if (!feeMatches(current, {...desired, amount: feeAmount(desired.amount),
+              start: feeDate(desired.start), end: feeDate(desired.end)})) {
+            throw new Error("Размещённые сведения не совпадают с изменениями. Сначала сохраните проект новой версии.");
+          }
+          return {record: normalizeFee(current), contract};
+        }
         if (current.status !== "DRAFT" || !current.lastUpdate || current.lastUpdate !== payload.lastUpdate) {
           throw new Error("Состояние проекта изменилось в ГИС. Загрузите сведения перед размещением.");
         }
@@ -2641,7 +2661,7 @@ async function runGisCommand(command) {
     // may have happened after discovery. Writes are also checked by request().
     await assertOrganization();
 
-    if (["load_management_fees", "load_fee_protocols", "save_management_fee_project",
+    if (["load_management_fees", "load_fee_protocols", "save_management_fee_project", "save_and_approve_management_fee",
          "approve_management_fee", "annul_management_fee"].includes(command.type)) {
       return {ok: true, result: await feeCommand(command.payload || {}, command.type)};
     }

@@ -40,10 +40,14 @@ function fixture(options = {}) {
       return {data: "fee-root"}; // The recorded server returns a bare UUID, not an object.
     }
     if (url === base + "/" && method === "PUT") {
-      state.records[0] = remote({...config.data, lastUpdate: "updated"});
+      if (options.updateError) throw new Error("TEST update rejected");
+      const wasPublished = state.records[0].status === "APPROVED";
+      state.records[0] = remote({...config.data, status: "DRAFT", lastUpdate: "updated",
+        versionInfo: wasPublished ? {guid: "fee-version-2", versionNumber: 2} : config.data.versionInfo});
       return {data: ""};
     }
     if (url === base + "/approval") {
+      if (options.approvalError) throw new Error("TEST approval rejected");
       if (!options.unconfirmed) state.records[0].status = "APPROVED";
       return {data: ""};
     }
@@ -175,4 +179,96 @@ test("does not erase detailed fee breakdowns while updating a simplified project
   assert.equal(reply.ok, false);
   assert.equal(writes(f.calls).length, 0);
   assert.equal(f.state.records[0].managementWorkPaymentInfo[0].test, "keep");
+});
+
+test("published amendment uses PUT with the published snapshot, keeps the basis, and reads back a new DRAFT version", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", managementPayment: "14.00"})]});
+  const reply = await f.run("save_management_fee_project", {remoteGuid: "fee-root", lastUpdate: "revision-1"});
+  assert.equal(reply.ok, true, reply.error);
+  const sent = writes(f.calls);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].method, "PUT");
+  assert.equal(sent[0].data.status, "APPROVED");
+  assert.equal(sent[0].data.guid, "fee-root");
+  assert.deepEqual(sent[0].data.ownerVotingGuidList, [protocol.votingGuid]);
+  assert.equal(reply.result.record.status, "DRAFT");
+  assert.equal(reply.result.record.guid, "fee-root");
+  assert.equal(reply.result.record.versionInfo.guid, "fee-version-2");
+});
+
+test("save-and-place executes update, reads its new lastUpdate, then approval; retains day dates and protocol", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", managementPayment: "14.00"})]});
+  const edited = {...document, start: "2021-07-01", end: "2022-06-30"};
+  const reply = await f.run("save_and_approve_management_fee", {remoteGuid: "fee-root", lastUpdate: "revision-1", document: edited});
+  assert.equal(reply.ok, true, reply.error);
+  const sent = writes(f.calls);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].url, base + "/");
+  assert.equal(sent[1].url, base + "/approval");
+  assert.deepEqual(sent[0].data.period, {from: "01.07.2021", to: "30.06.2022"});
+  assert.deepEqual(sent[1].data, {entityGuid: "fee-root", lastUpdate: "updated"});
+  assert.equal(reply.result.record.status, "APPROVED");
+  assert.equal(reply.result.record.versionInfo.versionNumber, 2);
+  assert.equal(reply.result.record.ownerVotingList[0].votingGuid, protocol.votingGuid);
+  assert.equal(reply.result.record.ownerVotingList[0].votingVersionGuid, protocol.votingVersionGuid);
+});
+
+test("direct placement of a new project performs create and approval without a second create", async () => {
+  const f = fixture();
+  const reply = await f.run("save_and_approve_management_fee");
+  assert.equal(reply.ok, true, reply.error);
+  assert.deepEqual(writes(f.calls).map(call => call.url), [base + "/", base + "/approval"]);
+  assert.equal(reply.result.record.status, "APPROVED");
+});
+
+test("direct placement reports the saved draft when approval fails", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", managementPayment: "14.00"})], approvalError: true});
+  const reply = await f.run("save_and_approve_management_fee", {remoteGuid: "fee-root", lastUpdate: "revision-1"});
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /Проект сохранён в ГИС\. Размещение не подтверждено/);
+  assert.equal(f.state.records[0].status, "DRAFT");
+  assert.equal(f.state.records[0].managementPayment, "15.12");
+});
+
+test("failed update does not proceed to approval", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", managementPayment: "14.00"})], updateError: true});
+  const reply = await f.run("save_and_approve_management_fee", {remoteGuid: "fee-root", lastUpdate: "revision-1"});
+  assert.equal(reply.ok, false);
+  assert.equal(writes(f.calls).length, 1);
+  assert.equal(f.state.records[0].status, "APPROVED");
+  assert.equal(f.state.records[0].managementPayment, "14.00");
+});
+
+for (const type of ["save_management_fee_project", "approve_management_fee", "save_and_approve_management_fee"]) {
+  test(`annulled records cannot be changed or restored by ${type}`, async () => {
+    const f = fixture({records: [remote({status: "TERMINATED"})]});
+    const before = JSON.stringify(f.state.records);
+    const reply = await f.run(type, {remoteGuid: "fee-root", lastUpdate: "revision-1"});
+    assert.equal(reply.ok, false);
+    assert.equal(writes(f.calls).length, 0);
+    assert.equal(JSON.stringify(f.state.records), before);
+  });
+}
+
+test("approval cannot report unsaved changes as placed merely because an older version is APPROVED", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", managementPayment: "14.00"})]});
+  const reply = await f.run("approve_management_fee", {remoteGuid: "fee-root", lastUpdate: "revision-1"});
+  assert.equal(reply.ok, false);
+  assert.equal(writes(f.calls).length, 0);
+});
+
+test("dates keep explicit days rather than being rounded to month boundaries", async () => {
+  const f = fixture();
+  const reply = await f.run("save_management_fee_project", {document: {...document, start: "2024-07-12", end: "2025-06-18"}});
+  assert.equal(reply.ok, true, reply.error);
+  assert.deepEqual(writes(f.calls)[0].data.period, {from: "12.07.2024", to: "18.06.2025"});
+});
+
+test("an unchanged already-published amendment does not create a redundant draft or call approval", async () => {
+  const f = fixture({records: [remote({status: "APPROVED"})]});
+  const reply = await f.run("save_and_approve_management_fee", {remoteGuid: "fee-root", lastUpdate: "revision-1"});
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(reply.result.record.status, "APPROVED");
+  assert.equal(writes(f.calls).length, 0);
+  assert.equal(f.calls.filter(call => call.url === base + "/fee-root").length, 1);
 });

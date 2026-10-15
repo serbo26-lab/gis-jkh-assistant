@@ -124,13 +124,16 @@ class ManagementFeesPage(QWidget):
         self.state_text.setWordWrap(True)
         self.editor.body.addWidget(self.state_text)
         commands = ActionFlowLayout()
+        self.edit_button = QPushButton("Изменить…")
+        self.cancel_edit_button = QPushButton("Отменить локальные правки…")
         self.local_button = QPushButton("Сохранить локально")
         self.save_button = QPushButton("Сохранить проект в ГИС")
         self.approve_button = QPushButton("Разместить…")
         self.annul_button = QPushButton("Аннулировать сведения…")
         self.approve_button.setObjectName("PrimaryButton")
         style_danger_button(self.annul_button)
-        for button, name in ((self.local_button, "check"), (self.save_button, "upload"),
+        for button, name in ((self.edit_button, "edit"), (self.cancel_edit_button, "edit"),
+                             (self.local_button, "check"), (self.save_button, "upload"),
                              (self.approve_button, "upload"), (self.annul_button, "danger")):
             set_button_icon(button, name)
             commands.addWidget(button)
@@ -157,6 +160,8 @@ class ManagementFeesPage(QWidget):
         self.new_button.clicked.connect(self._new)
         self.delete_button.clicked.connect(self._delete)
         self.local_button.clicked.connect(self.flush_pending_changes)
+        self.edit_button.clicked.connect(self._begin_edit)
+        self.cancel_edit_button.clicked.connect(self._cancel_edit)
         self.protocol_button.clicked.connect(self._choose_protocol)
         self.refresh_protocols_button.clicked.connect(self._load_protocols)
         self.save_button.clicked.connect(lambda: self._send("save_management_fee_project"))
@@ -399,10 +404,12 @@ class ManagementFeesPage(QWidget):
 
     def _loaded(self, result):
         selected = self._record_id
-        self.store.import_remote(self._house_id, result)
+        preserved = self.store.import_remote(self._house_id, result)
         self._refresh_table(selected)
         pending = any(row["pending"] for row in self.store.list(self._house_id))
         message = f"Загружено договоров: {len(result['contracts'])}, сведений о плате: {len(result['records'])}, протоколов: {len(result['protocols'])}."
+        if preserved:
+            message += f" Локальные правки аннулированных сведений сохранены отдельными локальными проектами: {preserved}."
         if pending:
             message += " Результат прежней отправки ещё не установлен. Проверьте сведения в личном кабинете; повторная отправка заблокирована."
         self.operation_status.outcome(message, tone="warning" if pending else "success")
@@ -418,13 +425,15 @@ class ManagementFeesPage(QWidget):
         self._run("load_fee_protocols", self._payload(), loaded)
 
     def _send(self, command):
-        if not self.flush_pending_changes():
+        if self._integration_busy or not self.flush_pending_changes():
             return
         record = self._record()
         if not record or record["pending"]:
             return
         payload = self._payload()
         remote = record["remote"] or {}
+        if command == "approve_management_fee" and (not remote or record["dirty"]):
+            command = "save_and_approve_management_fee"
         payload.update(remoteGuid=record["remote_guid"], lastUpdate=remote.get("lastUpdate"))
         try:
             document = validate_document(record["document"])
@@ -433,6 +442,7 @@ class ManagementFeesPage(QWidget):
             return
         payload["document"] = document
         titles = {"save_management_fee_project": "Сохранить проект в ГИС?",
+                  "save_and_approve_management_fee": "Сохранить и разместить сведения о плате в ГИС?",
                   "approve_management_fee": "Разместить сведения о плате в ГИС?",
                   "annul_management_fee": "Аннулировать сведения о плате в ГИС?"}
         if command == "annul_management_fee":
@@ -445,6 +455,10 @@ class ManagementFeesPage(QWidget):
                 f"Размер платы: {document['amount']} руб./м² в месяц\nОснование: {protocol_label(document['protocol'])}")
         if payload.get("reason"):
             text += "\nПричина: " + payload["reason"]
+        if command == "save_and_approve_management_fee":
+            text += "\n\nПрограмма сохранит изменения в проекте, затем разместит его. Если второй этап не завершится, сохранённый проект останется в ГИС."
+        elif command == "save_management_fee_project" and remote.get("status") == "APPROVED":
+            text += "\n\nГИС сохранит изменения как проект новой версии. Для размещения потребуется отдельное действие."
         if QMessageBox.question(self, titles[command], text, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
@@ -459,8 +473,36 @@ class ManagementFeesPage(QWidget):
             self.store.apply_remote(record_id, result["record"], result["contract"])
             self._refresh_table(record_id)
             state = STATUSES[result["record"]["status"]]
-            self.operation_status.outcome(f"ГИС подтвердила: {state.lower()}.", tone="success")
+            message = f"ГИС подтвердила: {state.lower()}."
+            if command == "save_management_fee_project" and result["record"]["status"] == "APPROVED":
+                message = "Изменений нет: данные совпадают с размещёнными сведениями."
+            self.operation_status.outcome(message, tone="success")
         self._run(command, payload, applied)
+
+    def _begin_edit(self):
+        if not self.flush_pending_changes():
+            return
+        try:
+            self.store.begin_published_edit(self._record_id)
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось начать изменение", str(exc))
+            return
+        self._show_record()
+        self.amount_edit.setFocus()
+
+    def _cancel_edit(self):
+        if QMessageBox.question(self, "Отменить локальные правки?",
+                                "В форме будут восстановлены данные последней загрузки. Сведения в ГИС не изменятся.",
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.store.discard_local_edits(self._record_id)
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            QMessageBox.warning(self, "Правки не отменены", str(exc))
+            return
+        self._dirty = False
+        self._refresh_table(self._record_id)
 
     def _run(self, command, payload, callback):
         if self._integration_busy:
@@ -501,11 +543,18 @@ class ManagementFeesPage(QWidget):
         pending = bool(record and record["pending"])
         supported = not remote or (not remote.get("hasOtherDetails") and remote.get("type") == "BY_PROTOCOL" and remote.get("protocolFromVoting")
                                    and len(remote.get("ownerVotingList") or []) == 1)
-        editable = bool(record and not pending and (not remote or remote["status"] == "DRAFT") and supported)
+        changed = bool(record and (record["dirty"] or self._dirty))
+        editable = bool(record and not pending and supported and
+                        (not remote or remote["status"] == "DRAFT" or
+                         (remote["status"] == "APPROVED" and record["dirty"])))
         status = self.integration_gateway.status() if self.integration_gateway else None
         house = self.repository.get_house(self._house_id) if self._house_id else None
         connected = bool(status and status.gis_page_ready and helper_supports_fees(status.helper_version) and house and house.fias_house_guid)
         has_contract = bool(self.contract_combo.currentData())
+        self.edit_button.setVisible(bool(remote and remote["status"] == "APPROVED" and not changed))
+        self.edit_button.setEnabled(supported and not pending and not busy)
+        self.cancel_edit_button.setVisible(bool(remote and changed and remote["status"] != "TERMINATED"))
+        self.cancel_edit_button.setEnabled(not pending and not busy)
         for field in (self.organization_combo, self.house_combo, self.table):
             field.setEnabled(not busy)
         for field in (self.contract_combo, self.start_edit, self.end_edit, self.amount_edit):
@@ -519,15 +568,18 @@ class ManagementFeesPage(QWidget):
         self.protocol_button.setEnabled(editable and has_contract and not busy)
         self.refresh_protocols_button.setEnabled(editable and has_contract and connected and not busy)
         self.save_button.setEnabled(editable and has_contract and connected and not busy)
-        self.approve_button.setEnabled(bool(remote and remote["status"] == "DRAFT" and supported and
-                                           not record["dirty"] and not self._dirty and not pending) and connected and not busy)
-        self.annul_button.setEnabled(bool(remote and remote["status"] == "APPROVED" and supported and not pending) and connected and not busy)
+        save_first = not remote or changed
+        self.approve_button.setText("Сохранить и разместить…" if save_first else "Разместить…")
+        may_place = (editable or bool(remote and remote["status"] == "DRAFT")) and supported and not pending
+        self.approve_button.setEnabled(bool(may_place and self._protocol and has_contract) and connected and not busy)
+        self.annul_button.setEnabled(bool(remote and remote["status"] == "APPROVED" and supported and
+                                          not changed and not pending) and connected and not busy)
         if record and not self._dirty:
             text = STATUSES.get((remote or {}).get("status", "LOCAL"), "Неизвестное состояние")
             if pending:
                 text += ". Результат отправки не установлен. Загрузите сведения из ГИС."
             elif remote and record["dirty"]:
-                text += ". Есть локальные правки; перед размещением сохраните проект в ГИС."
+                text += ". Есть локальные правки. Сохраните проект в ГИС или сохраните и разместите изменения."
             self.state_text.setText(text)
         if not house:
             reason = "Выберите УО и дом."
@@ -539,6 +591,10 @@ class ManagementFeesPage(QWidget):
             reason = "Для этого раздела обновите браузерный помощник до версии 0.1.33 или новее."
         elif not supported:
             reason = "Сведения с другим основанием, несколькими протоколами или дополнительной детализацией доступны для просмотра. Изменяйте их в ГИС."
+        elif remote and remote["status"] == "TERMINATED":
+            reason = "Аннулированные сведения доступны только для просмотра. Изменить или восстановить эту запись нельзя."
+        elif remote and remote["status"] == "APPROVED":
+            reason = "«Изменить…» открывает локальные правки. Сохраните их как проект новой версии или сохраните и разместите. Тариф в «Домах» не изменится."
         else:
             reason = "Размер платы копируется из «Домов». Основание выбирается из протоколов ГИС. Проект и размещение — отдельные операции."
         self.reason.setText(reason)

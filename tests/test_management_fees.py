@@ -125,6 +125,67 @@ def test_ambiguous_remote_duplicates_do_not_select_an_arbitrary_result(store):
     assert len(fee_store.list(house_id)) == 3
 
 
+def test_published_edit_preserves_snapshot_protocol_and_identity_until_confirmed(store):
+    fee_store, house_id = store
+    fee_store.import_remote(house_id, context(remote(status="APPROVED", versionInfo={"guid": "v1", "versionNumber": 1})))
+    record = fee_store.list(house_id)[0]
+    with pytest.raises(ValueError, match="нельзя редактировать"):
+        fee_store.save_local(house_id, dict(DOCUMENT, amount="16.28"), record["id"])
+    fee_store.begin_published_edit(record["id"])
+    edited = dict(record["document"], amount="16.28", start="2021-07-01", end="2022-06-30")
+    fee_store.save_local(house_id, edited, record["id"])
+    local = fee_store.get(record["id"])
+    assert local["remote"] == record["remote"]
+    assert local["document"]["protocol"] == record["document"]["protocol"]
+    assert local["remote_guid"] == record["remote_guid"]
+    fee_store.mark_pending(record["id"])
+    updated = remote(managementPayment="16.28", period={"from": "2021-07-01", "to": "2022-06-30"},
+                     versionInfo={"guid": "v2", "versionNumber": 2})
+    fee_store.import_remote(house_id, context(updated))
+    saved = fee_store.get(record["id"])
+    assert saved["remote"]["status"] == "DRAFT"
+    assert saved["remote"]["versionInfo"]["versionNumber"] == 2
+    assert not saved["pending"] and not saved["dirty"]
+    assert saved["remote_guid"] == record["remote_guid"]
+
+
+def test_annulment_is_terminal_and_unsent_amendment_survives_as_a_separate_local_project(store):
+    fee_store, house_id = store
+    fee_store.import_remote(house_id, context(remote(status="APPROVED")))
+    record_id = fee_store.list(house_id)[0]["id"]
+    fee_store.begin_published_edit(record_id)
+    fee_store.save_local(house_id, dict(DOCUMENT, amount="16.28"), record_id)
+    assert fee_store.import_remote(house_id, context(remote(status="TERMINATED"))) == 1
+    annulled = fee_store.get(record_id)
+    assert annulled["remote"]["status"] == "TERMINATED"
+    for operation in (lambda: fee_store.begin_published_edit(record_id),
+                      lambda: fee_store.save_local(house_id, DOCUMENT, record_id)):
+        with pytest.raises(ValueError):
+            operation()
+    local = next(row for row in fee_store.list(house_id) if row["remote_guid"] is None)
+    assert local["document"]["amount"] == "16.28"
+    assert local["id"] != record_id
+
+
+def test_local_cancel_restores_published_snapshot_without_changing_gis(store):
+    fee_store, house_id = store
+    fee_store.import_remote(house_id, context(remote(status="APPROVED")))
+    record = fee_store.list(house_id)[0]
+    fee_store.begin_published_edit(record["id"])
+    fee_store.save_local(house_id, dict(DOCUMENT, amount="16.28"), record["id"])
+    fee_store.discard_local_edits(record["id"])
+    assert fee_store.get(record["id"]) == record
+
+
+def test_stale_approved_response_cannot_restore_an_annulled_record(store):
+    fee_store, house_id = store
+    fee_store.import_remote(house_id, context(remote(status="TERMINATED")))
+    before = fee_store.list(house_id)
+    with pytest.raises(ValueError, match="не может быть восстановлена"):
+        fee_store.import_remote(house_id, context(remote(status="APPROVED")))
+    assert fee_store.list(house_id) == before
+
+
 def fee_page(desktop, monkeypatch):
     window = desktop.window
     page = window.management_fees_page
@@ -230,11 +291,96 @@ def test_protocol_dialog_requires_explicit_selection(desktop, monkeypatch):
     assert page.store.get(record_id)["document"]["protocol"]["protocolDate"] == "2020-01-01"
 
 
+def test_published_edit_retains_basis_and_can_be_saved_as_a_project(desktop, monkeypatch):
+    page = fee_page(desktop, monkeypatch)
+    page.store.import_remote(desktop.house.id, context(remote(status="APPROVED")))
+    page._refresh_table()
+    record_id, before = page._record_id, page._record()
+    assert not page.amount_edit.isEnabled()
+    assert page.edit_button.isVisibleTo(page)
+    page.edit_button.click()
+    assert page.amount_edit.isEnabled()
+    assert page._protocol == before["document"]["protocol"]
+    assert not page.annul_button.isEnabled()
+    page.amount_edit.setText("16.28")
+    page.start_edit.setDate(QDate(2021, 7, 1))
+    page.end_edit.setDate(QDate(2022, 6, 30))
+    monkeypatch.setattr(management_fees_page, "GisIntegrationWorker", workflows.ControlledWorker)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
+    page.save_button.click()
+    worker = page._worker
+    assert worker.command_type == "save_management_fee_project"
+    assert worker.payload["document"]["protocol"] == before["document"]["protocol"]
+    assert worker.payload["document"]["start"] == "2021-07-01"
+    assert worker.payload["document"]["end"] == "2022-06-30"
+    assert page.store.get(record_id)["remote"] == before["remote"]
+    worker.succeeded.emit({"record": remote(managementPayment="16.28", period={"from": "2021-07-01", "to": "2022-06-30"}), "contract": CONTRACT})
+    worker.finish()
+    workflows._settle(desktop.app)
+    assert page.store.get(record_id)["remote"]["status"] == "DRAFT"
+    assert page._protocol == before["document"]["protocol"]
+    assert page.approve_button.isEnabled()
+    assert page.approve_button.text() == "Разместить…"
+
+
+def test_direct_published_edit_recovers_the_saved_draft_if_placement_is_not_confirmed(desktop, monkeypatch):
+    page = fee_page(desktop, monkeypatch)
+    page.store.import_remote(desktop.house.id, context(remote(status="APPROVED")))
+    page._refresh_table()
+    record_id = page._record_id
+    page.edit_button.click()
+    page.amount_edit.setText("16.28")
+    monkeypatch.setattr(management_fees_page, "GisIntegrationWorker", workflows.ControlledWorker)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: None)
+    assert page.approve_button.text() == "Сохранить и разместить…"
+    page.approve_button.click()
+    worker = page._worker
+    assert worker.command_type == "save_and_approve_management_fee"
+    worker.failed.emit("Проект сохранён в ГИС. Размещение не подтверждено.")
+    worker.finish()
+    workflows._settle(desktop.app)
+    assert page.store.get(record_id)["pending"]
+    assert not page.approve_button.isEnabled()
+    page._loaded(context(remote(managementPayment="16.28")))
+    assert page.store.get(record_id)["remote"]["status"] == "DRAFT"
+    assert not page.store.get(record_id)["pending"]
+    assert page.approve_button.isEnabled()
+    assert page.approve_button.text() == "Разместить…"
+
+
+def test_published_amendment_can_be_cancelled_locally(desktop, monkeypatch):
+    page = fee_page(desktop, monkeypatch)
+    page.store.import_remote(desktop.house.id, context(remote(status="APPROVED")))
+    page._refresh_table()
+    record_id, before = page._record_id, page._record()
+    page.edit_button.click()
+    page.amount_edit.setText("16.28")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
+    page.cancel_edit_button.click()
+    assert page.store.get(record_id) == before
+    assert not page.amount_edit.isEnabled()
+    assert page.amount_edit.text() == "15.12"
+    assert page._worker is None
+
+
+def test_annulled_record_has_no_edit_place_or_restore_actions(desktop, monkeypatch):
+    page = fee_page(desktop, monkeypatch)
+    page.store.import_remote(desktop.house.id, context(remote(status="TERMINATED")))
+    page._refresh_table()
+    assert not page.amount_edit.isEnabled()
+    assert not page.edit_button.isVisibleTo(page)
+    assert not page.cancel_edit_button.isVisibleTo(page)
+    for button in (page.save_button, page.approve_button, page.annul_button, page.protocol_button):
+        assert not button.isEnabled()
+
+
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_fee_page_fits_100_percent_desktop(desktop, monkeypatch, theme):
     page = fee_page(desktop, monkeypatch)
-    record_id = page.store.save_local(desktop.house.id, DOCUMENT)
-    page._refresh_table(record_id)
+    page.store.import_remote(desktop.house.id, context(remote(status="APPROVED")))
+    page._refresh_table()
+    page.edit_button.click()
     desktop.window._theme_changed(theme)
     desktop.window.resize(1366, 768)
     workflows._settle(desktop.app)

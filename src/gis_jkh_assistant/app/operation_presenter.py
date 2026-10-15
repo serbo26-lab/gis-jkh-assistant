@@ -7,6 +7,7 @@ TITLES = {
     "load_management_fees": "Загрузка сведений о размере платы",
     "load_fee_protocols": "Загрузка протоколов ОСС",
     "save_management_fee_project": "Сохранение проекта платы в ГИС",
+    "save_and_approve_management_fee": "Сохранение и размещение сведений о плате",
     "approve_management_fee": "Размещение сведений о плате",
     "annul_management_fee": "Аннулирование сведений о плате",
     "get_organization_act_signatory": "Получение руководителя УО",
