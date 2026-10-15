@@ -63,6 +63,8 @@ class Repository:
         self._create_schema()
         from .act_requisites_store import initialize_act_schema
         initialize_act_schema(self.connection)
+        from gis_jkh_assistant.management_fees import initialize_fee_schema
+        initialize_fee_schema(self.connection)
 
     def close(self) -> None:
         self.connection.close()

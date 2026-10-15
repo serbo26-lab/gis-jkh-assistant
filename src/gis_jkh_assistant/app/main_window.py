@@ -31,6 +31,7 @@ from gis_jkh_assistant.quality_assessment import (
 from .fixation_page import FixationPage
 from .houses_page import HousesPage
 from .icons import icon
+from .management_fees_page import ManagementFeesPage
 from .organizations_page import OrganizationsPage
 from .planning_page import PlanningPage
 from .quality_page import QualityAssessmentPage
@@ -108,6 +109,7 @@ class MainWindow(QMainWindow):
         for title, name, description in (
             ("УО", "organizations", "Организация, руководители и реквизиты актов"),
             ("Дома", "houses", "Данные домов выбранной УО"),
+            ("Информация о размере платы", "fees", "Плата по договору управления и основания из ГИС"),
             ("Перечни работ и услуг", "lists", "Перечни работ и услуг: состав и размещение"),
             ("Планирование", "planning", "План работ по размещённому перечню"),
             ("Фиксация работ и услуг", "fixation", "Фиксация выполненных работ и услуг по месяцам"),
@@ -163,6 +165,7 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.houses_page = HousesPage(repository, self.integration_gateway)
         self.organizations_page = OrganizationsPage(repository, self.houses_page, self.integration_gateway)
+        self.management_fees_page = ManagementFeesPage(repository, self.integration_gateway)
         self.houses_page.organization_context_label.show()
         self.work_lists_page = WorkListsPage(repository, self.integration_gateway)
         self.planning_page = PlanningPage(repository, self.integration_gateway)
@@ -171,6 +174,7 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage(repository)
         self.pages.addWidget(self.organizations_page)
         self.pages.addWidget(self.houses_page)
+        self.pages.addWidget(self.management_fees_page)
         self.pages.addWidget(self.work_lists_page)
         self.pages.addWidget(self.planning_page)
         self.pages.addWidget(self.fixation_page)
@@ -186,7 +190,7 @@ class MainWindow(QMainWindow):
         self.settings_page.scaleChanged.connect(self._scale_changed)
         self.settings_page.nextStepPanelChanged.connect(self._next_step_panel_changed)
         self.settings_page.helperSetupRequested.connect(self._open_helper_setup)
-        for name in ("houses", "work_lists", "planning", "fixation", "quality"):
+        for name in ("houses", "fees", "work_lists", "planning", "fixation", "quality"):
             page = self._page_by_context_name(name)
             page.context_notice = QLabel()
             page.context_notice.setObjectName("BlockingReason")
@@ -200,7 +204,7 @@ class MainWindow(QMainWindow):
                     lambda index, source=name: self._workflow_navigation_requested(source, index)
                 )
         self.organizations_page.workflow.navigateRequested.connect(
-            lambda index: self.navigation.setCurrentRow(index + 1))
+            self._navigate_workflow_target)
         self._connect_shared_context_sources()
         self._next_step_panel_changed(self.settings_page.next_step_panel_enabled())
 
@@ -259,6 +263,10 @@ class MainWindow(QMainWindow):
         dialog.activateWindow()
 
     def _connect_shared_context_sources(self) -> None:
+        self.management_fees_page.organization_combo.currentIndexChanged.connect(
+            lambda *_: self._capture_shared_context("fees", "organization"))
+        self.management_fees_page.house_combo.currentIndexChanged.connect(
+            lambda *_: self._capture_shared_context("fees", "house"))
         self.houses_page.organization_combo.currentIndexChanged.connect(
             lambda *_: self._capture_shared_context("houses", "organization")
         )
@@ -306,6 +314,7 @@ class MainWindow(QMainWindow):
     def _page_by_context_name(self, name: str):
         return {
             "houses": self.houses_page,
+            "fees": self.management_fees_page,
             "work_lists": self.work_lists_page,
             "planning": self.planning_page,
             "fixation": self.fixation_page,
@@ -314,6 +323,9 @@ class MainWindow(QMainWindow):
 
     def _context_values(self, name: str) -> dict[str, object | None]:
         page = self._page_by_context_name(name)
+        if name == "fees":
+            return {"organization_id": page.organization_combo.currentData(),
+                    "house_id": page.house_combo.currentData(), "work_list_id": None, "year": None}
         if name == "houses":
             current_item = page.house_list.currentItem()
             return {
@@ -478,19 +490,16 @@ class MainWindow(QMainWindow):
             self._update_context_notices()
             return
         current_index = self.pages.currentIndex()
-        if current_index not in range(6):
+        if self._context_name_for_index(current_index) is None:
             current_index = self._last_context_page_index
-        source = {
-            1: "houses",
-            2: "work_lists",
-            3: "planning",
-            4: "fixation",
-            5: "quality",
-        }.get(current_index, "houses")
+        source = self._context_name_for_index(current_index) or "houses"
         values = self._context_values(source)
+        preserve_list = source == "fees" and all(values[field] == self._shared_context.get(field)
+                                                 for field in ("organization_id", "house_id"))
         self._shared_context["organization_id"] = values["organization_id"]
         self._shared_context["house_id"] = values["house_id"]
-        self._shared_context["work_list_id"] = values["work_list_id"]
+        if not preserve_list:
+            self._shared_context["work_list_id"] = values["work_list_id"]
         if values["year"] is not None:
             self._shared_context["year"] = int(values["year"])
         self._store_shared_context()
@@ -512,7 +521,7 @@ class MainWindow(QMainWindow):
             return
         self._applying_shared_context = True
         try:
-            for name in ("houses", "work_lists", "planning", "fixation", "quality"):
+            for name in ("houses", "fees", "work_lists", "planning", "fixation", "quality"):
                 if name == exclude:
                     continue
                 self._apply_shared_context_to_page(name)
@@ -532,6 +541,9 @@ class MainWindow(QMainWindow):
         year = self._shared_context.get("year")
         if year not in (None, ""):
             year = int(year)
+
+        if name == "fees" and not page.flush_pending_changes():
+            return
 
         if name == "houses":
             changed = page.organization_combo.currentData() != organization_id
@@ -582,6 +594,8 @@ class MainWindow(QMainWindow):
                 page.house_combo.blockSignals(False)
                 page._house_changed()
 
+        if name == "fees":
+            return
         if name == "work_lists":
             current = page.work_lists.currentItem()
             current_id = (
@@ -645,12 +659,12 @@ class MainWindow(QMainWindow):
             self.repository.get_work_list(str(selected_list_id)) if selected_list_id else None
         )
         selected_year = self._shared_context.get("year")
-        for name in ("houses", "work_lists", "planning", "fixation", "quality"):
+        for name in ("houses", "fees", "work_lists", "planning", "fixation", "quality"):
             page = self._page_by_context_name(name)
             values = self._context_values(name)
             message = ""
             if enabled:
-                fields = ("organization_id", "house_id") if name == "houses" else tuple(values)
+                fields = ("organization_id", "house_id") if name in ("houses", "fees") else tuple(values)
                 context_differs = any(
                     str(self._shared_context.get(field) or "") != str(values[field] or "")
                     for field in fields
@@ -674,7 +688,7 @@ class MainWindow(QMainWindow):
                                else "Проверьте выбор в разделе «Дома».")
                         )
                         break
-                if not message and name != "houses" and selected_list_id:
+                if not message and name not in ("houses", "fees") and selected_list_id:
                     if values["work_list_id"] != selected_list_id:
                         if selected_list and name != "work_lists":
                             message = (
@@ -850,6 +864,7 @@ class MainWindow(QMainWindow):
 
         self.houses_page._refresh_workflow()
         self.organizations_page.refresh_availability()
+        self.management_fees_page._refresh_integration_status()
         self.work_lists_page._refresh_integration_status()
         self.planning_page._refresh_integration_status()
         self.fixation_page._refresh_integration_status()
@@ -875,14 +890,7 @@ class MainWindow(QMainWindow):
                     # Mouse selection may complete after currentRowChanged has returned.
                     QTimer.singleShot(0, lambda: self._restore_navigation(previous))
                     return
-        context_name = {
-            0: "houses",  # UO owns the houses registry's organization selector.
-            1: "houses",
-            2: "work_lists",
-            3: "planning",
-            4: "fixation",
-            5: "quality",
-        }.get(index)
+        context_name = self._context_name_for_index(index)
         if context_name is not None:
             self._last_context_page_index = index
 
@@ -918,6 +926,20 @@ class MainWindow(QMainWindow):
         self._update_context_summary()
         self._update_context_notices()
 
+    def _context_name_for_index(self, index):
+        page = self.pages.widget(index)
+        if page is self.organizations_page:
+            return "houses"
+        return next((name for name in ("houses", "fees", "work_lists", "planning", "fixation", "quality")
+                     if page is self._page_by_context_name(name)), None)
+
+    def _navigate_workflow_target(self, index):
+        # Workflow targets are stable business stages, independent of sidebar insertions.
+        pages = (self.houses_page, self.work_lists_page, self.planning_page,
+                 self.fixation_page, self.quality_page, self.settings_page)
+        target = self.organizations_page if index == -1 else pages[index]
+        self.navigation.setCurrentRow(self.pages.indexOf(target))
+
     def _workflow_navigation_requested(self, source: str, index: int) -> None:
         """Continue a monthly workflow with the same month and action scope."""
         monthly_names = {3: "fixation", 4: "quality"}
@@ -926,8 +948,7 @@ class MainWindow(QMainWindow):
         month = getattr(source_page, "_current_month", None)
         scope = getattr(source_page, "scope_switcher", None)
         selected_scope = scope.scope() if scope is not None else None
-        # Workflow panels retain their six-page targets; -1 opens the new UO page.
-        self.navigation.setCurrentRow(index + 1)
+        self._navigate_workflow_target(index)
         if source not in monthly_names.values() or index not in monthly_names:
             return
         target_name = monthly_names[index]
@@ -1026,11 +1047,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Выполняется операция", "Дождитесь завершения обмена с ГИС перед удалением локальных данных.")
             return False
         return (self.organizations_page.flush_pending_changes() is not False
-                and self.houses_page.flush_pending_changes() is not False)
+                and self.houses_page.flush_pending_changes() is not False
+                and self.management_fees_page.flush_pending_changes() is not False)
 
     def _data_pages(self):
         return (self.organizations_page, self.houses_page, self.work_lists_page, self.planning_page,
-                self.fixation_page, self.quality_page)
+                self.fixation_page, self.quality_page, self.management_fees_page)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._closing:

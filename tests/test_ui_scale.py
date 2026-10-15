@@ -89,7 +89,7 @@ def test_theme_switch_requests_matching_caption_and_preserves_normal_window(desk
 
 def test_runtime_size_preserves_context_saved_edits_and_busy_queue(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(3)
+    window.navigation.setCurrentRow(4)
     planning = window.planning_page
     planning.table.item(0, 3).setText("3")
     plan_item = desktop.repository.list_work_plan_items(planning._current_plan_id)[0]
@@ -145,7 +145,7 @@ def test_old_enlargement_preference_does_not_reactivate_hidden_setting(qt_app, t
 
 def test_table_photo_and_delete_controls_resize_without_reloading_busy_period(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(4)
+    window.navigation.setCurrentRow(5)
     page = window.fixation_page
     period_id = page._current_period_id
     item = desktop.repository.list_work_fixation_items(period_id)[0]
@@ -180,7 +180,7 @@ def test_table_photo_and_delete_controls_resize_without_reloading_busy_period(de
 
 def test_quality_act_control_resizes_while_current_period_is_busy(desktop, monkeypatch):
     window = desktop.window
-    window.navigation.setCurrentRow(5)
+    window.navigation.setCurrentRow(6)
     page = window.quality_page
     period, item = workflow_tests._include_quality(page, 1)
     workflow_tests._add_acceptance_act(page, item)
