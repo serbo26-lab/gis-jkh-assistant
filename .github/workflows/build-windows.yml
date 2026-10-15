@@ -51,7 +51,7 @@ jobs:
       - name: Build executable
         shell: pwsh
         run: |
-          $python = (Get-Command python -CommandType Application).Source
+          $python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
           $pythonDirectory = Split-Path -Parent $python
           # Do not collect incompatible Qt/ICU DLLs from unrelated tools in PATH.
           $env:PATH = "$pythonDirectory;$pythonDirectory\Scripts;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
