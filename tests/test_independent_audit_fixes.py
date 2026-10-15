@@ -5,7 +5,7 @@ import time
 from dataclasses import replace
 
 import pytest
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QPoint, QTimer, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox
 
@@ -182,7 +182,20 @@ def test_compact_context_retains_visible_labels_and_table_space(desktop):
     assert p.context_card.height() < 145
     assert desktop.window._ui_scale == 1.0
     assert p.table.viewport().height() >= 5 * p.table.rowHeight(0)
-    assert p.page_scroll.verticalScrollBar().maximum() == 0
+    assert p.page_scroll.horizontalScrollBar().maximum() == 0
+    # Native font metrics can wrap command rows and require vertical scrolling.
+    # Keep the full context, direct commands and five-row table reachable.
+    commands = [
+        group.actions.itemAt(i).widget()
+        for group in (p.month_commands_group, p.period_commands_group, p.acts_commands_group)
+        for i in range(group.actions.count())
+    ]
+    viewport = p.page_scroll.viewport()
+    for control in (*p.context_card.fields, *commands, p.table):
+        assert control.isVisibleTo(p)
+        p.page_scroll.ensureWidgetVisible(control, 0, 0)
+        rect = control.rect().translated(control.mapTo(viewport, QPoint(0, 0)))
+        assert viewport.rect().contains(rect)
 
 
 def test_standard_confirmation_buttons_are_russian(desktop):
