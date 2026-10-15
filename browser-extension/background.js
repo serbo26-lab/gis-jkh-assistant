@@ -6,7 +6,7 @@ const GIS_MATCH = [
 ];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.32";
+const HELPER_CODE_VERSION = "0.1.33";
 const organizationTabs = new Map();
 // Routing identity for this worker, not an authentication credential.
 const HELPER_INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -400,7 +400,7 @@ async function runGisCommand(command) {
       }
     }
 
-    async function request(method, url, data = undefined, stateGuid = STATE_WORKPLANNING) {
+    async function request(method, url, data = undefined, stateGuid = STATE_WORKPLANNING, rawText = false) {
       if (method !== "GET") await assertOrganization();
       const config = {
         method,
@@ -414,6 +414,9 @@ async function runGisCommand(command) {
         config.data = data;
         config.headers["Content-Type"] = "application/json;charset=UTF-8";
       }
+      // The fee-create endpoint returns a bare UUID with application/json.
+      // Angular's default JSON transform would reject that successful response.
+      if (rawText) config.transformResponse = [value => value];
       const response = await $http(config);
       return response.data;
     }
@@ -2367,9 +2370,281 @@ async function runGisCommand(command) {
       return { ok: true, result: await getCurrentOrganization() };
     }
 
+    // The agreements workflow uses distinct agreement/version/object/protocol IDs.
+    // Keep it separate from workplanning and from local calculation tariffs.
+    const feeBase = "/agreements/api/rest/services/agreements/management/payment";
+    function feeDate(value) {
+      const text = String(value || "").trim();
+      let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+      if (!match) {
+        const local = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(text);
+        if (local) match = [text, local[3], local[2], local[1]];
+      }
+      if (!match) throw new Error("В ответе ГИС отсутствует корректная дата периода платы.");
+      const iso = `${match[1]}-${match[2]}-${match[3]}`;
+      const parsed = new Date(iso + "T00:00:00Z");
+      if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== iso) {
+        throw new Error("В периоде платы указана недопустимая дата.");
+      }
+      return iso;
+    }
+    function feeLocalDate(value) {
+      const [year, month, day] = feeDate(value).split("-");
+      return `${day}.${month}.${year}`;
+    }
+    function feeAmount(value) {
+      const text = String(value ?? "").trim().replace(/,/g, ".");
+      if (!/^\d{1,10}(\.\d{1,2})?$/.test(text) || Number(text) <= 0) {
+        throw new Error("Укажите положительный размер платы с точностью до копеек.");
+      }
+      return Number(text).toFixed(2);
+    }
+    function feeState(contract, mode = "view", guid = "") {
+      const root = `/agreements/contract/MANAGEMENT/view/${encodeURIComponent(contract.versionGuid)}`;
+      return guid ? `${root}/kirp/payment/${mode}/${encodeURIComponent(guid)}` : `${root}/BY_PROTOCOL/kirp/payment/add`;
+    }
+    function feeObjectMatches(object, fias) {
+      return object?.fiasHouseAddress?.houseRef?.code === fias;
+    }
+    function feeOrganizationMatches(contract, organization) {
+      return Boolean((contract.managementOrgOgrn || contract.managementOrg?.ogrn) === organization.ogrn &&
+        (!contract.managementOrgRootGuid || !organization.organizationRootGuid ||
+         contract.managementOrgRootGuid === organization.organizationRootGuid));
+    }
+    async function feeContract(payload) {
+      const selected = payload.contract;
+      if (!selected?.guid || !selected?.versionGuid || !selected?.objectRootGuid ||
+          !payload.fiasHouseGuid || selected.fiasHouseGuid !== payload.fiasHouseGuid) {
+        throw new Error("Загрузите договор управления выбранного дома.");
+      }
+      const organization = (await getCurrentOrganization()).organization;
+      const dto = await request("GET", "/agreements/api/rest/services/agreements/managements/versions/" +
+        encodeURIComponent(selected.versionGuid), undefined,
+        `/agreements/contract/view/${encodeURIComponent(selected.versionGuid)}/info`);
+      const objects = (dto.managedObjectList || []).filter(item =>
+        item.rootEntityGuid === selected.objectRootGuid && feeObjectMatches(item, payload.fiasHouseGuid));
+      if (dto.guid !== selected.guid || dto.versionInfoDTO?.guid !== selected.versionGuid ||
+          dto.agreementType !== "MANAGEMENT" || !dto.published ||
+          !feeOrganizationMatches(dto, organization) || objects.length !== 1) {
+        throw new Error("Договор или объект управления не соответствует выбранному дому и УО. Обновите данные из ГИС.");
+      }
+      const object = objects[0];
+      const starts = [dto.effectiveDate, object.managedDateStart].filter(Boolean).map(feeDate).sort();
+      const ends = [dto.endDate, object.managedDateEnd].filter(Boolean).map(feeDate).sort();
+      return {guid: dto.guid, versionGuid: dto.versionInfoDTO.guid,
+        objectRootGuid: object.rootEntityGuid, fiasHouseGuid: payload.fiasHouseGuid,
+        number: dto.number || "Без номера", date: dto.signDate ? feeDate(dto.signDate) : "",
+        from: starts.at(-1) || "", to: ends[0] || "", status: dto.agreementStatus || dto.dbStatus};
+    }
+    async function feeContracts(payload) {
+      if (!payload.fiasHouseGuid) throw new Error("У дома нет кода ФИАС. Загрузите дом из ГИС.");
+      const organization = (await getCurrentOrganization()).organization;
+      const result = [];
+      for (let page = 1; page <= 1000; page++) {
+        const rows = await request("POST", "/agreements/api/rest/services/agreements/documents/search",
+          {addressSearchCriteria: {houseRef: {guid: payload.fiasHouseGuid, code: payload.fiasHouseGuid}},
+           agreementStatusList: [], autoprolongation: null, pageIndex: page, elementsPerPage: 100},
+          "/agreements");
+        if (!Array.isArray(rows)) throw new Error("ГИС вернула неизвестный формат реестра договоров.");
+        for (const dto of rows) {
+          if (dto.agreementType !== "MANAGEMENT" || !dto.published || !feeOrganizationMatches(dto, organization)) continue;
+          for (const object of dto.managedObjectList || []) {
+            if (!feeObjectMatches(object, payload.fiasHouseGuid) || !object.rootEntityGuid) continue;
+            const contract = await feeContract({...payload, contract: {guid: dto.guid,
+              versionGuid: dto.versionInfoDTO?.guid, objectRootGuid: object.rootEntityGuid,
+              fiasHouseGuid: payload.fiasHouseGuid}});
+            if (!result.some(item => item.versionGuid === contract.versionGuid &&
+                item.objectRootGuid === contract.objectRootGuid)) result.push(contract);
+          }
+        }
+        const total = Number(rows[0]?.totalCount);
+        if (rows.length < 100 || (Number.isFinite(total) && page * 100 >= total)) return result;
+      }
+      throw new Error("Слишком много договоров. Загрузка остановлена без изменения локальных данных.");
+    }
+    async function feeProtocols(payload, contract) {
+      const result = [];
+      for (let page = 1; page <= 1000; page++) {
+        const response = await request("POST", `/voting/api/rest/services/protocol/search-lite;page=${page};itemsPerPage=10`,
+          {fiasHouseCodes: [payload.fiasHouseGuid], eligible: true, meetingTypes: ["OWNERS"],
+           questionTypeCodes: ["12.1", "15.1"], decisionIsMade: true}, feeState(contract));
+        if (!Array.isArray(response?.items) || !Number.isFinite(Number(response.total))) {
+          throw new Error("Не удалось прочитать список протоколов ГИС.");
+        }
+        for (const item of response.items) {
+          if (!item.cancelled && item.eligible && item.meetingType === "OWNERS" &&
+              item.fiasHouseCodes?.includes(payload.fiasHouseGuid) && item.votingGuid && item.votingVersionGuid) {
+            result.push({votingGuid: item.votingGuid, votingVersionGuid: item.votingVersionGuid,
+              protocolCode: item.protocolCode || "Без номера", protocolDate: feeDate(item.protocolDate),
+              fiasHouseCodes: item.fiasHouseCodes, eligible: true, cancelled: false});
+          }
+        }
+        if (page * 10 >= Number(response.total)) return result;
+        if (!response.items.length) throw new Error("ГИС вернула неполную страницу протоколов. Повторите загрузку.");
+      }
+      throw new Error("Слишком много протоколов. Уточните выбор в ГИС.");
+    }
+    function normalizeFee(dto) {
+      if (!dto?.guid || !dto.lastUpdate || !["DRAFT", "APPROVED", "TERMINATED"].includes(dto.status)) {
+        throw new Error("ГИС не подтвердила состояние сведений о плате.");
+      }
+      return {guid: dto.guid, lastUpdate: dto.lastUpdate, agreementRootGuid: dto.agreementRootGuid,
+        managedObjectRootGuid: dto.managedObjectRootGuid, status: dto.status, type: dto.type,
+        protocolFromVoting: dto.protocolFromVoting, managementPayment: dto.managementPayment,
+        hasOtherDetails: Boolean(dto.fromExternalSystem || dto.paymentInfoOfSelfOwners ||
+          [dto.managementWorkPaymentInfo, dto.managementProtocols, dto.ownersAssociationMembersProtocols,
+           dto.selfOwnersProtocols].some(items => items?.length)),
+        versionInfo: dto.versionInfo, ownerVotingGuidList: dto.ownerVotingGuidList || [],
+        period: {from: feeDate(dto.period?.from), to: feeDate(dto.period?.to)},
+        ownerVotingList: (dto.ownerVotingList || []).map(item => ({votingGuid: item.votingGuid,
+          votingVersionGuid: item.votingVersionGuid, number: item.number, date: feeDate(item.date)})),
+        cancellationReasonComment: dto.cancellationReasonComment || ""};
+    }
+    function assertFeeScope(dto, contract, guid = null) {
+      if ((guid && dto?.guid !== guid) || dto?.agreementRootGuid !== contract.guid ||
+          dto?.managedObjectRootGuid !== contract.objectRootGuid) {
+        throw new Error("Сведения о плате относятся к другому договору или дому.");
+      }
+    }
+    async function feeDetails(guid, contract) {
+      const dto = await request("GET", feeBase + "/" + encodeURIComponent(guid), undefined,
+        feeState(contract, "view", guid));
+      assertFeeScope(dto, contract, guid);
+      return dto;
+    }
+    async function feeRecords(contract) {
+      const result = [];
+      for (let page = 1; page <= 1000; page++) {
+        const response = await request("POST", `${feeBase}/search;page=${page};itemsPerPage=100`,
+          {agreementRootGuid: contract.guid, agreementVersionGuid: contract.versionGuid,
+           statuses: [], pageIndex: page, elementsPerPage: 100}, feeState(contract));
+        if (!Array.isArray(response?.items) || !Number.isFinite(Number(response.totalCount))) {
+          throw new Error("Не удалось прочитать список сведений о плате.");
+        }
+        for (const item of response.items) {
+          // A contract can contain other houses. Never import them into the selected house.
+          if (item.managedObjectRootGuid !== contract.objectRootGuid) continue;
+          const dto = await feeDetails(item.guid, contract);
+          result.push(normalizeFee(dto));
+        }
+        if (page * 100 >= Number(response.totalCount)) return result;
+        if (!response.items.length) throw new Error("ГИС вернула неполный список платы. Повторите загрузку.");
+      }
+      throw new Error("Слишком много сведений о плате.");
+    }
+    function feeMatches(dto, desired) {
+      const basis = dto.ownerVotingList || [];
+      return dto.type === "BY_PROTOCOL" && dto.protocolFromVoting === true &&
+        feeDate(dto.period?.from) === desired.start && feeDate(dto.period?.to) === desired.end &&
+        feeAmount(dto.managementPayment) === desired.amount &&
+        dto.ownerVotingGuidList?.length === 1 && dto.ownerVotingGuidList[0] === desired.protocol.votingGuid &&
+        basis.length === 1 && basis[0].votingGuid === desired.protocol.votingGuid &&
+        basis[0].votingVersionGuid === desired.protocol.votingVersionGuid;
+    }
+    async function feeCommand(payload, type) {
+      if (!payload.organizationContext?.ogrn) throw new Error("Выберите УО перед обменом сведениями о плате.");
+      if (type === "load_management_fees") {
+        const contracts = await feeContracts(payload), records = [];
+        for (const contract of contracts) {
+          for (const record of await feeRecords(contract)) records.push({contractVersionGuid: contract.versionGuid, record});
+        }
+        const protocols = contracts.length ? await feeProtocols(payload, contracts[0]) : [];
+        return {contracts, protocols, records};
+      }
+      const contract = await feeContract(payload);
+      if (type === "load_fee_protocols") return {protocols: await feeProtocols(payload, contract)};
+      const desired = payload.document;
+      if (type === "save_management_fee_project") {
+        desired.amount = feeAmount(desired.amount);
+        desired.start = feeDate(desired.start); desired.end = feeDate(desired.end);
+        if (desired.start > desired.end || (contract.from && desired.start < contract.from) ||
+            (contract.to && desired.end > contract.to)) throw new Error("Период платы выходит за срок управления домом.");
+        const protocols = await feeProtocols(payload, contract);
+        const protocol = protocols.find(item => item.votingGuid === desired.protocol?.votingGuid &&
+          item.votingVersionGuid === desired.protocol?.votingVersionGuid &&
+          item.protocolCode === desired.protocol?.protocolCode && item.protocolDate === desired.protocol?.protocolDate);
+        if (!protocol) throw new Error("Выбранный протокол больше недоступен. Обновите список оснований.");
+        let current = null;
+        if (payload.remoteGuid) {
+          current = await feeDetails(payload.remoteGuid, contract);
+          if (feeMatches(current, desired) && ["DRAFT", "APPROVED"].includes(current.status)) {
+            return {record: normalizeFee(current), contract};
+          }
+          if (current.status !== "DRAFT" || !current.lastUpdate || current.lastUpdate !== payload.lastUpdate ||
+              current.type !== "BY_PROTOCOL" || current.protocolFromVoting !== true ||
+              current.ownerVotingGuidList?.length !== 1 || normalizeFee(current).hasOtherDetails) {
+            throw new Error("Проект изменён в ГИС или использует другой способ выбора основания. Загрузите актуальные сведения.");
+          }
+        } else {
+          const existing = (await feeRecords(contract)).filter(item => item.status !== "TERMINATED" &&
+            item.period.from === desired.start && item.period.to === desired.end);
+          if (existing.length === 1 && feeMatches(existing[0], desired)) return {record: existing[0], contract};
+          if (existing.length) throw new Error("За этот период уже есть сведения в ГИС. Загрузите их перед повторным сохранением.");
+        }
+        const body = {...(current || {}), agreementRootGuid: contract.guid,
+          agreementType: "MANAGEMENT", type: "BY_PROTOCOL", status: "DRAFT",
+          versionInfo: current?.versionInfo || {versionNumber: "1", versionDateTime:
+            `${String(new Date().getDate()).padStart(2, "0")}.${String(new Date().getMonth() + 1).padStart(2, "0")}.${new Date().getFullYear()}`},
+          period: {from: feeLocalDate(desired.start), to: feeLocalDate(desired.end)},
+          managementPayment: desired.amount, managementWorkPaymentInfo: [], managementProtocols: [],
+          ownersAssociationMembersProtocols: [], selfOwnersProtocols: [],
+          paymentInfoOfOwnersAssociationMembers: true, managedObjectRootGuid: contract.objectRootGuid,
+          protocolFromVoting: true, ownerVotingGuidList: [protocol.votingGuid]};
+        for (const key of ["ownerVotingList", "organization", "address", "paymentForAllHouses"]) delete body[key];
+        const response = await request(current ? "PUT" : "POST", feeBase + "/", body,
+          feeState(contract, current ? "edit" : "view", current?.guid || ""), true);
+        const guid = current?.guid || (typeof response === "string" ? response.replace(/^"|"$/g, "").trim() : response?.guid);
+        if (!guid) throw new Error("Сохранение отправлено, но ГИС не вернула номер проекта. Загрузите сведения перед повторной отправкой.");
+        const saved = await feeDetails(guid, contract);
+        if (saved.status !== "DRAFT" || !feeMatches(saved, desired)) {
+          throw new Error("ГИС не подтвердила сохранение проекта с указанными данными. Загрузите сведения.");
+        }
+        return {record: normalizeFee(saved), contract};
+      }
+      const current = await feeDetails(payload.remoteGuid, contract);
+      if (type === "approve_management_fee") {
+        if (current.status === "APPROVED") return {record: normalizeFee(current), contract};
+        if (current.status !== "DRAFT" || !current.lastUpdate || current.lastUpdate !== payload.lastUpdate) {
+          throw new Error("Состояние проекта изменилось в ГИС. Загрузите сведения перед размещением.");
+        }
+        if (current.type !== "BY_PROTOCOL" || !current.protocolFromVoting || current.ownerVotingGuidList?.length !== 1 || normalizeFee(current).hasOtherDetails) {
+          throw new Error("Этот проект использует другой способ выбора основания. Разместите его в ГИС.");
+        }
+        const protocols = await feeProtocols(payload, contract);
+        if (!feeMatches(current, {...desired, amount: feeAmount(desired.amount),
+             start: feeDate(desired.start), end: feeDate(desired.end)}) ||
+            !protocols.some(item => item.votingGuid === desired.protocol?.votingGuid &&
+              item.votingVersionGuid === desired.protocol?.votingVersionGuid)) {
+          throw new Error("Основание проекта недоступно. Обновите протокол перед размещением.");
+        }
+        await request("PUT", feeBase + "/approval", {entityGuid: current.guid, lastUpdate: current.lastUpdate},
+          feeState(contract, "edit", current.guid));
+        const saved = await feeDetails(current.guid, contract);
+        if (saved.status !== "APPROVED") throw new Error("ГИС не подтвердила размещение. Загрузите сведения перед повторной отправкой.");
+        return {record: normalizeFee(saved), contract};
+      }
+      if (type === "annul_management_fee") {
+        if (current.status === "TERMINATED") return {record: normalizeFee(current), contract};
+        if (current.status !== "APPROVED" || !current.lastUpdate || current.lastUpdate !== payload.lastUpdate || !String(payload.reason || "").trim()) {
+          throw new Error("Укажите причину и загрузите актуальные сведения о плате перед аннулированием.");
+        }
+        await request("PUT", feeBase + "/termination", {rootGuid: current.guid,
+          reason: String(payload.reason).trim(), lastUpdate: current.lastUpdate}, feeState(contract, "view", current.guid));
+        const saved = await feeDetails(current.guid, contract);
+        if (saved.status !== "TERMINATED") throw new Error("ГИС не подтвердила аннулирование. Загрузите сведения.");
+        return {record: normalizeFee(saved), contract};
+      }
+      throw new Error("Неизвестная операция со сведениями о плате.");
+    }
+
     // Recheck inside the selected page: tab navigation or organization switching
     // may have happened after discovery. Writes are also checked by request().
     await assertOrganization();
+
+    if (["load_management_fees", "load_fee_protocols", "save_management_fee_project",
+         "approve_management_fee", "annul_management_fee"].includes(command.type)) {
+      return {ok: true, result: await feeCommand(command.payload || {}, command.type)};
+    }
 
     if (command.type === "get_organization_act_signatory") {
       const details = await request("GET", "/ppa/api/rest/services/ppa/organizations/details",

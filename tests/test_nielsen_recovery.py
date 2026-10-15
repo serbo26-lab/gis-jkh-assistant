@@ -48,7 +48,7 @@ def test_failed_setting_restores_selection_without_applying(desktop, monkeypatch
 def test_failed_list_edit_keeps_input_and_gates_refresh_until_retry(desktop, monkeypatch):
     repo, window = desktop.repository, desktop.window
     repo.update_work_list_gis_state(desktop.work_list.id, gis_status="DRAFT")
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.work_lists_page
     page.refresh_work_lists(select_id=desktop.work_list.id)
     messages = []
@@ -65,8 +65,8 @@ def test_failed_list_edit_keeps_input_and_gates_refresh_until_retry(desktop, mon
         assert cell.text() == "321.45"
         assert repo.list_work_list_items(desktop.work_list.id)[0].price == original
         assert page.has_pending_save_error()
-        window.navigation.setCurrentRow(3)
-        assert window.pages.currentIndex() == window.navigation.currentRow() == 2
+        window.navigation.setCurrentRow(4)
+        assert window.pages.currentIndex() == window.navigation.currentRow() == 3
         assert page.flush_pending_changes() is False
         assert "Изменения остались в таблице, но ещё не сохранены" in messages[0]
         assert page.items_table.isEnabled()
@@ -78,14 +78,14 @@ def test_failed_list_edit_keeps_input_and_gates_refresh_until_retry(desktop, mon
     assert not page.has_pending_save_error()
     assert page.registry_combo.isEnabled()
     assert update is not None and item_id
-    window.navigation.setCurrentRow(3)
-    assert window.pages.currentIndex() == 3
+    window.navigation.setCurrentRow(4)
+    assert window.pages.currentIndex() == 4
 
 
 def test_failed_period_retains_input_and_retry_saves(desktop, monkeypatch):
     repo, window = desktop.repository, desktop.window
     repo.update_work_list_gis_state(desktop.work_list.id, gis_status="DRAFT")
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.work_lists_page
     page.refresh_work_lists(select_id=desktop.work_list.id)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a: None)
@@ -97,8 +97,8 @@ def test_failed_period_retains_input_and_retry_saves(desktop, monkeypatch):
         assert page.flush_pending_changes() is False
         assert repo.get_work_list(desktop.work_list.id).end_month == 12
         assert page.end_month.currentIndex() == 10
-        window.navigation.setCurrentRow(3)
-        assert window.pages.currentIndex() == window.navigation.currentRow() == 2
+        window.navigation.setCurrentRow(4)
+        assert window.pages.currentIndex() == window.navigation.currentRow() == 3
     assert page.flush_pending_changes() is True
     assert repo.get_work_list(desktop.work_list.id).end_month == 11
 
@@ -111,7 +111,7 @@ def test_first_flush_error_restores_owner_selection(desktop, monkeypatch, select
     extra_house = repo.create_house(organization_id=desktop.organization.id, address="Another fixture house")
     extra_list = repo.create_work_list(house_id=desktop.house.id, base_year=2027, items=[])
     repo.update_work_list_gis_state(desktop.work_list.id, gis_status="DRAFT")
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.work_lists_page
     page.refresh_organizations()
     page.refresh_work_lists(select_id=desktop.work_list.id)
@@ -145,7 +145,7 @@ def test_first_flush_error_restores_owner_selection(desktop, monkeypatch, select
 
 def test_photo_cancel_and_missing_file_preserve_existing_attachment(desktop, monkeypatch, tmp_path):
     window = desktop.window
-    window.navigation.setCurrentRow(4)
+    window.navigation.setCurrentRow(5)
     page = window.fixation_page
     item = desktop.repository.list_work_fixation_items(page._current_period_id)[0]
     photo = desktop.repository.add_work_fixation_photo(fixation_item_id=item.id,
@@ -207,7 +207,7 @@ def test_empty_house_card_does_not_display_previous_object(desktop):
 
 def test_fixed_scope_menu_names_actual_targets_without_changing_view(desktop):
     for index in (3, 4):
-        desktop.window.navigation.setCurrentRow(index + 1)
+        desktop.window.navigation.setCurrentRow(index + 2)
         page = desktop.window.pages.currentWidget()
         page._select_month(9)
         page.scope_switcher.set_scope("period")

@@ -4,6 +4,11 @@ from PySide6.QtCore import QTimer
 from .page_layouts import MONTHS
 
 TITLES = {
+    "load_management_fees": "Загрузка сведений о размере платы",
+    "load_fee_protocols": "Загрузка протоколов ОСС",
+    "save_management_fee_project": "Сохранение проекта платы в ГИС",
+    "approve_management_fee": "Размещение сведений о плате",
+    "annul_management_fee": "Аннулирование сведений о плате",
     "get_organization_act_signatory": "Получение руководителя УО",
     "resolve_planned_work_units": "Подготовка PDF • уточнение единиц измерения",
     "get_current_organization": "Загрузка управляющей организации",

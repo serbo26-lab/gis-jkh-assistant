@@ -136,8 +136,7 @@ def test_cached_directory_adds_work_on_first_click_without_network(desktop, monk
 
 def test_visible_selector_commands_months_and_unplanned(desktop):
     for index in (1, 2, 3, 4):
-        _select_page(desktop, index)
-        page = desktop.window.pages.widget(index + 1)
+        page = _select_page(desktop, index)
         settle(desktop.app)
         assert page.list_selector.isVisible()
         assert page.list_selector.item(0, 0).text()

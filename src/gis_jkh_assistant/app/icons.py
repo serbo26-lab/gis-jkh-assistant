@@ -6,6 +6,7 @@ from PySide6.QtSvg import QSvgRenderer
 from .styles import THEMES, tokens, color as theme_color
 
 _PATHS = {
+    "fees": '<path d="M5 4h14v17H5Z M8 8h8M8 12h5M8 16h8"/><path d="M9 2v4M15 2v4"/>',
     "houses": '<path d="M3 10 12 3l9 7v10H3Z"/><path d="M9 20v-8h6v8"/>',
     "lists": '<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
     "planning": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M8 14h2M14 14h2M8 18h2"/>',
