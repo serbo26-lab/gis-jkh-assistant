@@ -111,10 +111,11 @@ class OrganizationsPage(QWidget):
                     or getattr(self, "_workflow_busy", False))
         houses_busy = bool(self.houses_page._bulk_operation_name or self.houses_page._bulk_worker_running()
                            or getattr(self.houses_page, "_workflow_busy", False))
-        self.organization_combo.setEnabled(not busy and not houses_busy)
-        self.add_org_button.setEnabled(not busy and not houses_busy)
+        switch_busy = getattr(self.window(), "organization_switch_busy", lambda: False)()
+        self.organization_combo.setEnabled(not busy and not houses_busy and not switch_busy)
+        self.add_org_button.setEnabled(not busy and not houses_busy and not switch_busy)
         reason = organization_import_reason(self)
-        self.load_organization_button.setEnabled(not reason and not busy and not houses_busy)
+        self.load_organization_button.setEnabled(not reason and not busy and not houses_busy and not switch_busy)
         self.load_organization_button.setToolTip(reason or "Получить реквизиты из открытого кабинета и проверить перед добавлением.")
         available = bool(self._current_organization_id) and not busy and not houses_busy
         self.basic.setEnabled(available)
@@ -196,14 +197,24 @@ class OrganizationsPage(QWidget):
         self._set_bulk_status("Правки реквизитов отменены.")
 
     def _flush_autosave(self):
+        guard = getattr(self.window(), "prepare_organization_change", None)
+        if guard is not None and not guard():
+            return False
         return self.flush_pending_changes() and self.houses_page.flush_pending_changes()
 
     def _organization_changed(self):
+        selected_id = self.organization_combo.currentData()
+        # The selector is shared with HousesPage. Flush in the OLD context:
+        # a house autosave can refresh its registry, which must not select the
+        # new organization's house before every page has accepted the switch.
+        blocked = self.organization_combo.blockSignals(True)
+        self.organization_combo.setCurrentIndex(self.organization_combo.findData(self._current_organization_id))
+        self.organization_combo.blockSignals(blocked)
         if self._flush_autosave() is False:
-            blocked = self.organization_combo.blockSignals(True)
-            self.organization_combo.setCurrentIndex(self.organization_combo.findData(self._current_organization_id))
-            self.organization_combo.blockSignals(blocked)
             return
+        blocked = self.organization_combo.blockSignals(True)
+        self.organization_combo.setCurrentIndex(self.organization_combo.findData(selected_id))
+        self.organization_combo.blockSignals(blocked)
         self.houses_page._organization_changed()
         self.refresh_current()
 

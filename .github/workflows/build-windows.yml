@@ -55,7 +55,7 @@ jobs:
           $pythonDirectory = Split-Path -Parent $python
           # Do not collect incompatible Qt/ICU DLLs from unrelated tools in PATH.
           $env:PATH = "$pythonDirectory;$pythonDirectory\Scripts;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
-          & $python -m PyInstaller --clean --noconfirm --onefile --windowed --paths src --collect-data gis_jkh_assistant.browser --collect-data gis_jkh_assistant.app --name "GIS JKH Assistant" src/gis_jkh_assistant/__main__.py
+          & $python -m PyInstaller --clean --noconfirm --onefile --windowed --paths src --collect-data gis_jkh_assistant.browser --collect-data gis_jkh_assistant.app --icon src/gis_jkh_assistant/app/assets/branding/app.ico --name "GIS JKH Assistant" src/gis_jkh_assistant/__main__.py
           if ($LASTEXITCODE -ne 0) { throw "Cannot build Windows executable" }
 
       - name: Pack Windows build

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -91,11 +92,22 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(12, 16, 12, 16)
         app_name = QLabel("ГИС ЖКХ\nАссистент")
         app_name.setObjectName("SectionTitle")
-        sidebar_layout.addWidget(app_name)
+        brand_row = QHBoxLayout()
+        brand_row.addWidget(app_name, 1)
+        self.app_logo = QLabel()
+        self.app_logo.setAccessibleName("Логотип ГИС ЖКХ Ассистента")
+        set_label_icon(self.app_logo, "app-logo", 32)
+        brand_row.addWidget(self.app_logo)
+        sidebar_layout.addLayout(brand_row)
+        self._update_application_icon()
 
-        workflow_caption = QLabel("Рабочий процесс")
-        workflow_caption.setObjectName("ContextCaption")
-        sidebar_layout.addWidget(workflow_caption)
+        self.organization_caption = QLabel()
+        self.organization_caption.setObjectName("ContextCaption")
+        self.organization_caption.setWordWrap(True)
+        self.organization_caption.setTextFormat(Qt.TextFormat.PlainText)
+        self.organization_caption.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.organization_caption.setAccessibleName("Выбранная управляющая организация")
+        sidebar_layout.addWidget(self.organization_caption)
 
         groups = (
             (("УО", "organizations", "Организация, руководители и реквизиты актов"),
@@ -162,7 +174,7 @@ class MainWindow(QMainWindow):
         self.houses_page = HousesPage(repository, self.integration_gateway)
         self.organizations_page = OrganizationsPage(repository, self.houses_page, self.integration_gateway)
         self.management_fees_page = ManagementFeesPage(repository, self.integration_gateway)
-        self.houses_page.organization_context_label.show()
+        self.houses_page.organization_context.hide()
         self.work_lists_page = WorkListsPage(repository, self.integration_gateway)
         self.planning_page = PlanningPage(repository, self.integration_gateway)
         self.fixation_page = FixationPage(repository, self.integration_gateway)
@@ -203,6 +215,24 @@ class MainWindow(QMainWindow):
             self._navigate_workflow_target)
         self._connect_shared_context_sources()
         self._next_step_panel_changed(self.settings_page.next_step_panel_enabled())
+
+        # Organization selection is global in both tab-context modes. Restore it
+        # before the per-house/list/year shared context is applied below.
+        selected_org = self._shared_context.get("organization_id")
+        if self.organizations_page.organization_combo.findData(selected_org) < 0:
+            selected_org = self.organizations_page.organization_combo.currentData()
+        saved_house_id = self._shared_context.get("house_id")
+        saved_house = repository.get_house(saved_house_id) if saved_house_id else None
+        if saved_house is None or saved_house.organization_id != selected_org:
+            self._shared_context.update(house_id=None, work_list_id=None)
+        self._applying_shared_context = True
+        try:
+            self._shared_context["organization_id"] = selected_org
+            for name in ("houses", "fees", "work_lists", "planning", "fixation", "quality"):
+                self._apply_global_organization_to_page(name)
+        finally:
+            self._applying_shared_context = False
+        self._store_shared_context()
 
         self.integration_status_timer = QTimer(self)
         self.integration_status_timer.setInterval(1500)
@@ -260,20 +290,18 @@ class MainWindow(QMainWindow):
         dialog.activateWindow()
 
     def _connect_shared_context_sources(self) -> None:
-        self.management_fees_page.organization_combo.currentIndexChanged.connect(
-            lambda *_: self._capture_shared_context("fees", "organization"))
         self.management_fees_page.house_combo.currentIndexChanged.connect(
             lambda *_: self._capture_shared_context("fees", "house"))
         self.houses_page.organization_combo.currentIndexChanged.connect(
             lambda *_: self._capture_shared_context("houses", "organization")
         )
+        self.houses_page.organization_combo.currentTextChanged.connect(
+            self._update_organization_caption
+        )
         self.houses_page.house_list.currentItemChanged.connect(
             lambda *_: self._capture_shared_context("houses", "house")
         )
 
-        self.work_lists_page.organization_combo.currentIndexChanged.connect(
-            lambda *_: self._capture_shared_context("work_lists", "organization")
-        )
         self.work_lists_page.house_combo.currentIndexChanged.connect(
             lambda *_: self._capture_shared_context("work_lists", "house")
         )
@@ -291,11 +319,6 @@ class MainWindow(QMainWindow):
             ("fixation", self.fixation_page),
             ("quality", self.quality_page),
         ):
-            page.organization_combo.currentIndexChanged.connect(
-                lambda *_, name=name: self._capture_shared_context(
-                    name, "organization"
-                )
-            )
             page.house_combo.currentIndexChanged.connect(
                 lambda *_, name=name: self._capture_shared_context(name, "house")
             )
@@ -383,8 +406,11 @@ class MainWindow(QMainWindow):
     def _observe_context_operation(self, page, worker) -> None:
         """Record the context before asynchronous commands can emit UI changes."""
         self._active_workers.add(worker)
+        self.organizations_page.refresh_availability()
         def settled():
             self._active_workers.discard(worker)
+            if not self._closing:
+                self.organizations_page.refresh_availability()
             if self._close_requested:
                 self._close_timer.start(0)
         worker.finished.connect(lambda: QTimer.singleShot(0, settled))
@@ -452,14 +478,22 @@ class MainWindow(QMainWindow):
         self._capture_shared_context("work_lists", "work_list")
 
     def _capture_shared_context(self, source: str, kind: str) -> None:
+        if self._applying_shared_context:
+            return
+        if source == "houses" and kind == "organization":
+            self._global_organization_changed()
+            return
         if (
-            self._applying_shared_context
-            or not self.settings_page.shared_context_enabled()
+            not self.settings_page.shared_context_enabled()
             or self._page_is_busy(self._page_by_context_name(source))
         ):
             return
 
         values = self._context_values(source)
+        if values["organization_id"] != self._shared_context.get("organization_id"):
+            # Ignore transient house/list signals while the UO selector is being
+            # rebuilt. Only its accepted selection can change the global UO.
+            return
         if kind in ("organization", "house"):
             object_changed = any(
                 self._shared_context.get(field) != values[field]
@@ -480,6 +514,53 @@ class MainWindow(QMainWindow):
 
         self._store_shared_context()
         self._apply_shared_context(exclude=source)
+
+    def organization_switch_busy(self) -> bool:
+        return bool(self._active_workers or getattr(self, "_result_callbacks", 0)
+                    or any(self._page_is_busy(page) for page in self._data_pages()))
+
+    def prepare_organization_change(self) -> bool:
+        """Flush every affected page before the UO selector changes any data."""
+        if self.organization_switch_busy():
+            QMessageBox.information(self, "Выполняется операция",
+                "Дождитесь завершения текущей операции перед сменой управляющей организации.")
+            return False
+        previous_guard = self._applying_shared_context
+        self._applying_shared_context = True
+        try:
+            return all(page.flush_pending_changes() is not False for page in self._data_pages())
+        finally:
+            self._applying_shared_context = previous_guard
+
+    def _global_organization_changed(self) -> None:
+        organization_id = self.organizations_page.organization_combo.currentData()
+        if organization_id == self._shared_context.get("organization_id"):
+            self._update_organization_caption()
+            return
+        self._shared_context.update(organization_id=organization_id,
+                                    house_id=self._context_values("houses")["house_id"],
+                                    work_list_id=None)
+        self._applying_shared_context = True
+        try:
+            for name in ("fees", "work_lists", "planning", "fixation", "quality"):
+                self._apply_global_organization_to_page(name)
+        finally:
+            self._applying_shared_context = False
+        self._store_shared_context()
+        self._apply_shared_context(exclude="houses")
+
+    def _apply_global_organization_to_page(self, name: str) -> None:
+        page = self._page_by_context_name(name)
+        organization_id = self._shared_context.get("organization_id")
+        if self._page_is_busy(page) or getattr(page, "has_pending_save_error", lambda: False)():
+            return
+        if organization_id and page.organization_combo.findData(organization_id) < 0:
+            page.refresh_organizations()
+        if page.organization_combo.currentData() != organization_id:
+            self._set_combo_data(page.organization_combo, organization_id)
+            page._organization_changed()
+            if name == "houses":
+                self.organizations_page.refresh_current()
 
     def _shared_context_mode_changed(self, enabled: bool) -> None:
         if not enabled:
@@ -635,10 +716,11 @@ class MainWindow(QMainWindow):
             page._year_changed()
 
     def _update_context_summary(self) -> None:
+        self._update_organization_caption()
         if not self.settings_page.shared_context_enabled():
             self.context_mode_label.setText("Режим вкладок:\nНезависимый выбор")
             self.context_mode_label.setToolTip(
-                "Каждый раздел запоминает свой выбор. Изменить режим можно в настройках."
+                "УО общая для всей программы. Каждый раздел запоминает свой дом, перечень и период. Изменить режим можно в настройках."
             )
             return
         house_id = self._shared_context.get("house_id")
@@ -648,6 +730,35 @@ class MainWindow(QMainWindow):
         self.context_mode_label.setToolTip(
             "Выбор переносится между разделами. Изменить режим можно в настройках.\n" + address
         )
+
+    def _update_organization_caption(self, *_args) -> None:
+        organization_id = self._shared_context.get("organization_id")
+        organization = self.repository.get_organization(organization_id) if organization_id else None
+        name = organization.name if organization else "УО не выбрана"
+        # Preserve the navigation's height in short windows. The full name is
+        # always available in the tooltip; ordinary windows show up to 3 lines.
+        metrics = self.organization_caption.fontMetrics()
+        width = max(1, self.sidebar.width() - self.sidebar_layout.contentsMargins().left()
+                    - self.sidebar_layout.contentsMargins().right())
+        words = name.split()
+        lines = []
+        max_lines = 1 if self.height() < 700 else 3
+        while words and len(lines) < max_lines - 1:
+            line = words.pop(0)
+            while words and metrics.horizontalAdvance(line + " " + words[0]) <= width:
+                line += " " + words.pop(0)
+            lines.append(metrics.elidedText(line, Qt.TextElideMode.ElideRight, width))
+        if words:
+            lines.append(metrics.elidedText(" ".join(words), Qt.TextElideMode.ElideRight, width))
+        self.organization_caption.setText("\n".join(lines))
+        self.organization_caption.setToolTip(name + "\nВыбрать организацию можно в разделе «УО».")
+
+    def _update_application_icon(self) -> None:
+        app_icon = icon("app-logo", size=64)
+        self.setWindowIcon(app_icon)
+        app = QApplication.instance()
+        if app is not None:
+            app.setWindowIcon(app_icon)
 
     def _update_context_notices(self) -> None:
         enabled = self.settings_page.shared_context_enabled()
@@ -714,6 +825,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, theme, self._ui_scale)
+        self._update_application_icon()
         self._apply_window_chrome()
         self._update_display_layout(force=True)
         for row in range(self.navigation.count()):
@@ -902,6 +1014,8 @@ class MainWindow(QMainWindow):
             )
             if context_name is not None and context_name != "houses" and not page_busy:
                 self._page_by_context_name(context_name).refresh_organizations()
+            if context_name is not None:
+                self._apply_global_organization_to_page(context_name)
             if context_name is not None and self.settings_page.shared_context_enabled():
                 self._apply_shared_context_to_page(context_name)
         finally:
@@ -1005,6 +1119,7 @@ class MainWindow(QMainWindow):
             self.houses_page.card_layout.setProperty("uiBaseSpacing", None)
             apply_layout_scale(self.pages, self._ui_scale)
             QTimer.singleShot(0, self._refresh_navigation_metrics)
+        self._update_organization_caption()
 
     def _refresh_navigation_metrics(self) -> None:
         """Measure after stylesheet/layout settles, including the selected font."""

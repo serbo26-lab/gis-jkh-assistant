@@ -33,6 +33,7 @@ def test_original_assets_are_complete_valid_and_packaged(qt_app):
     config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert set(config["tool"]["setuptools"]["package-data"]["gis_jkh_assistant.app"]) == {
         "assets/icons/light/*.svg", "assets/icons/dark/*.svg",
+        "assets/branding/*.svg", "assets/branding/*.ico",
     }
     assert "--collect-data gis_jkh_assistant.app" in (
         root / ".github/workflows/build-windows.yml").read_text(encoding="utf-8")

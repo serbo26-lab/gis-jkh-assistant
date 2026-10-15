@@ -52,4 +52,7 @@ def test_build_uses_one_python_and_keeps_executable_name_as_one_argument(tmp_pat
     invocation = json.loads(capture.read_text(encoding="utf-8"))
     assert Path(invocation["python"]).resolve() == Path(sys.executable).resolve()
     assert invocation["argv"][invocation["argv"].index("--name") + 1] == "GIS JKH Assistant"
+    icon_path = invocation["argv"][invocation["argv"].index("--icon") + 1]
+    assert icon_path == "src/gis_jkh_assistant/app/assets/branding/app.ico"
+    assert (workflow.parents[2] / icon_path).is_file()
     assert str(fallback) not in invocation["path"].split(os.pathsep)

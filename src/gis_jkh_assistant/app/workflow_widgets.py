@@ -220,10 +220,9 @@ class ContextBar(QFrame):
         if not all(isinstance(control, QComboBox) for control in self.controls):
             return
         values = [control.currentText() for control in self.controls]
-        if len(values) == 4:
-            full = f"{values[1]} • {values[3]} • {values[2]}"
-            self.summary.setToolTip(" • ".join(values))
-            self.summary.setText(self.summary.fontMetrics().elidedText(full, Qt.TextElideMode.ElideRight, max(80, self.summary.width())))
+        full = " • ".join(values)
+        self.summary.setToolTip(full)
+        self.summary.setText(self.summary.fontMetrics().elidedText(full, Qt.TextElideMode.ElideRight, max(80, self.summary.width())))
 
     def add_field(self, label: str, control: QWidget) -> None:
         field = QWidget(self)
@@ -270,28 +269,30 @@ class ContextBar(QFrame):
                 control.setMinimumWidth(control.fontMetrics().horizontalAdvance("2026") + round(64 * scale))
         for i, field in enumerate(self.fields):
             field.setVisible(not self._compact or self._expanded)
-            if self._columns == 2 and count >= 4:
-                if i < 2:
-                    self.grid.addWidget(field, 0, i * 3, 1, 3)
-                elif i == 2:
-                    self.grid.addWidget(field, 1, 0, 1, 4)
+            if self._columns == 2 and count == 3:
+                # At small widths keep the address on its own full-width row.
+                if i == 0:
+                    self.grid.addWidget(field, 0, 0, 1, 2)
                 else:
-                    self.grid.addWidget(field, 1, 4 + i - 3, 1, 2 if count == 4 else 1)
+                    self.grid.addWidget(field, 1, i - 1)
             else:
                 self.grid.addWidget(field, i // self._columns, i % self._columns)
         for column in range(6):
-            weight = (1 if column >= 3 else 3) if self._columns >= 4 else 1
-            self.grid.setColumnStretch(column, weight if column < (6 if self._columns == 2 and count >= 4 else self._columns) else 0)
+            # House address gets the spare width; year/month keep readable sizes.
+            self.grid.setColumnStretch(column, 1 if column == 0 else 0)
         self._summary_changed()
 
     def _readable_columns(self, width: int) -> int:
         scale = float(QApplication.instance().property("uiScale") or 1.0)
-        lengths = (18, 24, 26, 6, 8)
         # The fields have stylesheet fonts different from the container font.
         # Include text padding and the styled arrow when choosing a single row.
-        required = sum(control.fontMetrics().horizontalAdvance("о" * lengths[min(i, 4)]) + 72 * scale
-                       for i, control in enumerate(self.controls))
-        return len(self.fields) if width >= required else 1 if width < 420 * scale else 2
+        samples = {"Дом": "о" * 28, "Год": "2026", "Месяц": "Сентябрь", "Месяц просмотра": "Сентябрь"}
+        required = sum(
+            control.fontMetrics().horizontalAdvance(samples.get(control.property("contextFieldLabel"), "о" * 12))
+            + 72 * scale + field.layout().itemAt(0).widget().sizeHint().width()
+            for field, control in zip(self.fields, self.controls)
+        ) + 16 * scale + max(0, len(self.fields) - 1) * self.grid.spacing()
+        return max(1, len(self.fields)) if width >= required else 1 if width < 420 * scale else 2
 
     def resizeEvent(self, event):  # noqa: N802
         width = event.size().width()

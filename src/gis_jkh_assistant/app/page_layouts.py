@@ -125,9 +125,10 @@ def page_root(page, title: str, subtitle: str) -> QVBoxLayout:
 
 def context_for(page, *, downstream: bool = True) -> ContextBar:
     context = ContextBar()
-    page.organization_combo = SafeComboBox()
+    # Controller handle only: the organization is selected in the UO section.
+    page.organization_combo = SafeComboBox(page)
+    page.organization_combo.hide()
     page.house_combo = SafeComboBox()
-    context.add_field("Управляющая организация", page.organization_combo)
     context.add_field("Дом", page.house_combo)
     if downstream:
         page.work_list_combo = SafeComboBox(page)
