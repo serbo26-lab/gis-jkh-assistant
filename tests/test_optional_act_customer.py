@@ -135,8 +135,8 @@ def test_partial_customer_excel_roundtrip_does_not_duplicate_undated_record(sour
     house = repo.get_house(work_list.house_id)
     file = tmp_path / "customer.xlsx"
     write_house_data_template(file, houses=[house], tariffs_by_house={}, repository=repo)
-    row = next(p for p in parse_house_data_template(file).people if p.house_id == house.id)
-    row.person_id = None  # Simulate a file without a local UUID.
+    row = next(p for p in parse_house_data_template(file).people if p.address == house.address)
+    assert row.person_id is None  # New templates contain only visible fields.
     matched, data, previous = prepare_person_change(repo, row, house_id=house.id)
     assert matched == person_id
     assert data["basis_kind"] == "" and data["valid_from"] == ""

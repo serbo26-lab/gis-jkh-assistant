@@ -59,7 +59,7 @@ def test_standard_buttons_and_year_text_are_readable(qt_app, theme, scale):
     year.deleteLater()
 
 
-def test_export_keeps_sorted_house_id_address_and_area_together(tmp_path):
+def test_export_keeps_sorted_address_and_area_together_without_local_ids(tmp_path):
     repo = Repository(tmp_path / "source.db")
     org = repo.create_organization(name="Вымышленная УО", ogrn="1022600000001")
     first = repo.create_house(organization_id=org.id, address="Дом Б", charge_area="23", house_object_guid="B")
@@ -67,7 +67,7 @@ def test_export_keeps_sorted_house_id_address_and_area_together(tmp_path):
     path = tmp_path / "data.xlsx"
     write_house_data_template(path, houses=[first, second], tariffs_by_house={})
     result = parse_house_data_template(path)
-    assert [(r.house_id, r.address, r.area) for r in result.areas] == [(second.id, "Дом А", "47"), (first.id, "Дом Б", "23")]
+    assert [(r.house_id, r.address, r.area) for r in result.areas] == [(None, "Дом А", "47"), (None, "Дом Б", "23")]
     recreated = [SimpleNamespace(**{**vars_like(second), "id": "new-a"}), SimpleNamespace(**{**vars_like(first), "id": "new-b"})]
     assert [resolve_house_row(r, recreated).id for r in result.areas] == ["new-a", "new-b"]
     workbook = load_workbook(path)

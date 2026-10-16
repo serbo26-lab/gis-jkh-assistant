@@ -1,9 +1,10 @@
 """Review every import change and explicitly resolve ambiguous house rows."""
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QHeaderView, QLabel,
+    QDialog, QDialogButtonBox, QHeaderView, QLabel,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 from gis_jkh_assistant.gis_files.house_extra_data import HOUSE_COLUMNS
+from .widgets import SafeComboBox
 
 AREA_LABELS = {"charge_area": "К начислению", "residential_area": "Жилая площадь",
                "non_residential_area": "Нежилая площадь"}
@@ -58,25 +59,52 @@ class HouseMatchDialog(QDialog):
         self.setWindowTitle("Сопоставление домов перед импортом")
         self.resize(900, 500)
         self.choices = []
+        groups = {}
+        for row, message in unresolved:
+            key = (
+                str(getattr(row, "house_id", None) or "").strip().casefold(),
+                " ".join(row.address.split()).casefold(),
+                *(str(getattr(row, field, None) or "").strip().casefold()
+                  for field in ("house_object_guid", "fias_house_guid", "gis_unique_house_number")),
+            )
+            groups.setdefault(key, []).append((row, message))
+        houses = list(houses)
         body = QVBoxLayout(self)
-        hint = QLabel("Выберите дом выбранной УО для каждой неоднозначной строки. До проверки и подтверждения импорт ничего не изменяет.")
+        hint = QLabel(
+            "Выберите соответствующий дом выбранной УО. Один выбор применяется ко всем "
+            "периодам и связанным сведениям этой группы. "
+            "До проверки и подтверждения импорт ничего не изменяет."
+        )
         hint.setWordWrap(True)
         body.addWidget(hint)
-        table = QTableWidget(len(unresolved), 3)
-        table.setHorizontalHeaderLabels(["Строка файла / адрес", "Причина", "Дом в программе"])
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for index, (row, message) in enumerate(unresolved):
-            table.setItem(index, 0, QTableWidgetItem(f"Строка {row.row_number}: {row.address}"))
-            table.setItem(index, 1, QTableWidgetItem(message))
-            combo = QComboBox()
+        self.summary = QLabel(
+            f"Сопоставлений: {len(groups)}; записей файла: "
+            f"{sum(len(rows) for rows in groups.values())}."
+        )
+        body.addWidget(self.summary)
+        self.table = QTableWidget(len(groups), 3)
+        self.table.setHorizontalHeaderLabels(["Дом / записи файла", "Причина", "Дом в программе"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for index, rows in enumerate(groups.values()):
+            row = rows[0][0]
+            numbers = ", ".join(str(number) for number in sorted({r.row_number for r, _ in rows}))
+            address = QTableWidgetItem(f"{row.address}\nЗаписей: {len(rows)}")
+            address.setToolTip(f"{row.address}\nСтроки файла: {numbers}\nЗаписей: {len(rows)}")
+            self.table.setItem(index, 0, address)
+            messages = "\n".join(dict.fromkeys(message for _, message in rows))
+            reason = QTableWidgetItem(messages)
+            reason.setToolTip(messages)
+            self.table.setItem(index, 1, reason)
+            combo = SafeComboBox()
             combo.addItem("Выберите дом…", None)
             for house in houses:
                 combo.addItem(house.address, house.id)
-            table.setCellWidget(index, 2, combo)
-            self.choices.append((row, combo))
+            self.table.setCellWidget(index, 2, combo)
+            self.choices.extend((source, combo) for source, _ in rows)
             combo.currentIndexChanged.connect(self._enabled)
-        body.addWidget(table, 1)
+        self.table.resizeRowsToContents()
+        body.addWidget(self.table, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.apply = buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.apply.setText("Проверить изменения")
@@ -86,7 +114,11 @@ class HouseMatchDialog(QDialog):
         body.addWidget(buttons)
 
     def _enabled(self):
-        self.apply.setEnabled(all(combo.currentData() for _, combo in self.choices))
+        self.apply.setEnabled(bool(self.choices) and all(combo.currentData() for _, combo in self.choices))
+
+    def accept(self):
+        if self.choices and all(combo.currentData() for _, combo in self.choices):
+            super().accept()
 
     def mapping(self):
         return {id(row): combo.currentData() for row, combo in self.choices}

@@ -65,7 +65,8 @@ def test_house_data_template_roundtrip(tmp_path) -> None:
 
     result = parse_house_data_template(path)
 
-    assert result.areas[0].house_id == first.id
+    assert result.areas[0].house_id is None
+    assert result.areas[0].address == first.address
     assert result.areas[0].area == "3956,4"
     assert result.tariffs[0].start.value.isoformat() == "2025-08-01"
     assert result.tariffs[0].start.precision == "month"

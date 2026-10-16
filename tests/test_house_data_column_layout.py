@@ -1,4 +1,4 @@
-"""Copying a rectangular tariff history must not overwrite hidden house IDs."""
+"""Visible-only templates support rectangular pastes and legacy imports."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -11,6 +11,7 @@ from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore
 from gis_jkh_assistant.gis_files.house_data import (
     HouseDataImportError,
     parse_house_data_template,
+    resolve_house_row,
     write_house_data_template,
 )
 
@@ -37,18 +38,18 @@ def _column(sheet, header):
     return next(cell.column for cell in sheet[1] if cell.value == header)
 
 
-def test_all_house_sheets_keep_technical_columns_before_the_visible_block(houses, tmp_path):
+def test_all_house_sheets_contain_only_visible_editable_fields(houses, tmp_path):
     repository, records = houses
     path = tmp_path / "template.xlsx"
     write_house_data_template(path, houses=records, tariffs_by_house={}, repository=repository)
     workbook = load_workbook(path)
     try:
         expected = {
-            "Площади": ("Адрес", 5, "F2"),
-            "Тарифы": ("Адрес", 5, "F2"),
-            "Дома": ("Адрес", 5, "F2"),
-            "Представители домов": ("Адрес", 6, "G2"),
-            "Подписанты УО": ("УО", 3, "D2"),
+            "Площади": ("Адрес", 1, "B2"),
+            "Тарифы": ("Адрес", 1, "B2"),
+            "Дома": ("Адрес", 1, "B2"),
+            "Представители домов": ("Адрес", 1, "B2"),
+            "Подписанты УО": ("УО", 1, "B2"),
         }
         for name, (header, first_visible, freeze) in expected.items():
             sheet = workbook[name]
@@ -56,8 +57,13 @@ def test_all_house_sheets_keep_technical_columns_before_the_visible_block(houses
             assert sheet.freeze_panes == freeze
             for cell in sheet[1]:
                 hidden = bool(sheet.column_dimensions[cell.column_letter].hidden)
-                assert hidden == (cell.column < first_visible), (name, cell.coordinate)
-                assert str(cell.value).startswith("_") == hidden
+                assert not hidden, (name, cell.coordinate)
+                assert not str(cell.value).startswith("_")
+            assert not any(dimension.hidden for dimension in sheet.row_dimensions.values())
+            exported = {str(cell.value) for row in sheet for cell in row if cell.value is not None}
+            assert not exported.intersection({h.id for h in records})
+            assert not exported.intersection({h.house_object_guid for h in records})
+            assert not exported.intersection({h.fias_house_guid for h in records})
         tariffs = workbook["Тарифы"]
         assert sum(cell.value == "Действует с" for cell in tariffs[1]) >= 20
     finally:
@@ -72,12 +78,10 @@ def test_rectangular_multi_house_paste_keeps_every_tariff_and_identity(houses, t
     workbook = load_workbook(path)
     sheet = workbook["Тарифы"]
     address_column = _column(sheet, "Адрес")
-    identities = {
-        row: tuple(sheet.cell(row, column).value for column in range(1, address_column))
-        for row in range(2, len(records) + 2)
-    }
     expected = []
-    for row, house in enumerate(records, 2):
+    # Paste a different house order over the existing template. Matching must
+    # follow visible addresses, without stale hidden IDs from the old rows.
+    for row, house in enumerate(reversed(records), 2):
         # A normal clipboard block contains the address followed by uninterrupted
         # date/amount pairs, just like a yearly tariff spreadsheet.
         clipboard = [house.address]
@@ -88,14 +92,12 @@ def test_rectangular_multi_house_paste_keeps_every_tariff_and_identity(houses, t
             amount = Decimal("18.40") + Decimal(index) / 100 + Decimal(row - 2)
             clipboard.extend((start, str(amount).replace(".", ",")))
             expected.append((
-                house.id,
+                None,
                 house.address,
                 start.date().isoformat(),
                 "month" if day == 1 else "day",
                 format(amount, "f").rstrip("0").rstrip(".").replace(".", ","),
-                house.house_object_guid,
-                house.fias_house_guid,
-                house.gis_unique_house_number,
+                None, None, None,
             ))
         for offset, value in enumerate(clipboard):
             sheet.cell(row, address_column + offset, value)
@@ -111,19 +113,13 @@ def test_rectangular_multi_house_paste_keeps_every_tariff_and_identity(houses, t
         row.house_id, row.address, row.start.value.isoformat(), row.start.precision,
         row.amount, row.house_object_guid, row.fias_house_guid, row.gis_unique_house_number,
     ) for row in imported.tariffs] == expected
-    workbook = load_workbook(path)
-    try:
-        sheet = workbook["Тарифы"]
-        assert {
-            row: tuple(sheet.cell(row, column).value for column in range(1, address_column))
-            for row in identities
-        } == identities
-    finally:
-        workbook.close()
+    by_address = {house.address: house.id for house in records}
+    for row in imported.tariffs:
+        assert resolve_house_row(row, records).id == by_address[row.address]
 
 
-@pytest.mark.parametrize("include_identities", [False, True])
-def test_old_horizontal_tariffs_remain_importable(houses, tmp_path, include_identities):
+@pytest.mark.parametrize("identity_position", ["absent", "trailing", "prefix"])
+def test_old_horizontal_tariffs_remain_importable(houses, tmp_path, identity_position):
     _, records = houses
     house = records[0]
     workbook = Workbook()
@@ -135,9 +131,10 @@ def test_old_horizontal_tariffs_remain_importable(houses, tmp_path, include_iden
     header = ["_house_id", "Адрес", "Действует с", "Тариф, руб./м² в месяц",
               "Действует с", "Тариф, руб./м² в месяц"]
     row = [house.id, house.address, "08.2025", "22,15", "10.08.2026", "23"]
-    if include_identities:
-        header.extend(["_house_object_guid", "_fias_house_guid", "_gis_unique_house_number"])
-        row.extend([house.house_object_guid, house.fias_house_guid, house.gis_unique_house_number])
+    if identity_position != "absent":
+        position = 1 if identity_position == "prefix" else len(header)
+        header[position:position] = ["_house_object_guid", "_fias_house_guid", "_gis_unique_house_number"]
+        row[position:position] = [house.house_object_guid, house.fias_house_guid, house.gis_unique_house_number]
     tariffs.append(header)
     tariffs.append(row)
     path = tmp_path / "old-horizontal.xlsx"
@@ -148,7 +145,7 @@ def test_old_horizontal_tariffs_remain_importable(houses, tmp_path, include_iden
     assert [(row.start.input_label, row.amount) for row in imported.tariffs] == [
         ("08.2025", "22,15"), ("10.08.2026", "23"),
     ]
-    if include_identities:
+    if identity_position != "absent":
         assert imported.tariffs[0].house_object_guid == house.house_object_guid
 
 
@@ -177,17 +174,24 @@ def test_old_extra_sheet_order_keeps_house_fields_zeros_and_person_ids(houses, t
         values = list(sheet.values)
         headers = list(values[0])
         visible = [header for header in headers if not header.startswith("_") and header not in prefix]
-        trailing = [header for header in headers if header.startswith("_") and header not in prefix]
+        trailing = [] if name == "Подписанты УО" else ["_house_object_guid", "_fias_house_guid", "_gis_unique_house_number"]
         order = prefix + visible + trailing
         sheet.delete_rows(1, sheet.max_row)
         sheet.append(order)
         for row in values[1:]:
-            sheet.append([row[headers.index(header)] for header in order])
+            fields = dict(zip(headers, row))
+            fields.update(_house_id=house.id, _organization_id=house.organization_id,
+                          _house_object_guid=house.house_object_guid, _fias_house_guid=house.fias_house_guid,
+                          _gis_unique_house_number=house.gis_unique_house_number)
+            if name != "Дома":
+                owner = {"organization_id": house.organization_id} if name == "Подписанты УО" else {"house_id": house.id}
+                fields["_person_id"] = store.list_people(**owner)[0]["id"]
+            sheet.append([fields.get(header) for header in order])
     workbook.save(path)
     workbook.close()
     after = parse_house_data_template(path)
-    assert after.houses == before.houses
-    assert after.people == before.people
+    assert [(r.address, r.fields) for r in after.houses] == [(r.address, r.fields) for r in before.houses]
+    assert [(r.address, r.ogrn, r.fields) for r in after.people] == [(r.address, r.ogrn, r.fields) for r in before.people]
     assert after.houses[0].fields["non_residential_premises_count"] == 0
     assert all(person.person_id for person in after.people)
 
@@ -221,4 +225,22 @@ def test_invalid_tariff_columns_are_reported_instead_of_silently_ignored(houses,
     workbook.save(path)
     workbook.close()
     with pytest.raises(HouseDataImportError):
+        parse_house_data_template(path)
+
+
+@pytest.mark.parametrize("sheet_name,field,value", [
+    ("Дома", "Количество жилых помещений", 17),
+    ("Представители домов", "ФИО", "Иванова Мария Ивановна"),
+])
+def test_filled_card_without_address_is_reported_before_house_matching(houses, tmp_path, sheet_name, field, value):
+    _, records = houses
+    path = tmp_path / "missing-address.xlsx"
+    write_house_data_template(path, houses=records, tariffs_by_house={})
+    book = load_workbook(path)
+    sheet = book[sheet_name]
+    sheet.cell(2, 1).value = None
+    sheet.cell(2, _column(sheet, field), value)
+    book.save(path)
+    book.close()
+    with pytest.raises(ValueError, match="строка 2: Укажите адрес дома"):
         parse_house_data_template(path)

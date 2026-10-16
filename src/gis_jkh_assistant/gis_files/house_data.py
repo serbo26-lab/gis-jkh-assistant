@@ -88,16 +88,15 @@ def write_house_data_template(
         "Конечную дату тарифа вводить не нужно: она определяется следующим изменением.",
         "Если тариф не менялся, повторять его каждый год не обязательно.",
         "Старый вертикальный формат (одна строка = одна точка тарифа) тоже поддерживается.",
-        "Служебные идентификаторы скрыты только в начале каждого листа, перед адресом или названием УО. "
-        "Не меняйте их при вставке данных. Адрес используется для проверки соответствия строк; "
-        "после пересоздания базы проверьте сопоставление перед применением.",
+        "В шаблоне нет скрытых столбцов и служебных идентификаторов. Дома сопоставляются по адресу "
+        "в выбранной УО, независимо от порядка строк. Неоднозначный адрес нужно сопоставить перед импортом.",
     ]
     for line in instructions:
         instruction.append([line])
     instruction.column_dimensions["A"].width = 105
 
     areas = workbook.create_sheet(AREA_SHEET)
-    areas.append(["_house_id", *IDENTITY_HEADERS, "Адрес", "Площадь к начислению, м²", *AREA_HEADERS])
+    areas.append(["Адрес", "Площадь к начислению, м²", *AREA_HEADERS])
     _style_header(areas)
 
     sorted_houses = sorted(houses, key=lambda item: item.address.casefold())
@@ -114,17 +113,16 @@ def write_house_data_template(
     )
 
     tariffs = workbook.create_sheet(TARIFF_SHEET)
-    tariff_header = ["_house_id", *IDENTITY_HEADERS, "Адрес"]
+    tariff_header = ["Адрес"]
     for _ in range(pair_count):
         tariff_header.extend(["Действует с", "Тариф, руб./м² в месяц"])
     tariffs.append(tariff_header)
     _style_header(tariffs)
 
     for house in sorted_houses:
-        identity = [house.house_object_guid, house.fias_house_guid, house.gis_unique_house_number]
-        areas.append([house.id, *identity, house.address, house.charge_area or "", house.residential_area or "", house.non_residential_area or ""])
+        areas.append([house.address, house.charge_area or "", house.residential_area or "", house.non_residential_area or ""])
 
-        tariff_row: list[object] = [house.id, *identity, house.address]
+        tariff_row: list[object] = [house.address]
         existing = histories[house.id]
         for index in range(pair_count):
             if index < len(existing):
@@ -135,32 +133,28 @@ def write_house_data_template(
         tariffs.append(tariff_row)
 
     for row in range(2, areas.max_row + 1):
-        for column in (6, 7, 8):
+        for column in (2, 3, 4):
             areas.cell(row, column).number_format = "@"
     for row in range(2, tariffs.max_row + 1):
-        for column in range(6, tariffs.max_column + 1):
+        for column in range(2, tariffs.max_column + 1):
             tariffs.cell(row, column).number_format = "@"
 
     for sheet in (areas, tariffs):
-        sheet.column_dimensions["A"].hidden = True
-        for cell in sheet[1]:
-            if cell.value in IDENTITY_HEADERS:
-                sheet.column_dimensions[cell.column_letter].hidden = True
-        sheet.freeze_panes = "F2"
+        sheet.freeze_panes = "B2"
         sheet.auto_filter.ref = sheet.dimensions
-    areas.column_dimensions["E"].width = 70
-    for column in ("F", "G", "H"):
+    areas.column_dimensions["A"].width = 70
+    for column in ("B", "C", "D"):
         areas.column_dimensions[column].width = 28
-    tariffs.column_dimensions["E"].width = 70
-    for column in range(6, tariffs.max_column + 1):
+    tariffs.column_dimensions["A"].width = 70
+    for column in range(2, tariffs.max_column + 1):
         tariffs.column_dimensions[
             tariffs.cell(1, column).column_letter
         ].width = 20 if column % 2 == 0 else 28
 
     from .house_extra_data import write_extra_sheets
     write_extra_sheets(workbook, sorted_houses, repository)
-    instruction.append(["Лист «Дома»: помещения, договор, сроки управления и адресные реквизиты акта. Пустые ячейки не удаляют сохранённые значения; явный ноль меняет количество помещений на ноль."])
-    instruction.append(["Листы «Представители домов» и «Подписанты УО»: одна строка — один период полномочий. Заполните ФИО, основание и точную дату начала; окончание необязательно и включается в период. Для новой записи скопируйте строку дома / УО и очистите _person_id. Подпись и печать загружаются только в программе."])
+    instruction.append(["Лист «Дома»: количество помещений, договор, сроки управления и адресные реквизиты акта. Перечень квартир и помещений не выгружается. Пустые ячейки не удаляют сохранённые значения; явный ноль меняет количество помещений на ноль."])
+    instruction.append(["Листы «Представители домов» и «Подписанты УО»: одна строка — один период полномочий. Заполните ФИО, основание и точную дату начала; окончание необязательно и включается в период. Совпадение ФИО и даты начала обновляет существующую запись этого дома / УО. Для нового периода добавьте строку. Подпись и печать загружаются только в программе."])
     workbook.save(Path(path))
 
 
@@ -179,13 +173,13 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
         tariffs_sheet = workbook[TARIFF_SHEET]
         _require_headers(
             areas_sheet,
-            ["_house_id", "Адрес", "Площадь к начислению, м²"],
+            ["Адрес", "Площадь к начислению, м²"],
         )
         tariff_pairs = _tariff_column_pairs(tariffs_sheet)
 
         area_headers = [str(c.value or "").strip() for c in areas_sheet[1]]
         tariff_headers = [str(c.value or "").strip() for c in tariffs_sheet[1]]
-        _require_unique_headers(areas_sheet, [*AREA_HEADERS, *IDENTITY_HEADERS])
+        _require_unique_headers(areas_sheet, ["_house_id", *AREA_HEADERS, *IDENTITY_HEADERS])
         def identity_fields(values, headers):
             return {header[1:]: _text(_at(values, headers.index(header)))
                     for header in IDENTITY_HEADERS if header in headers}
@@ -197,7 +191,7 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
             areas_sheet.iter_rows(min_row=2, values_only=True),
             start=2,
         ):
-            house_id = _text(_at(values, area_headers.index("_house_id")))
+            house_id = _text(_at(values, area_headers.index("_house_id"))) if "_house_id" in area_headers else None
             address = _text(_at(values, area_headers.index("Адрес"))) or ""
             raw_area = _at(values, area_headers.index("Площадь к начислению, м²"))
             raw_components = [_at(values, area_headers.index(header)) if header in area_headers else None
@@ -221,15 +215,25 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
                                            **identity_fields(values, area_headers), charge_explicit=supplied[0]))
 
         seen_tariffs: set[tuple[str, str]] = set()
+        recovered_rows = 0
         for row_number, cells in enumerate(
             tariffs_sheet.iter_rows(min_row=2),
             start=2,
         ):
-            house_id = _text(_cell_value(cells, tariff_headers.index("_house_id") + 1))
+            house_id = _text(_cell_value(cells, tariff_headers.index("_house_id") + 1)) if "_house_id" in tariff_headers else None
             address = _text(_cell_value(cells, tariff_headers.index("Адрес") + 1)) or ""
+            row_pairs = tariff_pairs
+            identities = identity_fields(tuple(c.value for c in cells), tariff_headers)
+            recovered_pair = _legacy_overwritten_tariff_pair(cells, tariff_headers, tariff_pairs)
+            if recovered_pair:
+                row_pairs = [*tariff_pairs, recovered_pair]
+                # These two cells contain a pasted tariff, not house GUIDs.
+                identities.pop("house_object_guid", None)
+                identities.pop("fias_house_guid", None)
+                recovered_rows += 1
 
             for pair_number, (start_column, amount_column) in enumerate(
-                tariff_pairs,
+                row_pairs,
                 start=1,
             ):
                 start_cell = _cell(cells, start_column)
@@ -271,9 +275,15 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
                     )
                 seen_tariffs.add(duplicate_key)
                 tariff_rows.append(
-                    ImportedTariffRow(house_id, address, start, amount, row_number, **identity_fields(tuple(c.value for c in cells), tariff_headers))
+                    ImportedTariffRow(house_id, address, start, amount, row_number, **identities)
                 )
 
+        if recovered_rows:
+            warnings.append(
+                f"В старом шаблоне последняя пара тарифа попала в скрытые служебные столбцы. "
+                f"Эти пары прочитаны как тарифы, включая последний период. Строк: {recovered_rows}. "
+                "Для следующего заполнения экспортируйте новый шаблон без скрытых столбцов."
+            )
         if not area_rows and not tariff_rows:
             warnings.append("В файле нет заполненных площадей или тарифов.")
 
@@ -306,14 +316,15 @@ def normalize_positive_decimal(value: object) -> str:
 
 
 def _tariff_column_pairs(sheet) -> list[tuple[int, int]]:  # noqa: ANN001
-    _require_headers(sheet, ["_house_id", "Адрес"])
+    _require_headers(sheet, ["Адрес"])
+    _require_unique_headers(sheet, ["_house_id"])
     _require_unique_headers(sheet, IDENTITY_HEADERS)
     headers = [str(cell.value if cell.value is not None else "").strip() for cell in sheet[1]]
     start_header, amount_header = "Действует с", "Тариф, руб./м² в месяц"
     first_pair = next((i for i, header in enumerate(headers) if header == start_header), None)
     metadata_headers = {"_house_id", "Адрес", *IDENTITY_HEADERS}
     if (first_pair is None
-            or not {"_house_id", "Адрес"}.issubset(headers[:first_pair])
+            or "Адрес" not in headers[:first_pair]
             or any(header not in metadata_headers for header in headers[:first_pair])):
         raise HouseDataImportError(
             f"Лист «{sheet.title}» имеет неизвестную структуру. "
@@ -352,6 +363,32 @@ def _tariff_column_pairs(sheet) -> list[tuple[int, int]]:  # noqa: ANN001
             "Ожидаются «Действует с» и «Тариф, руб./м² в месяц»."
         )
     return pairs
+
+
+def _legacy_overwritten_tariff_pair(cells, headers, pairs):
+    """Recover a complete pasted pair occupying the old trailing GUID columns.
+
+    A real GUID cannot parse as a date. Do not discard other identity evidence,
+    or infer tariffs from arbitrary malformed identifiers.
+    """
+    first = pairs[-1][1]  # Zero-based index immediately after the last pair.
+    if headers[first:first + 3] != IDENTITY_HEADERS:
+        return None
+    start_cell = _cell(cells, first + 1)
+    amount = _cell_value(cells, first + 2)
+    start_value = start_cell.value if start_cell else None
+    if start_value is None or not str(start_value).strip():
+        try:
+            normalize_positive_decimal(amount)
+        except ValueError:
+            return None
+        # Let the normal pair validation explain the missing date.
+        return first + 1, first + 2
+    try:
+        _parse_tariff_start_cell(start_cell)
+    except ValueError:
+        return None
+    return first + 1, first + 2
 
 
 def _last_populated_column(sheet, first_column: int) -> int | None:  # noqa: ANN001
