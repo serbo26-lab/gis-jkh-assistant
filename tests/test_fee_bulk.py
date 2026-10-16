@@ -111,7 +111,7 @@ def test_generation_and_bulk_transfer_preserve_remote_history(store, status):
     repo.create_house_tariff(house_id=house.id, amount="15.12", start_year=2026, start_month=1)
     fee_store.import_remote(house.id, fees.context(fees.remote(status=status)))
     before = fee_store.list(house.id)
-    assert _preview(repo, fee_store, house)[0].blocked
+    assert _preview(repo, fee_store, house)[0].blocked is (status == "APPROVED")
     for action in ("save", "approve"):
         assert all(job.state == "blocked" for job in prepare_jobs(repo, fee_store, house.organization_id, [house.id], action))
     assert fee_store.list(house.id) == before

@@ -63,8 +63,8 @@ def test_basis_is_required_only_for_remote_workflow(store):
     with pytest.raises(ValueError, match="Выберите протокол"):
         validate_document(document)
     assert validate_document(dict(DOCUMENT, amount="15,12"))["amount"] == "15.12"
-    assert helper_supports_fees("0.1.33")
-    assert not helper_supports_fees("0.1.32")
+    assert helper_supports_fees("0.1.34")
+    assert not helper_supports_fees("0.1.33")
     assert not helper_supports_fees("1.0")
 
 
@@ -201,7 +201,7 @@ def fee_page(desktop, monkeypatch):
     window = desktop.window
     page = window.management_fees_page
     original = desktop.gateway.status
-    monkeypatch.setattr(desktop.gateway, "status", lambda: replace(original(), helper_version="0.1.33"))
+    monkeypatch.setattr(desktop.gateway, "status", lambda: replace(original(), helper_version="0.1.34"))
     window.navigation.setCurrentRow(window.pages.indexOf(page))
     page.store.import_remote(desktop.house.id, context())
     page._refresh_table()

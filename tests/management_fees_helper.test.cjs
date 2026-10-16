@@ -28,10 +28,15 @@ function fixture(options = {}) {
     const {url, method} = config;
     if (url === "/ppa/api/rest/services/ppa/organizations/details") return {data: {
       guid: "org-version", registryOrganizationRootEntityGuid: "org-root", ogrn: org.ogrn, shortName: "TEST UO"}};
-    if (url.endsWith("/documents/search")) return {data: [{...contractDto, managementOrgOgrn: org.ogrn, totalCount: 1}]};
-    if (url.includes("/managements/versions/")) return {data: contractDto};
-    if (url.includes("/protocol/search-lite")) return {data: {items: state.protocols, total: state.protocols.length}};
-    if (url.startsWith(base + "/search;")) return {data: {items: state.records, totalCount: state.records.length}};
+    const contracts = options.contracts || [contractDto];
+    if (url.endsWith("/documents/search")) return {data: contracts.map(c => ({...c, managementOrgOgrn: org.ogrn, totalCount: contracts.length}))};
+    if (url.includes("/managements/versions/")) return {data: contracts.find(c => url.endsWith(c.versionInfoDTO.guid))};
+    if (url.includes("/protocol/search-lite")) return {data: options.protocolPage || {items: state.protocols, total: state.protocols.length}};
+    if (url.startsWith(base + "/search;")) {
+      if (options.feeLists?.[config.data.agreementRootGuid]) return {data: options.feeLists[config.data.agreementRootGuid]};
+      const records = state.records.filter(r => r.agreementRootGuid === config.data.agreementRootGuid);
+      return {data: {items: records, totalCount: records.length}};
+    }
     if (url === base + "/" && ["POST", "PUT"].includes(method) && options.periodValidationError) {
       const data = {title: "LogicValidationException", details: {
         logicExceptionType: "MP_NOT_CORRESPOND_MANAGEMENT_AGR_PERIOD", type: "MP_NOT_CORRESPOND_MANAGEMENT_AGR_PERIOD"}};
@@ -87,6 +92,89 @@ function remote(updates = {}) {
     period: {from: "01.01.2026", to: "31.12.2026"}, versionInfo: {guid: "fee-version-1", versionNumber: 1}, ...updates};
 }
 function writes(calls) { return calls.filter(c => c.url.startsWith(base) && !c.url.includes("/search;") && c.method !== "GET"); }
+
+function agreement(guid, version, status) {
+  return {guid, versionInfoDTO: {guid: version}, agreementStatus: status,
+    agreementType: "MANAGEMENT", published: true, managementOrgRootGuid: "org-root",
+    managementOrg: {ogrn: org.ogrn}, number: guid, effectiveDate: "01.01.2020", endDate: "31.12.2030",
+    managedObjectList: [{rootEntityGuid: guid === "contract-root" ? "object-root" : "old-object",
+      fiasHouseAddress: {houseRef: {code: "fias-house"}}, managedDateStart: "01.01.2020", managedDateEnd: "31.12.2030"}]};
+}
+
+for (const oldResponse of [{items: null, totalCount: 0}, {totalCount: "0"}, {unknown: true}]) {
+  test(`old agreement does not hide the running agreement: ${JSON.stringify(oldResponse)}`, async () => {
+    const f = fixture({contracts: [agreement("old-root", "old-version", "TERMINATED"),
+      agreement("contract-root", "contract-version", "RUNNING")],
+      feeLists: {"old-root": oldResponse}, records: [remote({status: "APPROVED"})]});
+    const reply = await f.run("load_management_fees");
+    assert.equal(reply.ok, true, reply.error);
+    assert.equal(reply.result.contracts.length, 2);
+    assert.equal(reply.result.records.length, 1);
+    assert.equal(reply.result.records[0].record.guid, "fee-root");
+    assert.equal(reply.result.contractErrors.length, oldResponse.unknown ? 1 : 0);
+    assert.equal(writes(f.calls).length, 0);
+    const protocolsCall = f.calls.find(c => c.url.includes("/protocol/search-lite"));
+    assert.match(protocolsCall.headers["State-GUID"], /contract-version/);
+  });
+}
+
+test("absent fee list with absent count is not reported as an empty successful import", async () => {
+  const f = fixture({feeLists: {"contract-root": {items: null}}});
+  const reply = await f.run("load_management_fees");
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /Не удалось прочитать/);
+  assert.equal(writes(f.calls).length, 0);
+});
+
+test("positive count without returned rows is not a successful empty import", async () => {
+  const f = fixture({feeLists: {"contract-root": {items: [], totalCount: 1}}});
+  const reply = await f.run("load_management_fees");
+  assert.equal(reply.ok, false);
+  assert.equal(writes(f.calls).length, 0);
+});
+
+test("a house without registry protocols still imports its existing fee and scanned basis", async () => {
+  const f = fixture({protocolPage: {items: null, total: 0}, records: [remote({status: "APPROVED",
+    protocolFromVoting: false, ownerVotingList: [], ownerVotingGuidList: [], managementProtocols: [{guid: "scan"}]})]});
+  const reply = await f.run("load_management_fees");
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(reply.result.records.length, 1);
+  assert.deepEqual(reply.result.protocols, []);
+  assert.equal(reply.result.records[0].record.hasScanBasis, true);
+  assert.equal(reply.result.records[0].record.hasOtherDetails, false);
+});
+
+test("read accepts a published period outside the agreement without changing its dates", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", period: {from: "01.06.2019", to: "31.05.2024"}})]});
+  const reply = await f.run("load_management_fees");
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(reply.result.records[0].record.period.from, "2019-06-01");
+  assert.equal(writes(f.calls).length, 0);
+});
+
+test("can replace a scanned basis with the selected registry protocol on an existing published record", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", protocolFromVoting: false,
+    ownerVotingGuidList: [], ownerVotingList: null, managementProtocols: [{guid: "old-scan"}], managementPayment: "14.00"})]});
+  const reply = await f.run("save_management_fee_project", {remoteGuid: "fee-root", lastUpdate: "revision-1"});
+  assert.equal(reply.ok, true, reply.error);
+  const sent = writes(f.calls);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].method, "PUT");
+  assert.deepEqual(sent[0].data.managementProtocols, []);
+  assert.deepEqual(sent[0].data.ownerVotingGuidList, [protocol.votingGuid]);
+  assert.equal(reply.result.record.guid, "fee-root");
+});
+
+test("annuls an out-of-management fee with a scanned basis without validating a new protocol", async () => {
+  const f = fixture({records: [remote({status: "APPROVED", protocolFromVoting: false,
+    ownerVotingGuidList: [], ownerVotingList: null, managementProtocols: [{guid: "old-scan"}],
+    period: {from: "01.06.2019", to: "31.05.2024"}})]});
+  const reply = await f.run("annul_management_fee", {remoteGuid: "fee-root", lastUpdate: "revision-1",
+    document: null, reason: "Вымышленное исправление"});
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(writes(f.calls).length, 1);
+  assert.equal(writes(f.calls)[0].url, base + "/termination");
+});
 
 test("loads the recorded agreement shape and keeps equal protocol numbers distinguishable by date and ID", async () => {
   const f = fixture({records: [remote(), remote({guid: "other-house", managedObjectRootGuid: "other-object"})]});

@@ -138,7 +138,7 @@ def apply_job(repository, store, job, remote):
     """Recheck local changes when the response arrives; apply one atomic unit."""
     if job.kind == "fees":
         from gis_jkh_assistant.database.house_fee_tariffs import conflicting_periods, save_snapshot
-        from gis_jkh_assistant.management_fees import ManagementFeeStore
+        from gis_jkh_assistant.management_fees import ManagementFeeStore, document_from_remote, period_warning
         with repository.connection.atomic():
             house = repository.get_house(job.house_id)
             if not house or house.organization_id != job.organization_id or house.fias_house_guid != job.fias:
@@ -147,14 +147,25 @@ def apply_job(repository, store, job, remote):
             placed = dict(remote, records=[entry for entry in remote["records"]
                                           if entry["record"].get("status") == "APPROVED"])
             ManagementFeeStore(repository).import_remote(job.house_id, placed)
+            contracts = {(c["versionGuid"], c["objectRootGuid"]): c for c in remote["contracts"]}
+            warnings = sum(bool(period_warning(document_from_remote(entry["record"], contracts[
+                (entry["contractVersionGuid"], entry["record"]["managedObjectRootGuid"])]))) for entry in placed["records"])
             segments = [item for item in repository.list_effective_house_tariffs(job.house_id) if item.gis_fee_guid]
             conflicts = conflicting_periods(repository, job.house_id)
         job.state = "loaded" if count else "missing"
-        job.detail = (f"Размещённых сведений: {count}; участков тарифа из ГИС: {len(segments)}. "
+        job.detail = (f"Размещённых сведений: {len(placed['records'])}; участков тарифа из ГИС: {len(segments)}. "
                       "Локальные тарифы сохранены и имеют приоритет.")
         if conflicts:
             job.state = "review"
             job.detail += f" Конфликтующих пар периодов ГИС: {conflicts}; спорные участки не используются. Проверьте раздел сведений о плате."
+        if warnings:
+            job.state = "review"
+            job.detail += f" Периодов вне срока управления: {warnings}. Они загружены в раздел сведений о плате для исправления; в расчёт тарифов не включены."
+        if remote.get("contractErrors"):
+            job.state = "review"
+            job.detail += " Частичная загрузка. " + "; ".join(
+                f"Договор № {item.get('number', 'без номера')}: {item.get('message', 'не прочитан')}"
+                for item in remote["contractErrors"])
         return
     if not isinstance(remote, dict) or not isinstance(remote.get("found"), bool):
         raise ValueError("Некорректный ответ ГИС: отсутствует признак found.")
@@ -305,7 +316,7 @@ class PortfolioImport(QObject):
             from gis_jkh_assistant.management_fees import helper_supports_fees
             status = page.integration_gateway.status()
             if not helper_supports_fees(status.helper_version):
-                QMessageBox.information(page, "Обновите помощник", "Для загрузки платы нужен помощник 0.1.33 или новее.")
+                QMessageBox.information(page, "Обновите помощник", "Для загрузки платы нужен помощник 0.1.34 или новее.")
                 return
         organization_id = page.organization_combo.currentData()
         if not organization_id:

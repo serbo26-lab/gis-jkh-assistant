@@ -12,7 +12,7 @@ from .gis_integration_worker import GisIntegrationWorker, connect_result
 
 LABELS = {"ready": "Готов", "waiting": "В очереди", "running": "Выполняется",
           "done": "Выполнено", "error": "Ошибка", "uncertain": "Проверьте результат в ГИС",
-          "stopped": "Не выполнено", "blocked": "Пропущено"}
+          "stopped": "Не выполнено", "blocked": "Пропущено", "review": "Загружено частично"}
 COMMANDS = {"load": "load_management_fees", "save": "save_management_fee_project",
             "approve": "approve_management_fee"}
 
@@ -62,7 +62,7 @@ class FeeQueue(QObject):
 
     def summary(self):
         counts = Counter(job.state for job in self.jobs)
-        return (f"Выполнено: {counts['done']} из {len(self.jobs)}; ошибок: {counts['error']}; "
+        return (f"Выполнено: {counts['done']} из {len(self.jobs)}; частично: {counts['review']}; ошибок: {counts['error']}; "
                 f"результат не установлен: {counts['uncertain'] + sum(job.unresolved for job in self.jobs)}; "
                 f"не выполнено: {counts['waiting'] + counts['stopped']}.")
 
@@ -147,14 +147,20 @@ class FeeQueue(QObject):
                         job.detail += f" Отправок с непроверенным результатом: {job.unresolved}. Проверьте их в личном кабинете."
                 else:
                     expected = "DRAFT" if job.action == "save" else "APPROVED"
-                    if result["record"].get("status") != expected:
+                    unchanged_published = job.action == "save" and result["record"].get("status") == "APPROVED"
+                    if result["record"].get("status") != expected and not unchanged_published:
                         raise ValueError("ГИС вернула другое состояние. Загрузите сведения и проверьте результат.")
                     actual = document_from_remote(result["record"], result["contract"])
                     if fingerprint(actual) != fingerprint(job.document):
                         raise ValueError("Ответ ГИС не совпадает с проверенным проектом.")
                     page.store.apply_remote(job.record_id, result["record"], result["contract"])
-                    job.detail = "Проект сохранён в ГИС." if job.action == "save" else "ГИС подтвердила размещение."
-                job.state = "done"
+                    job.detail = ("Изменений нет: проверенные данные уже размещены в ГИС." if unchanged_published else
+                                  "Проект сохранён в ГИС." if job.action == "save" else "ГИС подтвердила размещение.")
+                job.state = "review" if job.action == "load" and result.get("contractErrors") else "done"
+                if job.state == "review":
+                    job.detail += " Не прочитаны договоры: " + "; ".join(
+                        f"№ {item.get('number', 'без номера')}: {item.get('message', 'ошибка')}"
+                        for item in result["contractErrors"])
             except (ValueError, sqlite3.Error, KeyError, TypeError) as exc:
                 job.state = "error" if job.action == "load" else "uncertain"
                 job.detail = str(exc)
@@ -196,6 +202,6 @@ class FeeQueue(QObject):
         self.page._refresh_table(self.page._record_id)
         counts = Counter(job.state for job in self.jobs)
         self.page.operation_status.outcome(self.summary(), tone="warning" if any(
-            counts[key] for key in ("error", "uncertain", "stopped")) or any(job.unresolved for job in self.jobs) else "success")
+            counts[key] for key in ("error", "uncertain", "stopped", "review")) or any(job.unresolved for job in self.jobs) else "success")
         self._notify()
         self.settled.emit()

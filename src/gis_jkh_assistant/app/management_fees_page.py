@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
@@ -12,14 +12,14 @@ from PySide6.QtWidgets import (
 )
 
 from gis_jkh_assistant.management_fees import (
-    ManagementFeeStore, STATUSES, helper_supports_fees, validate_document,
+    ManagementFeeStore, STATUSES, can_edit_remote, helper_supports_fees, period_warning, validate_document,
 )
 from gis_jkh_assistant.gis_integration import IntegrationError
 from .action_layout import ActionFlowLayout
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .icons import set_button_icon
 from .workflow_widgets import CommandGroup, OperationStatus, SectionCard, style_danger_button
-from .fee_bulk_dialogs import FeeGenerationDialog, FeeQueueDialog
+from .fee_bulk_dialogs import FeeAmendmentDialog, FeeGenerationDialog, FeeQueueDialog
 from .fee_bulk_queue import FeeQueue
 
 
@@ -70,21 +70,23 @@ class ManagementFeesPage(QWidget):
             context.addWidget(combo, 1)
         body.addLayout(context)
         actions = ActionFlowLayout()
-        self.load_button = QPushButton("Загрузить сведения из ГИС")
+        self.load_button = QPushButton("Загрузить размер платы дома из ГИС")
         self.new_button = QPushButton("Новый проект из тарифа…")
         self.delete_button = QPushButton("Удалить локальный проект…")
+        self.select_all_button = QPushButton("Выбрать все периоды")
+        self.select_all_button.clicked.connect(lambda: self.table.selectAll())
         style_danger_button(self.delete_button)
-        for button, name in ((self.load_button, "download-cloud"), (self.new_button, "file-template"), (self.delete_button, "trash")):
+        for button, name in ((self.load_button, "download-cloud"), (self.new_button, "file-template"),
+                             (self.delete_button, "trash"), (self.select_all_button, "check-all")):
             set_button_icon(button, name)
             actions.addWidget(button)
         body.addLayout(actions)
-        self.bulk_group = CommandGroup("Массовая работа по домам выбранной УО")
-        self.bulk_load_button = QPushButton("Загрузить сведения по домам…")
+        self.bulk_group = CommandGroup("Работа с периодами выбранного дома")
         self.bulk_generate_button = QPushButton("Сформировать проекты по тарифам…")
-        self.bulk_save_button = QPushButton("Сохранить проекты в ГИС…")
-        self.bulk_approve_button = QPushButton("Разместить проекты в ГИС…")
-        for button, glyph in ((self.bulk_load_button, "download-cloud"),
-                              (self.bulk_generate_button, "wand"),
+        self.bulk_amend_button = QPushButton("Обновить выбранные по тарифам…")
+        self.bulk_save_button = QPushButton("Сохранить выбранные проекты в ГИС…")
+        self.bulk_approve_button = QPushButton("Разместить выбранные проекты в ГИС…")
+        for button, glyph in ((self.bulk_generate_button, "wand"), (self.bulk_amend_button, "edit"),
                               (self.bulk_save_button, "upload-cloud"),
                               (self.bulk_approve_button, "upload-cloud")):
             set_button_icon(button, glyph)
@@ -109,7 +111,8 @@ class ManagementFeesPage(QWidget):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(("Период платы", "Руб./м² в месяц", "Основание", "Договор", "Состояние"))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setToolTip("Ctrl — выбрать несколько периодов; Ctrl+A — все периоды дома.")
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(32)
@@ -201,7 +204,7 @@ class ManagementFeesPage(QWidget):
         self.fee_queue = FeeQueue(self)
         self.fee_queue.changed.connect(self._update_queue_ui)
         self.bulk_generate_button.clicked.connect(self._generate_bulk)
-        self.bulk_load_button.clicked.connect(lambda: self._start_bulk("load"))
+        self.bulk_amend_button.clicked.connect(self._amend_bulk)
         self.bulk_save_button.clicked.connect(lambda: self._start_bulk("save"))
         self.bulk_approve_button.clicked.connect(lambda: self._start_bulk("approve"))
         self.queue_stop_button.clicked.connect(self.fee_queue.request_stop)
@@ -257,6 +260,10 @@ class ManagementFeesPage(QWidget):
     def _record(self):
         return self.store.get(self._record_id) if self._record_id else None
 
+    def _selected_record_ids(self):
+        return [self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                for index in self.table.selectionModel().selectedRows()]
+
     def _refresh_table(self, selected=None):
         self.table.blockSignals(True)
         rows = self.store.list(self._house_id) if self._house_id else []
@@ -269,12 +276,15 @@ class ManagementFeesPage(QWidget):
                 state += " • результат не проверен"
             elif remote and record["dirty"]:
                 state += " • локальные правки"
+            if period_warning(document):
+                state += " • проверьте даты"
             values = (f"{display_date(document.get('start'))} — {display_date(document.get('end'))}",
-                      document.get("amount", ""), protocol_label(document.get("protocol")),
+                      document.get("amount", ""), (protocol_label(document.get("protocol")) if document.get("protocol") else
+                      "Скан / другое основание" if remote.get("hasScanBasis") else "Протокол не выбран"),
                       (document.get("contract") or {}).get("number", "Не выбран"), state)
             for column, text in enumerate(values):
                 cell = QTableWidgetItem(text)
-                cell.setToolTip(text)
+                cell.setToolTip(text + ("\n" + period_warning(document) if period_warning(document) else ""))
                 cell.setData(Qt.ItemDataRole.UserRole, record["id"])
                 self.table.setItem(row, column, cell)
             if record["id"] == selected:
@@ -321,7 +331,10 @@ class ManagementFeesPage(QWidget):
                 field.setDate(QDate.fromString(document.get(key, ""), "yyyy-MM-dd"))
             self.amount_edit.setText(document.get("amount", ""))
             self._protocol = document.get("protocol")
-            self.protocol_text.setText(protocol_label(self._protocol))
+            basis_label = protocol_label(self._protocol)
+            if not self._protocol and (record["remote"] or {}).get("hasScanBasis"):
+                basis_label = "Скан протокола в ГИС; для изменения выберите протокол из реестра"
+            self.protocol_text.setText(basis_label)
         self._dirty = False
         self._loading = False
         self._refresh_integration_status()
@@ -452,7 +465,11 @@ class ManagementFeesPage(QWidget):
             message += f" Локальные правки аннулированных сведений сохранены отдельными локальными проектами: {preserved}."
         if pending:
             message += " Результат прежней отправки ещё не установлен. Проверьте сведения в личном кабинете; повторная отправка заблокирована."
-        self.operation_status.outcome(message, tone="warning" if pending else "success")
+        errors = result.get("contractErrors") or []
+        if errors:
+            message += " Частичная загрузка: " + "; ".join(
+                f"договор № {item.get('number', 'без номера')}: {item.get('message', 'не прочитан')}" for item in errors)
+        self.operation_status.outcome(message, tone="warning" if pending or errors else "success")
 
     def _load_protocols(self):
         if not self.flush_pending_changes():
@@ -476,7 +493,8 @@ class ManagementFeesPage(QWidget):
             command = "save_and_approve_management_fee"
         payload.update(remoteGuid=record["remote_guid"], lastUpdate=remote.get("lastUpdate"))
         try:
-            document = validate_document(record["document"])
+            document = (record["document"] if command == "annul_management_fee"
+                        else validate_document(record["document"]))
         except ValueError as exc:
             QMessageBox.information(self, "Проверьте проект", str(exc))
             return
@@ -492,13 +510,15 @@ class ManagementFeesPage(QWidget):
             payload["reason"] = reason.strip()
         text = (f"Дом: {self.house_combo.currentText()}\nДоговор: {self.contract_combo.currentText()}\n"
                 f"Период: {display_date(document['start'])} — {display_date(document['end'])}\n"
-                f"Размер платы: {document['amount']} руб./м² в месяц\nОснование: {protocol_label(document['protocol'])}")
+                f"Размер платы: {document['amount']} руб./м² в месяц\nОснование: {protocol_label(document.get('protocol'))}")
         if payload.get("reason"):
             text += "\nПричина: " + payload["reason"]
         if command == "save_and_approve_management_fee":
             text += "\n\nПрограмма сохранит изменения в проекте, затем разместит его. Если второй этап не завершится, сохранённый проект останется в ГИС."
         elif command == "save_management_fee_project" and remote.get("status") == "APPROVED":
             text += "\n\nГИС сохранит изменения как проект новой версии. Для размещения потребуется отдельное действие."
+        if remote and (remote.get("hasScanBasis") or len(remote.get("ownerVotingList") or []) != 1) and command != "annul_management_fee":
+            text += "\n\nПрежнее основание будет заменено выбранным протоколом из ГИС."
         if QMessageBox.question(self, titles[command], text, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
@@ -520,6 +540,9 @@ class ManagementFeesPage(QWidget):
         self._run(command, payload, applied)
 
     def _begin_edit(self):
+        if len(self._selected_record_ids()) > 1:
+            self._amend_bulk()
+            return
         if not self.flush_pending_changes():
             return
         try:
@@ -581,8 +604,7 @@ class ManagementFeesPage(QWidget):
         record = self._record()
         remote = record["remote"] if record else None
         pending = bool(record and record["pending"])
-        supported = not remote or (not remote.get("hasOtherDetails") and remote.get("type") == "BY_PROTOCOL" and remote.get("protocolFromVoting")
-                                   and len(remote.get("ownerVotingList") or []) == 1)
+        supported = not remote or can_edit_remote(remote)
         changed = bool(record and (record["dirty"] or self._dirty))
         editable = bool(record and not pending and supported and
                         (not remote or remote["status"] == "DRAFT" or
@@ -612,7 +634,7 @@ class ManagementFeesPage(QWidget):
         self.approve_button.setText("Сохранить и разместить…" if save_first else "Разместить…")
         may_place = (editable or bool(remote and remote["status"] == "DRAFT")) and supported and not pending
         self.approve_button.setEnabled(bool(may_place and self._protocol and has_contract) and connected and not busy)
-        self.annul_button.setEnabled(bool(remote and remote["status"] == "APPROVED" and supported and
+        self.annul_button.setEnabled(bool(remote and remote["status"] == "APPROVED" and
                                           not changed and not pending) and connected and not busy)
         if record and not self._dirty:
             text = STATUSES.get((remote or {}).get("status", "LOCAL"), "Неизвестное состояние")
@@ -628,21 +650,23 @@ class ManagementFeesPage(QWidget):
         elif not status or not status.gis_page_ready:
             reason = "Для обмена откройте личный кабинет нужной УО с включённым помощником. Локальный проект можно подготовить сейчас."
         elif not helper_supports_fees(status.helper_version):
-            reason = "Для этого раздела обновите браузерный помощник до версии 0.1.33 или новее."
-        elif not supported:
-            reason = "Сведения с другим основанием, несколькими протоколами или дополнительной детализацией доступны для просмотра. Изменяйте их в ГИС."
+            reason = "Для этого раздела обновите браузерный помощник до версии 0.1.34 или новее."
         elif remote and remote["status"] == "TERMINATED":
             reason = "Аннулированные сведения доступны только для просмотра. Изменить или восстановить эту запись нельзя."
+        elif not supported:
+            reason = "Сведения с дополнительной детализацией или из внешней системы изменяются в ГИС. Размещённую запись можно аннулировать здесь."
         elif remote and remote["status"] == "APPROVED":
             reason = "«Изменить…» открывает локальные правки. Сохраните их как проект новой версии или сохраните и разместите. Тариф в «Домах» не изменится."
         else:
             reason = "Размер платы копируется из «Домов». Основание выбирается из протоколов ГИС. Проект и размещение — отдельные операции."
-        self.reason.setText(reason)
-        organization_id = self.organization_combo.currentData()
+        warning = period_warning(record["document"]) if record else ""
+        self.reason.setText(reason + ("\n" + warning if warning else ""))
         bulk_connected = bool(status and status.gis_page_ready and helper_supports_fees(status.helper_version))
-        self.bulk_generate_button.setEnabled(bool(organization_id) and not busy)
-        for button in (self.bulk_load_button, self.bulk_save_button, self.bulk_approve_button):
-            button.setEnabled(bool(organization_id) and bulk_connected and not busy)
+        self.bulk_generate_button.setEnabled(bool(house) and not busy)
+        self.bulk_amend_button.setEnabled(bool(house and record) and not busy)
+        self.select_all_button.setEnabled(bool(record) and not busy)
+        for button in (self.bulk_save_button, self.bulk_approve_button):
+            button.setEnabled(bool(house and record) and bulk_connected and not busy)
         self._update_queue_ui()
 
     def _can_start_bulk(self, *, require_connection=False):
@@ -654,20 +678,19 @@ class ManagementFeesPage(QWidget):
                 or getattr(window, "_active_workers", None)):
             QMessageBox.information(self, "Выполняется операция", "Дождитесь завершения текущей операции.")
             return False
-        if not self.organization_combo.currentData():
+        if not self.organization_combo.currentData() or not self._house_id:
             return False
         if require_connection:
             status = self.integration_gateway.status() if self.integration_gateway else None
             if not status or not status.gis_page_ready or not helper_supports_fees(status.helper_version):
-                QMessageBox.information(self, "Подключите ГИС ЖКХ", "Откройте кабинет нужной УО и подключите помощник версии 0.1.33 или новее.")
+                QMessageBox.information(self, "Подключите ГИС ЖКХ", "Откройте кабинет нужной УО и подключите помощник версии 0.1.34 или новее.")
                 return False
         return all(page.flush_pending_changes() is not False for page in pages)
 
     def _generate_bulk(self):
         if not self._can_start_bulk():
             return
-        houses = self.repository.list_houses(self.organization_combo.currentData())
-        if not any(self.repository.list_effective_house_tariffs(house.id) for house in houses):
+        if not self.repository.list_effective_house_tariffs(self._house_id):
             QMessageBox.information(self, "Нет тарифов", "Сначала заполните тарифы домов в разделе «Дома».")
             return
         dialog = FeeGenerationDialog(self)
@@ -685,8 +708,10 @@ class ManagementFeesPage(QWidget):
         if not self._can_start_bulk(require_connection=True):
             return
         organization_id = self.organization_combo.currentData()
-        houses = self.repository.list_houses(organization_id)
-        jobs = prepare_jobs(self.repository, self.store, organization_id, [house.id for house in houses], action)
+        house_id = self._house_id
+        selected_ids = set(self._selected_record_ids())
+        jobs = [job for job in prepare_jobs(self.repository, self.store, organization_id, [house_id], action)
+                if job.record_id in selected_ids]
         if not jobs:
             QMessageBox.information(self, "Нет записей", "Сначала сформируйте проекты по тарифам или загрузите сведения из ГИС.")
             return
@@ -695,12 +720,13 @@ class ManagementFeesPage(QWidget):
         selected = dialog.selected_jobs()
         dialog.deleteLater()
         if (accepted and self._can_start_bulk(require_connection=True)
-                and self.organization_combo.currentData() == organization_id):
+                and self.organization_combo.currentData() == organization_id and self._house_id == house_id):
             self.fee_queue.start(selected)
 
     def _resume_bulk(self):
         if (self._can_start_bulk(require_connection=True) and self.fee_queue.jobs
-                and self.fee_queue.jobs[0].organization_id == self.organization_combo.currentData()):
+                and self.fee_queue.jobs[0].organization_id == self.organization_combo.currentData()
+                and all(job.house_id == self._house_id for job in self.fee_queue.jobs)):
             self.fee_queue.resume()
 
     def _show_queue_results(self):
@@ -713,10 +739,31 @@ class ManagementFeesPage(QWidget):
         self.queue_summary.setVisible(bool(queue.jobs))
         current = next((job for job in queue.jobs if job.state == "running"), None)
         organization = self.repository.get_organization(queue.jobs[0].organization_id) if queue.jobs else None
-        scope = f"УО: {organization.name}. " if organization else ""
+        house = self.repository.get_house(queue.jobs[0].house_id) if queue.jobs else None
+        scope = f"Дом: {house.address}. " if house else (f"УО: {organization.name}. " if organization else "")
         self.queue_summary.setText(scope + queue.summary() + (f"\nСейчас: {current.address}" if current else ""))
         self.queue_stop_button.setVisible(queue.running)
         self.queue_stop_button.setEnabled(not queue.stop_requested)
         self.queue_continue_button.setVisible(not queue.running and any(job.state == "stopped" for job in queue.jobs))
-        self.queue_continue_button.setEnabled(bool(queue.jobs and queue.jobs[0].organization_id == self.organization_combo.currentData()))
+        self.queue_continue_button.setEnabled(bool(queue.jobs and queue.jobs[0].organization_id == self.organization_combo.currentData()
+                                                   and all(job.house_id == self._house_id for job in queue.jobs)))
         self.queue_results_button.setVisible(bool(queue.jobs) and not queue.running)
+
+    def _amend_bulk(self):
+        if not self._can_start_bulk():
+            return
+        selected = self._selected_record_ids()
+        if not selected:
+            return
+        dialog = FeeAmendmentDialog(self, selected)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        updated = dialog.updated
+        dialog.deleteLater()
+        if accepted:
+            self._refresh_table(updated[0] if updated else self._record_id)
+            for row in range(self.table.rowCount()):
+                if self.table.item(row, 0).data(Qt.ItemDataRole.UserRole) in updated:
+                    self.table.selectionModel().select(self.table.model().index(row, 0),
+                        QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+            self.operation_status.outcome(
+                f"Подготовлено изменений: {len(updated)}. Проверьте основания, затем сохраните выбранные проекты в ГИС.", tone="success")

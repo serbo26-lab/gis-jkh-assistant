@@ -6,7 +6,7 @@ const GIS_MATCH = [
 ];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.33";
+const HELPER_CODE_VERSION = "0.1.34";
 const organizationTabs = new Map();
 // Routing identity for this worker, not an authentication credential.
 const HELPER_INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -2471,16 +2471,22 @@ async function runGisCommand(command) {
       }
       throw new Error("Слишком много договоров. Загрузка остановлена без изменения локальных данных.");
     }
+    function feePage(response, key, message) {
+      const raw = response?.[key];
+      const total = typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw)) ? Number(raw) : NaN;
+      const items = response?.items ?? (total === 0 ? [] : null);
+      if (!Array.isArray(items) || !Number.isSafeInteger(total) || total < 0 ||
+          (total === 0 && items.length) || (total > 0 && !items.length)) throw new Error(message);
+      return {items, total};
+    }
     async function feeProtocols(payload, contract) {
       const result = [];
       for (let page = 1; page <= 1000; page++) {
         const response = await request("POST", `/voting/api/rest/services/protocol/search-lite;page=${page};itemsPerPage=10`,
           {fiasHouseCodes: [payload.fiasHouseGuid], eligible: true, meetingTypes: ["OWNERS"],
            questionTypeCodes: ["12.1", "15.1"], decisionIsMade: true}, feeState(contract));
-        if (!Array.isArray(response?.items) || !Number.isFinite(Number(response.total))) {
-          throw new Error("Не удалось прочитать список протоколов ГИС.");
-        }
-        for (const item of response.items) {
+        const {items, total} = feePage(response, "total", "Не удалось прочитать список протоколов ГИС.");
+        for (const item of items) {
           if (!item.cancelled && item.eligible && item.meetingType === "OWNERS" &&
               item.fiasHouseCodes?.includes(payload.fiasHouseGuid) && item.votingGuid && item.votingVersionGuid) {
             result.push({votingGuid: item.votingGuid, votingVersionGuid: item.votingVersionGuid,
@@ -2488,8 +2494,7 @@ async function runGisCommand(command) {
               fiasHouseCodes: item.fiasHouseCodes, eligible: true, cancelled: false});
           }
         }
-        if (page * 10 >= Number(response.total)) return result;
-        if (!response.items.length) throw new Error("ГИС вернула неполную страницу протоколов. Повторите загрузку.");
+        if (page * 10 >= total) return result;
       }
       throw new Error("Слишком много протоколов. Уточните выбор в ГИС.");
     }
@@ -2501,8 +2506,9 @@ async function runGisCommand(command) {
         managedObjectRootGuid: dto.managedObjectRootGuid, status: dto.status, type: dto.type,
         protocolFromVoting: dto.protocolFromVoting, managementPayment: dto.managementPayment,
         hasOtherDetails: Boolean(dto.fromExternalSystem || dto.paymentInfoOfSelfOwners ||
-          [dto.managementWorkPaymentInfo, dto.managementProtocols, dto.ownersAssociationMembersProtocols,
+          [dto.managementWorkPaymentInfo, dto.ownersAssociationMembersProtocols,
            dto.selfOwnersProtocols].some(items => items?.length)),
+        hasScanBasis: Boolean(dto.managementProtocols?.length),
         versionInfo: dto.versionInfo, ownerVotingGuidList: dto.ownerVotingGuidList || [],
         period: {from: feeDate(dto.period?.from), to: feeDate(dto.period?.to)},
         ownerVotingList: (dto.ownerVotingList || []).map(item => ({votingGuid: item.votingGuid,
@@ -2527,17 +2533,16 @@ async function runGisCommand(command) {
         const response = await request("POST", `${feeBase}/search;page=${page};itemsPerPage=100`,
           {agreementRootGuid: contract.guid, agreementVersionGuid: contract.versionGuid,
            statuses: [], pageIndex: page, elementsPerPage: 100}, feeState(contract));
-        if (!Array.isArray(response?.items) || !Number.isFinite(Number(response.totalCount))) {
-          throw new Error("Не удалось прочитать список сведений о плате.");
-        }
-        for (const item of response.items) {
+        // A terminated agreement with no fees may return items: null (or omit it).
+        // Accept that shape only with an explicit numeric zero, never an absent count.
+        const {items, total} = feePage(response, "totalCount", "Не удалось прочитать список сведений о плате.");
+        for (const item of items) {
           // A contract can contain other houses. Never import them into the selected house.
           if (item.managedObjectRootGuid !== contract.objectRootGuid) continue;
           const dto = await feeDetails(item.guid, contract);
           result.push(normalizeFee(dto));
         }
-        if (page * 100 >= Number(response.totalCount)) return result;
-        if (!response.items.length) throw new Error("ГИС вернула неполный список платы. Повторите загрузку.");
+        if (page * 100 >= total) return result;
       }
       throw new Error("Слишком много сведений о плате.");
     }
@@ -2566,12 +2571,21 @@ async function runGisCommand(command) {
         }
       }
       if (type === "load_management_fees") {
-        const contracts = await feeContracts(payload), records = [];
+        const contracts = await feeContracts(payload), records = [], contractErrors = [];
         for (const contract of contracts) {
-          for (const record of await feeRecords(contract)) records.push({contractVersionGuid: contract.versionGuid, record});
+          try {
+            for (const record of await feeRecords(contract)) records.push({contractVersionGuid: contract.versionGuid, record});
+          } catch (error) {
+            contractErrors.push({contractVersionGuid: contract.versionGuid, objectRootGuid: contract.objectRootGuid,
+              number: contract.number, message: String(error?.message || "Не удалось прочитать сведения договора.").slice(0, 500)});
+          }
         }
-        const protocols = contracts.length ? await feeProtocols(payload, contracts[0]) : [];
-        return {contracts, protocols, records};
+        if (contracts.length && contractErrors.length === contracts.length) {
+          throw new Error(contractErrors.map(item => `Договор № ${item.number}: ${item.message}`).join("; "));
+        }
+        const protocolContract = contracts.find(item => item.status !== "TERMINATED") || contracts[0];
+        const protocols = protocolContract ? await feeProtocols(payload, protocolContract) : [];
+        return {contracts, protocols, records, contractErrors};
       }
       const contract = await feeContract(payload);
       if (type === "load_fee_protocols") return {protocols: await feeProtocols(payload, contract)};
@@ -2597,8 +2611,7 @@ async function runGisCommand(command) {
             return {record: normalizeFee(current), contract};
           }
           if (!["DRAFT", "APPROVED"].includes(current.status) || !current.lastUpdate || current.lastUpdate !== payload.lastUpdate ||
-              current.type !== "BY_PROTOCOL" || current.protocolFromVoting !== true ||
-              current.ownerVotingGuidList?.length !== 1 || normalizeFee(current).hasOtherDetails) {
+              current.type !== "BY_PROTOCOL" || normalizeFee(current).hasOtherDetails) {
             throw new Error("Проект изменён в ГИС или использует другой способ выбора основания. Загрузите актуальные сведения.");
           }
         } else {

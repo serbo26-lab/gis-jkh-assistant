@@ -6,7 +6,7 @@ import uuid
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-MIN_FEE_HELPER_VERSION = (0, 1, 33)
+MIN_FEE_HELPER_VERSION = (0, 1, 34)
 STATUSES = {"LOCAL": "Локальный проект", "DRAFT": "Проект в ГИС", "APPROVED": "Размещено",
             "TERMINATED": "Аннулировано"}
 
@@ -65,7 +65,7 @@ def validate_document(document):
 
 def document_from_remote(remote, contract):
     protocols = remote.get("ownerVotingList") or []
-    # Preserve every basis. Multiple/other bases are displayed read-only in this version.
+    # An absent registry protocol does not make the fee itself immutable.
     protocol = None
     if len(protocols) == 1:
         item = protocols[0]
@@ -79,6 +79,20 @@ def document_from_remote(remote, contract):
             "start": remote.get("period", {}).get("from", ""),
             "end": remote.get("period", {}).get("to", ""),
             "contract": contract, "protocol": protocol}
+
+
+def can_edit_remote(remote):
+    """A scan basis can be replaced; itemized/external fee data must be preserved."""
+    return bool(remote and remote.get("status") in {"DRAFT", "APPROVED"}
+                and remote.get("type") == "BY_PROTOCOL" and not remote.get("hasOtherDetails"))
+
+
+def period_warning(document):
+    contract = document.get("contract") or {}
+    if ((contract.get("from") and document.get("start", "") < contract["from"])
+            or (contract.get("to") and document.get("end", "") > contract["to"])):
+        return "Период платы выходит за срок управления. Исправьте даты перед отправкой в ГИС."
+    return ""
 
 
 def fingerprint(document):
@@ -166,9 +180,7 @@ class ManagementFeeStore:
         """An explicit local amendment, retaining the published optimistic-lock snapshot."""
         row = self.get(record_id)
         remote = row["remote"] if row else None
-        if (not remote or remote["status"] != "APPROVED" or row["pending"]
-                or remote.get("hasOtherDetails") or remote.get("type") != "BY_PROTOCOL"
-                or not remote.get("protocolFromVoting") or len(remote.get("ownerVotingList") or []) != 1):
+        if (not can_edit_remote(remote) or remote["status"] != "APPROVED" or row["pending"]):
             raise ValueError("Изменять можно только размещённые сведения с поддерживаемым основанием. Аннулированные сведения недоступны для изменения.")
         with self.connection:
             self.connection.execute("UPDATE management_fee_records SET dirty=1 WHERE id=?", (record_id,))

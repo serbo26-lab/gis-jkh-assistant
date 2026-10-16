@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import json
 
 from .acceptance_act_details import iso_date
-from .management_fees import amount_text, validate_document
+from .management_fees import amount_text, can_edit_remote, validate_document
 
 
 @dataclass
@@ -50,9 +50,13 @@ def available_protocols(repository, store, organization_id, house_ids):
     return list(values.values())
 
 
-def _overlap_reason(store, house_id, start, end):
+def _overlap_reason(store, house_id, start, end, contract=None):
     for record in store.list(house_id):
+        if (record["remote"] or {}).get("status") == "TERMINATED":
+            continue
         document = record["document"]
+        if contract and document.get("contract") and document["contract"].get("guid") != contract.get("guid"):
+            continue
         try:
             old_start, old_end = _date(document.get("start")), _date(document.get("end"))
         except ValueError:
@@ -114,7 +118,7 @@ def prepare_candidates(repository, store, organization_id, house_ids, start, end
                     amount, amount_error = tariff.amount, str(exc)
                 document = {"amount": amount, "start": begin.isoformat(),
                             "end": finish.isoformat(), "contract": contract, "protocol": selected_protocol}
-                reason = _overlap_reason(store, house_id, begin, finish) or amount_error
+                reason = _overlap_reason(store, house_id, begin, finish, contract) or amount_error
                 warnings = []
                 if not contract:
                     warnings.append("Выберите договор" if matches else "Загрузите договоры из ГИС или выберите договор")
@@ -162,10 +166,10 @@ def transfer_reason(repository, record, organization_id, action):
     if record["pending"]:
         return "Результат прежней отправки не установлен. Сначала загрузите сведения из ГИС."
     remote = record["remote"] or {}
-    if remote and remote.get("status") != "DRAFT":
-        return "Массовая отправка работает только с проектами; размещённые и аннулированные записи пропускаются."
-    if remote and (remote.get("hasOtherDetails") or remote.get("type") != "BY_PROTOCOL"
-                   or not remote.get("protocolFromVoting") or len(remote.get("ownerVotingList") or []) != 1):
+    if remote and (remote.get("status") == "TERMINATED" or
+                   (remote.get("status") == "APPROVED" and not record["dirty"])):
+        return "Сначала откройте размещённые сведения для изменения. Аннулированные записи не изменяются."
+    if remote and not can_edit_remote(remote):
         return "Основание этой записи доступно только для просмотра."
     if action == "approve" and (not remote or record["dirty"]):
         return "Сначала сохраните проект и локальные правки в ГИС."
@@ -214,3 +218,107 @@ def prepare_jobs(repository, store, organization_id, house_ids, action):
                                deepcopy(record["document"]), record_signature(record),
                                "blocked" if reason else "ready", reason, house.fias_house_guid))
     return jobs
+
+
+@dataclass
+class FeeAmendment:
+    record_id: str
+    signature: str
+    tariff_id: str | None
+    document: dict
+    detail: str = ""
+    blocked: bool = False
+
+
+def prepare_amendments(repository, store, organization_id, house_id, record_ids, protocol=None, choices=None):
+    """One existing GIS identity -> one reviewed local tariff. Never split or guess."""
+    house = repository.get_house(house_id)
+    if not house or house.organization_id != organization_id:
+        raise ValueError("Дом не относится к выбранной УО.")
+    tariffs = repository.list_house_tariffs(house_id)
+    choices = choices or {}
+    result = []
+    for record_id in dict.fromkeys(record_ids):
+        record = store.get(record_id)
+        if not record or record["house_id"] != house_id:
+            raise ValueError("Выбранные сведения относятся к другому дому.")
+        document = deepcopy(record["document"])
+        remote = record["remote"] or {}
+        reason = ""
+        if record["pending"]:
+            reason = "Сначала проверьте результат прежней отправки."
+        elif not can_edit_remote(remote):
+            reason = "Эту запись нельзя изменять по тарифу; аннулированные сведения доступны только для просмотра."
+        if record_id in choices:
+            matched = next((t for t in tariffs if t.id == choices[record_id]), None)
+        else:
+            exact, overlaps = [], []
+            for tariff in tariffs:
+                first, last = tariff.effective_from_date.isoformat(), (tariff.effective_to_date or date.max).isoformat()
+                if first == document.get("start") and last == document.get("end"):
+                    exact.append(tariff)
+                if first <= document.get("end", "") and document.get("start", "") <= last:
+                    overlaps.append(tariff)
+            candidates = exact or overlaps
+            matched = candidates[0] if len(candidates) == 1 else None
+        if not matched:
+            reason = reason or "Выберите локальный тариф: подходящий период не определён однозначно."
+        else:
+            contract = document.get("contract") or {}
+            first = max(matched.effective_from_date, _date(contract.get("from")) or date.min)
+            # An open local tariff does not silently extend an existing GIS period.
+            last = min(matched.effective_to_date or _date(document.get("end")) or date.max,
+                       _date(contract.get("to")) or date.max)
+            document.update(start=first.isoformat(), end=last.isoformat(), amount=matched.amount)
+            if protocol is not None:
+                document["protocol"] = deepcopy(protocol)
+            if last < first:
+                reason = reason or "Период тарифа не пересекается с выбранным договором."
+            try:
+                document["amount"] = amount_text(document["amount"])
+            except ValueError as exc:
+                reason = reason or str(exc)
+        detail = reason or ("Готов к локальному изменению" if protocol_applies(document.get("protocol"), house.fias_house_guid)
+                            else "Локальные правки; выберите протокол перед отправкой в ГИС")
+        result.append(FeeAmendment(record_id, record_signature(record), matched.id if matched else None,
+                                   document, detail, bool(reason)))
+    # Compare final periods together, including unselected records of this contract.
+    replacements = {item.record_id: item for item in result}
+    records = store.list(house_id)
+    for candidate in result:
+        if candidate.blocked:
+            continue
+        doc = candidate.document
+        for record in records:
+            if record["id"] == candidate.record_id or (record["remote"] or {}).get("status") == "TERMINATED":
+                continue
+            replacement = replacements.get(record["id"])
+            other = replacement.document if replacement and not replacement.blocked else record["document"]
+            if ((other.get("contract") or {}).get("guid") == (doc.get("contract") or {}).get("guid")
+                    and other.get("start", "") <= doc["end"] and doc["start"] <= other.get("end", "")):
+                candidate.blocked = True
+                candidate.detail = "Новый период пересекается с другой записью этого договора. Уточните соответствие тарифов."
+                break
+    return result
+
+
+def apply_amendments(repository, store, organization_id, house_id, reviewed, protocol=None):
+    """Retain remote GUID/version; update the approved selection atomically."""
+    if not reviewed:
+        return []
+    if len({item.record_id for item in reviewed}) != len(reviewed):
+        raise ValueError("Одна запись выбрана несколько раз.")
+    with repository.connection.atomic():
+        current = {item.record_id: item for item in prepare_amendments(
+            repository, store, organization_id, house_id, [item.record_id for item in reviewed],
+            protocol, {item.record_id: item.tariff_id for item in reviewed})}
+        for item in reviewed:
+            fresh = current[item.record_id]
+            if fresh.blocked or fresh.signature != item.signature or fresh.document != item.document:
+                raise ValueError("Сведения или тарифы изменились. Обновите предварительный просмотр.")
+        for item in reviewed:
+            record = store.get(item.record_id)
+            if record["remote"]["status"] == "APPROVED":
+                store.begin_published_edit(item.record_id)
+            store.save_local(house_id, item.document, item.record_id)
+    return [item.record_id for item in reviewed]
