@@ -104,7 +104,8 @@ def test_extended_workbook_roundtrip_keeps_house_data_and_person_history(source,
     assert data.people[1].ogrn == repo.get_organization(house.organization_id).ogrn
     workbook = load_workbook(file)
     sheet = workbook["Дома"]
-    sheet.cell(2, 3, "-1")
+    count_column = next(cell.column for cell in sheet[1] if cell.value == "Количество жилых помещений")
+    sheet.cell(2, count_column, "-1")
     workbook.save(file)
     workbook.close()
     with pytest.raises(ValueError, match="Количество помещений"):

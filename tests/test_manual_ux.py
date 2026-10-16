@@ -29,6 +29,10 @@ def settle(app):
         app.processEvents()
 
 
+def _column(sheet, header):
+    return next(cell.column for cell in sheet[1] if cell.value == header)
+
+
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("scale", [1.0])
 def test_standard_buttons_and_year_text_are_readable(qt_app, theme, scale):
@@ -55,7 +59,7 @@ def test_standard_buttons_and_year_text_are_readable(qt_app, theme, scale):
     year.deleteLater()
 
 
-def test_export_keeps_sorted_house_id_address_and_area_together(tmp_path):
+def test_export_keeps_sorted_address_and_area_together_without_local_ids(tmp_path):
     repo = Repository(tmp_path / "source.db")
     org = repo.create_organization(name="Вымышленная УО", ogrn="1022600000001")
     first = repo.create_house(organization_id=org.id, address="Дом Б", charge_area="23", house_object_guid="B")
@@ -63,16 +67,16 @@ def test_export_keeps_sorted_house_id_address_and_area_together(tmp_path):
     path = tmp_path / "data.xlsx"
     write_house_data_template(path, houses=[first, second], tariffs_by_house={})
     result = parse_house_data_template(path)
-    assert [(r.house_id, r.address, r.area) for r in result.areas] == [(second.id, "Дом А", "47"), (first.id, "Дом Б", "23")]
+    assert [(r.house_id, r.address, r.area) for r in result.areas] == [(None, "Дом А", "47"), (None, "Дом Б", "23")]
     recreated = [SimpleNamespace(**{**vars_like(second), "id": "new-a"}), SimpleNamespace(**{**vars_like(first), "id": "new-b"})]
     assert [resolve_house_row(r, recreated).id for r in result.areas] == ["new-a", "new-b"]
     workbook = load_workbook(path)
     areas = workbook["Площади"]
-    areas["C2"] = None
-    areas["D2"] = "100"
-    areas["E2"] = "20"
-    areas["C3"] = "0"
-    areas["D3"] = "500"
+    areas.cell(2, _column(areas, "Площадь к начислению, м²")).value = None
+    areas.cell(2, _column(areas, "Площадь жилых помещений, м²"), "100")
+    areas.cell(2, _column(areas, "Площадь нежилых помещений, м²"), "20")
+    areas.cell(3, _column(areas, "Площадь к начислению, м²"), "0")
+    areas.cell(3, _column(areas, "Площадь жилых помещений, м²"), "500")
     workbook.save(path)
     workbook.close()
     result = parse_house_data_template(path)
@@ -196,10 +200,11 @@ def test_import_failure_rolls_back_all_area_and_tariff_updates(desktop, tmp_path
     path = tmp_path / "import.xlsx"
     write_house_data_template(path, houses=[desktop.house], tariffs_by_house={})
     workbook = load_workbook(path)
-    workbook["Площади"]["C2"] = "500"
-    workbook["Площади"]["D2"] = "450"
-    workbook["Тарифы"]["C2"] = "01.2026"
-    workbook["Тарифы"]["D2"] = "10"
+    areas, tariffs = workbook["Площади"], workbook["Тарифы"]
+    areas.cell(2, _column(areas, "Площадь к начислению, м²"), "500")
+    areas.cell(2, _column(areas, "Площадь жилых помещений, м²"), "450")
+    tariffs.cell(2, _column(tariffs, "Действует с"), "01.2026")
+    tariffs.cell(2, _column(tariffs, "Тариф, руб./м² в месяц"), "10")
     workbook.save(path)
     workbook.close()
     desktop.repository.connection.execute("CREATE TRIGGER fail_import BEFORE INSERT ON house_tariffs BEGIN SELECT RAISE(ABORT, 'simulated import failure'); END")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .error_messages import context_text, error_text
+from .error_messages import context_text, error_text, gis_error_text
 
 import sqlite3
 
@@ -859,8 +859,8 @@ class PlanningPage(QWidget):
                 QMessageBox.critical(
                     self,
                     "Не удалось применить планирование",
-                    error_text(
-                        exc, context=context_text(self),
+                    gis_error_text(
+                        exc, command_type=worker.command_type, context=context_text(self), result_apply_failed=True,
                         effect="Импорт отменён целиком. Существующий локальный план сохранён. "
                                "Изменений в ГИС ЖКХ не было.",
                         recovery=("Проверьте даты и значения этой работы в плане ГИС ЖКХ. "
@@ -901,7 +901,7 @@ class PlanningPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить планирование из ГИС ЖКХ",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:

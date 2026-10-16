@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .error_messages import context_text, error_text
+from .error_messages import READ_ONLY_GIS_COMMANDS, context_text, error_text, gis_error_text
 from .queue_controls import preview as queue_preview
 
 import sqlite3
@@ -959,7 +959,7 @@ class QualityAssessmentPage(QWidget):
                 QMessageBox.critical(
                     self,
                     "Не удалось применить оценку качества",
-                    error_text(exc, context=context_text(self)),
+                    gis_error_text(exc, command_type=worker.command_type, context=context_text(self), result_apply_failed=True),
                 )
                 return
 
@@ -988,7 +988,7 @@ class QualityAssessmentPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить оценку качества из ГИС ЖКХ",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:
@@ -1348,7 +1348,7 @@ class QualityAssessmentPage(QWidget):
                         )
                     except (sqlite3.DatabaseError, ValueError) as exc:
                         command_succeeded["value"] = False
-                        failed(str(exc))
+                        failed(str(exc), result_apply_failed=True)
                         return
                     self.repository.set_setting(f"ui.remote_probe.quality.{period.id}", "found")
                     self._queue_successes += 1
@@ -1367,14 +1367,23 @@ class QualityAssessmentPage(QWidget):
                 self._refresh_act_summary()
                 self._refresh_period_status()
 
-        def failed(message: str) -> None:
+        def failed(message: str, *, result_apply_failed: bool = False) -> None:
             self.store.set_error(period_id, message)
             self._queue_running = False
             self._queue_failed_period_id = period_id
+            detail = gis_error_text(
+                message, command_type=worker.command_type, context=context_text(self),
+                result_apply_failed=result_apply_failed,
+            )
+            completed = (
+                "Ранее загруженные месяцы сохранены. "
+                if worker.command_type in READ_ONLY_GIS_COMMANDS
+                else "Успешные месяцы повторно не отправляются. "
+            )
             self.queue_label.setText(
                 f"Очередь остановлена на {_MONTHS[period.month - 1]} "
-                f"{period.year}: {message}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
-                "Успешные месяцы повторно не отправляются. Устраните причину и продолжите с проблемного месяца."
+                f"{period.year}: {detail}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
+                + completed + "Устраните причину и продолжите с проблемного месяца."
             )
             self.continue_queue_button.setText(
                 f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"

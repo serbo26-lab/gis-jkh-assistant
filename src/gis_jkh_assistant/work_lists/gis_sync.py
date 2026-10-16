@@ -105,7 +105,7 @@ def prepare_gis_work_list_sync(
         period = _period_key(remote)
         if period is None:
             preview.conflicts.append(
-                f"Перечень {gis_guid}: ГИС ЖКХ вернул некорректный период."
+                f"{house.address}, перечень {gis_guid}: ГИС ЖКХ вернул некорректный период."
             )
             continue
         start_year, start_month, end_year, end_month = period
@@ -148,9 +148,10 @@ def prepare_gis_work_list_sync(
         for house_id, remote in rows:
             house = repository.get_house(house_id)
             address = house.address if house is not None else "Дом"
+            start_year, start_month, end_year, end_month = _period_key(remote)
             preview.conflicts.append(
                 f"{address}: в ГИС ЖКХ найдено несколько перечней "
-                "на один и тот же период."
+                f"на период {start_month:02d}.{start_year} — {end_month:02d}.{end_year}."
             )
 
     return preview

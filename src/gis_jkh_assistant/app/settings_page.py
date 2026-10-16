@@ -17,6 +17,18 @@ from .icons import set_button_icon, set_label_icon
 _SHARED_CONTEXT_KEY = "ui.shared_context_enabled"
 _THEME_KEY = "ui.theme"
 _NEXT_STEP_PANEL_KEY = "ui.next_step_panel_enabled"
+SESSION_CONNECTION_GUIDANCE = (
+    "Откройте вкладку ГИС ЖКХ и проверьте личный кабинет. "
+    "Если сайт показывает форму входа, войдите снова. "
+    "Если сайт недоступен или идут технические работы, "
+    "дождитесь восстановления и повторите операцию."
+)
+_CONNECTION_RECOVERY_STEPS = (
+    '1. Откройте личный кабинет ГИС в браузере, где установлен помощник.\n'
+    '2. Проверьте, что «ГИС ЖКХ помощник» включён в расширениях этого профиля.\n'
+    '3. Обновите вкладку ГИС. Если связи нет, перезапустите программу.\n'
+    'Если помощник уже установлен, добавлять его повторно не нужно.'
+)
 
 
 class SettingsPage(QWidget):
@@ -115,7 +127,7 @@ class SettingsPage(QWidget):
         status_row.addWidget(self.connection_status, 1)
         connection.body.addLayout(status_row)
         explanation = QLabel(
-            "Откройте ГИС ЖКХ в браузере, войдите и включите помощник. "
+            "Проверьте личный кабинет ГИС ЖКХ в браузере и включите помощник. "
             "Локальная работа доступна без подключения."
         )
         explanation.setObjectName("Muted")
@@ -126,9 +138,7 @@ class SettingsPage(QWidget):
         self.recover_connection_button.setAccessibleDescription(
             "Показать, как проверить помощник и восстановить связь с браузером."
         )
-        self.recovery_steps = QLabel(
-            '1. Откройте личный кабинет ГИС в браузере, где установлен помощник.\n2. Проверьте, что «ГИС ЖКХ помощник» включён в расширениях этого профиля.\n3. Обновите вкладку ГИС. Если связи нет, перезапустите программу.\nЕсли помощник уже установлен, добавлять его повторно не нужно.'
-        )
+        self.recovery_steps = QLabel(_CONNECTION_RECOVERY_STEPS)
         self.recovery_steps.setObjectName("Muted")
         self.recovery_steps.setWordWrap(True)
         self.recovery_steps.hide()
@@ -218,6 +228,7 @@ class SettingsPage(QWidget):
     def set_connection_status(
         self, text: str, *, helper_connected: bool | None = None,
         gis_page_ready: bool | None = None,
+        session_renewal_failed: bool = False,
     ) -> None:
         self.connection_status.setText(text)
         if helper_connected is None:
@@ -226,14 +237,23 @@ class SettingsPage(QWidget):
             "Настроить / обновить помощник…" if helper_connected
             else "Установить / настроить помощник…"
         )
-        self.recover_connection_button.setText(
-            "Как открыть вкладку ГИС ЖКХ…" if helper_connected and not gis_page_ready
-            else "Как восстановить подключение…"
-        )
+        session_problem = helper_connected and gis_page_ready and session_renewal_failed
+        if session_problem:
+            self.recover_connection_button.setText("Как проверить сессию ГИС ЖКХ…")
+            self.recovery_steps.setText(
+                SESSION_CONNECTION_GUIDANCE
+                + "\nЛокальная работа доступна. Повторная установка помощника не нужна."
+            )
+        else:
+            self.recover_connection_button.setText(
+                "Как открыть вкладку ГИС ЖКХ…" if helper_connected and not gis_page_ready
+                else "Как восстановить подключение…"
+            )
+            self.recovery_steps.setText(_CONNECTION_RECOVERY_STEPS)
         # The troubleshooting entry is distinct from the setup wizard, and
         # does not assert that installing the extension fixes a lost session.
         self.recover_connection_button.setVisible(
-            not (helper_connected and gis_page_ready)
+            not (helper_connected and gis_page_ready) or session_problem
         )
-        if helper_connected and gis_page_ready:
+        if helper_connected and gis_page_ready and not session_problem:
             self.recover_connection_button.setChecked(False)

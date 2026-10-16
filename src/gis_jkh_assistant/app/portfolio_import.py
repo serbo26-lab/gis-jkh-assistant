@@ -20,6 +20,7 @@ from gis_jkh_assistant.work_lists.gis_quality_sync import apply_remote_quality_a
 from gis_jkh_assistant.work_planning import period_months
 
 from .gis_integration_worker import GisIntegrationWorker, connect_result
+from .error_messages import gis_error_text
 
 KINDS = {
     "plan": ("планирования", "load_work_plan", 90.0),
@@ -406,10 +407,12 @@ class PortfolioImport(QObject):
             try:
                 apply_job(self.page.repository, self._store(), job, result)
             except Exception as exc:
-                job.state, job.detail = "error", str(exc)
+                job.state, job.detail = "error", gis_error_text(
+                    exc, command_type=command, result_apply_failed=True,
+                )
 
         def failed(message):
-            job.state, job.detail = "error", message
+            job.state, job.detail = "error", gis_error_text(message, command_type=command)
 
         def finished():
             if job.state == "pending":

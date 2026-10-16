@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from gis_jkh_assistant.gis_integration import IntegrationError, LocalIntegrationGateway
 from gis_jkh_assistant.gis_integration.organization_context import with_organization_context
-from .error_messages import context_text, error_text
+from .error_messages import context_text, gis_error_text
 
 
 def connect_result(worker, signal, callback):
@@ -23,10 +23,9 @@ def connect_result(worker, signal, callback):
             callback(*args)
         except (sqlite3.DatabaseError, OSError, ValueError) as exc:
             worker.result_apply_failed = True
-            detail = error_text(
-                exc, context=context_text(parent) if parent else "",
-                effect="Не удалось сохранить результат в программе. Некоторые записи могли сохраниться; изменения в ГИС не отменяются автоматически.",
-                recovery="Проверьте локальные данные. Перед повторной отправкой проверьте состояние сведений в ГИС. Затем повторите загрузку или продолжите очередь.",
+            detail = gis_error_text(
+                exc, command_type=getattr(worker, "command_type", ""),
+                context=context_text(parent) if parent else "", result_apply_failed=True,
             )
             strip = getattr(parent, "operation_status", None)
             if strip is not None:

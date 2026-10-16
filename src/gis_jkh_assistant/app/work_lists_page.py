@@ -41,7 +41,7 @@ from gis_jkh_assistant.work_lists.gis_sync import (
 )
 
 from .gis_integration_worker import GisIntegrationWorker, connect_result
-from .error_messages import context_text, error_text
+from .error_messages import context_text, error_text, gis_error_text
 from .lazy_distribution_dialog import LazyDistributionDialog
 from .registry_layouts import build_work_lists, mirror_registry
 from .registry_workflow import (
@@ -376,7 +376,7 @@ class WorkListsPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось получить справочник",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:
@@ -1536,7 +1536,7 @@ class WorkListsPage(QWidget):
             )
             if self._current_work_list_id == work_list_id:
                 self._load_work_list(work_list_id)
-            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."))
+            QMessageBox.critical(self, "Ошибка обмена с ГИС ЖКХ", gis_error_text(message, command_type=command_type, context=context_text(self)))
 
         def finished() -> None:
             self._integration_worker = None
@@ -1737,7 +1737,7 @@ class WorkListsPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Ошибка загрузки перечней выбранного МКД",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:

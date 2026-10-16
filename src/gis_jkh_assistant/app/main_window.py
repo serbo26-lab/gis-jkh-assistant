@@ -33,7 +33,7 @@ from .management_fees_page import ManagementFeesPage
 from .organizations_page import OrganizationsPage
 from .planning_page import PlanningPage
 from .quality_page import QualityAssessmentPage
-from .settings_page import SettingsPage
+from .settings_page import SESSION_CONNECTION_GUIDANCE, SettingsPage
 from .sidebar_navigation import SidebarNavigation
 from .styles import apply_theme, color
 from .ui_scale import apply_layout_scale, scaled
@@ -237,7 +237,6 @@ class MainWindow(QMainWindow):
         self.integration_status_timer = QTimer(self)
         self.integration_status_timer.setInterval(1500)
         self.integration_status_timer.timeout.connect(self._refresh_integration_status)
-        self._refresh_integration_status()
         self.integration_status_timer.start()
 
         if self.settings_page.shared_context_enabled():
@@ -264,6 +263,7 @@ class MainWindow(QMainWindow):
             dismiss.clicked.connect(dismiss_intro)
             intro.addWidget(dismiss)
             self.organizations_page.page_content.layout().insertWidget(1, self.helper_intro)
+        self._refresh_integration_status()
         self._update_context_summary()
         self._update_display_layout(force=True)
 
@@ -902,6 +902,18 @@ class MainWindow(QMainWindow):
     def _refresh_integration_status(self) -> None:
         self._reload_pending_page_themes()
         status = self.integration_gateway.status()
+        session_renewal_failed = bool(
+            status.running and status.helper_connected and status.gis_page_ready
+            and status.session_keep_alive_error
+        )
+        intro = getattr(self, "helper_intro", None)
+        if (
+            intro is not None and not intro.isHidden()
+            and status.running and status.helper_connected and status.gis_page_ready
+            and helper_supports_organization_routing(status.helper_version)
+        ):
+            self.repository.set_setting("ui.helper.intro_seen", "1")
+            intro.hide()
         if not status.running:
             text = "Служба связи не запущена"
             if status.error:
@@ -916,30 +928,30 @@ class MainWindow(QMainWindow):
             tone = "warning"
         else:
             version = status.helper_version or "?"
+            heading = (
+                "Состояние сессии ГИС ЖКХ не подтверждено" if session_renewal_failed
+                else "ГИС ЖКХ подключен"
+            )
+            text = f"{heading}\nГИС ЖКХ помощник {version} подключён"
+            tone = "success"
             if not helper_supports_quality_assessment(status.helper_version):
-                text = (
-                    f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version} устарел\n"
+                text += (
+                    "\nПомощник устарел\n"
                     f"Требуется {'.'.join(map(str, MIN_QUALITY_HELPER_VERSION))}+"
                 )
                 tone = "warning"
             elif not helper_supports_organization_routing(status.helper_version):
                 minimum = ".".join(map(str, MIN_ORGANIZATION_ROUTING_HELPER_VERSION))
-                text = (
-                    f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version}\n"
-                    f"Для выбора вкладки УО требуется {minimum}+"
-                )
+                text += f"\nДля выбора вкладки УО требуется {minimum}+"
                 tone = "warning"
-            else:
-                text = f"ГИС ЖКХ подключен\nГИС ЖКХ помощник {version}"
-                if status.session_keep_alive_error:
-                    text += "\nСессия: ошибка продления"
-                    tone = "warning"
-                elif status.session_keep_alive_enabled:
+            if session_renewal_failed:
+                text += "\nСессия: ошибка продления\n" + SESSION_CONNECTION_GUIDANCE
+                tone = "warning"
+            elif helper_supports_organization_routing(status.helper_version):
+                if status.session_keep_alive_enabled:
                     text += "\nСессия: автопродление вкл."
-                    tone = "success"
                 else:
                     text += "\nСессия: активна"
-                    tone = "success"
 
         brief = ("Служба связи не запущена" if not status.running else
                  "Помощник не подключён" if not status.helper_connected else
@@ -969,6 +981,7 @@ class MainWindow(QMainWindow):
         self.settings_page.set_connection_status(
             text, helper_connected=status.helper_connected,
             gis_page_ready=status.gis_page_ready,
+            session_renewal_failed=session_renewal_failed,
         )
 
         self.houses_page._refresh_workflow()
