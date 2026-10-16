@@ -76,12 +76,11 @@ def test_generation_asks_default_basis_and_keeps_per_house_basis_editable(deskto
     assert ok.isEnabled()
     dialog._create()
     assert dialog.result() == dialog.DialogCode.Accepted
-    assert len(dialog.created) == 2
+    assert len(dialog.created) == 1
     rows = [page.store.get(record_id) for _, record_id in dialog.created]
     first = next(row for row in rows if row["house_id"] == desktop.house.id)
-    other = next(row for row in rows if row["house_id"] != desktop.house.id)
     assert first["document"]["protocol"]["votingGuid"] == fees.PROTOCOL["votingGuid"]
-    assert other["document"]["protocol"] is None
+    assert not page.store.list(documents[1][0])
     page._refresh_table(first["id"])
     assert page.protocol_button.isEnabled()
     assert [desktop.repository.list_house_tariffs(house_id) for house_id, _ in documents] == before
@@ -189,7 +188,7 @@ def test_generation_loads_context_and_cancel_stops_after_current_house(desktop, 
     dialog._load_context()
     _settle(desktop)
     assert dialog._loading_context
-    assert not dialog.houses_table.isEnabled()
+    assert not dialog.start_edit.isEnabled()
     assert not dialog.buttons.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
     dialog.reject()
     assert dialog._loading_context
@@ -201,7 +200,7 @@ def test_generation_loads_context_and_cancel_stops_after_current_house(desktop, 
     _settle(desktop)
     assert not dialog._loading_context
     assert not queue.running
-    assert sum(job.state == "stopped" for job in queue.jobs) == 1
+    assert sum(job.state == "stopped" for job in queue.jobs) == 0
     assert dialog.result() == dialog.DialogCode.Rejected
     dialog.deleteLater()
 

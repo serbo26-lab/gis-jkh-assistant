@@ -2,7 +2,7 @@
 from datetime import date
 import json
 
-from gis_jkh_assistant.management_fees import amount_text
+from gis_jkh_assistant.management_fees import amount_text, document_from_remote, period_warning
 from .models import HouseTariff
 
 
@@ -34,24 +34,29 @@ def save_snapshot(repository, house_id, context):
         start, end = (date.fromisoformat(record["period"][key]) for key in ("from", "to"))
         if end < start:
             raise ValueError("ГИС вернула неверный период платы.")
-        if ((contract.get("from") and start < date.fromisoformat(contract["from"]))
-                or (contract.get("to") and end > date.fromisoformat(contract["to"]))):
-            raise ValueError("Период платы выходит за срок управления по договору ГИС.")
+        warning = period_warning(document_from_remote(record, contract))
         guid = record["guid"]
         if not guid or guid in seen:
             raise ValueError("В ответе ГИС повторяются сведения о плате. Проверьте загрузку.")
         seen.add(guid)
         # Totals can be read even if the basis is not editable in the desktop.
         basis = "; ".join(f"№ {p.get('number', '')} от {p.get('date', '')}"
-                          for p in record.get("ownerVotingList", [])) or "Другое основание"
+                          for p in record.get("ownerVotingList") or []) or "Другое основание"
         values.append(dict(guid=guid, start=start.isoformat(), end=end.isoformat(),
-                           amount=amount_text(record["managementPayment"]), basis=basis))
+                           amount=amount_text(record["managementPayment"]), basis=basis, warning=warning))
+    if context.get("contractErrors"):
+        # A failure on an old agreement must not erase its preceding snapshot.
+        previous = {item["guid"]: item for item in _records(repository, house_id)}
+        for entry in context["records"]:
+            previous.pop(entry["record"]["guid"], None)
+        previous.update({item["guid"]: item for item in values})
+        values = list(previous.values())
     repository.connection.execute(
         "INSERT INTO house_fee_tariff_snapshots VALUES (?,?) "
         "ON CONFLICT(house_id) DO UPDATE SET value=excluded.value",
         (house_id, json.dumps(dict(fias=house.fias_house_guid, organization_id=house.organization_id,
                                    records=values), ensure_ascii=False)))
-    return len(values)
+    return sum(not item.get("warning") for item in values)
 
 
 def _records(repository, house_id):
@@ -72,7 +77,7 @@ def visible_tariffs(repository, house_id, local):
     guessed. Equal overlaps are one interval with a deterministic source.
     Ordinals allow the inclusive 31.12.9999 boundary without overflowing date.
     """
-    remote = _records(repository, house_id)
+    remote = [item for item in _records(repository, house_id) if not item.get("warning")]
     if not remote:
         return local
     intervals = [(date.fromisoformat(item["start"]).toordinal(),
@@ -104,6 +109,6 @@ def visible_tariffs(repository, house_id, local):
 
 
 def conflicting_periods(repository, house_id):
-    records = _records(repository, house_id)
+    records = [item for item in _records(repository, house_id) if not item.get("warning")]
     return sum(a["start"] <= b["end"] and b["start"] <= a["end"] and a["amount"] != b["amount"]
                for index, a in enumerate(records) for b in records[index + 1:])

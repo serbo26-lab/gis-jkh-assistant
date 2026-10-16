@@ -2,13 +2,15 @@
 from datetime import date
 import sqlite3
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QHBoxLayout,
     QHeaderView, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
-from gis_jkh_assistant.fee_bulk import available_protocols, create_projects, prepare_candidates, prepare_jobs
+from gis_jkh_assistant.fee_bulk import (
+    apply_amendments, available_protocols, create_projects, prepare_amendments, prepare_candidates, prepare_jobs,
+)
 from .fee_bulk_queue import LABELS
 from .icons import set_button_icon
 
@@ -76,6 +78,11 @@ class FeeQueueDialog(QDialog):
             "save": "Сохранить выбранные локальные проекты и правки в проекты ГИС. Размещение не выполняется.",
             "approve": "Разместить выбранные проекты, ранее сохранённые в ГИС. Локальные правки сначала нужно сохранить в ГИС.",
         }
+        if preview and action == "save" and any(
+                (record := page.store.get(job.record_id)) and record["remote"] and
+                (record["remote"].get("hasScanBasis") or len(record["remote"].get("ownerVotingList") or []) != 1)
+                for job in jobs if job.record_id and job.state == "ready"):
+            descriptions["save"] += " В записях со сканом или несколькими основаниями прежнее основание будет заменено выбранным протоколом из ГИС."
         caption = QLabel(f"УО: {organization.name if organization else 'Не выбрана'}\n{descriptions[action]}")
         caption.setWordWrap(True)
         layout.addWidget(caption)
@@ -132,34 +139,24 @@ class FeeGenerationDialog(QDialog):
         super().__init__(page)
         self.page, self.repository, self.store = page, page.repository, page.store
         self.organization_id = page.organization_combo.currentData()
-        self.houses = self.repository.list_houses(self.organization_id)
+        self.house_id = page._house_id
+        house = self.repository.get_house(self.house_id)
+        if not house or house.organization_id != self.organization_id:
+            raise ValueError("Выберите дом текущей УО.")
         self.candidates, self.created = [], []
         self._loading_context = self._close_after_load = False
-        self.setWindowTitle("Сформировать проекты платы по тарифам домов")
+        self.setWindowTitle("Сформировать проекты платы по тарифам дома")
         self.resize(1120, 700)
         layout = QVBoxLayout(self)
-        hint = QLabel("Выберите дома и период. Будет создан отдельный локальный проект на каждый период тарифа. "
+        hint = QLabel(house.address + "\nВыберите период. Будет создан отдельный локальный проект на каждый период тарифа. "
                       "Существующие сведения не заменяются; в ГИС ничего не отправляется.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self.houses_table = _table(("Выбор", "Дом", "Тарифов", "Договоры и протоколы"))
-        self.houses_table.setMaximumHeight(155)
-        self.houses_table.setMinimumHeight(110)
-        rows = []
-        starts = []
-        for house in self.houses:
-            tariffs = self.repository.list_effective_house_tariffs(house.id)
-            starts.extend(tariff.effective_from_date for tariff in tariffs)
-            context = self.store.context(house.id)
-            rows.append(((house.address, len(tariffs), f"Договоров: {len(context['contracts'])}; протоколов: {len(context['protocols'])}"), bool(tariffs)))
-        _fill(self.houses_table, rows, True)
-        self.houses_table.setColumnWidth(1, 480)
-        self.houses_table.setColumnWidth(2, 100)
-        layout.addWidget(self.houses_table)
+        starts = [tariff.effective_from_date for tariff in self.repository.list_effective_house_tariffs(house.id)]
         load_row = QHBoxLayout()
-        self.load_button = QPushButton("Загрузить договоры и протоколы выбранных домов из ГИС")
+        self.load_button = QPushButton("Обновить сведения и протоколы дома из ГИС")
         set_button_icon(self.load_button, "download-cloud")
-        self.stop_button = QPushButton("Остановить после текущего дома")
+        self.stop_button = QPushButton("Остановить после текущего запроса")
         self.stop_button.hide()
         load_row.addWidget(self.load_button)
         load_row.addWidget(self.stop_button)
@@ -192,12 +189,12 @@ class FeeGenerationDialog(QDialog):
         self.protocol_combo.setPlaceholderText("Выберите общее основание или отложите выбор")
         protocol_row.addWidget(self.protocol_combo, 1)
         layout.addLayout(protocol_row)
-        basis_hint = QLabel("Протокол подставляется только для относящихся к нему домов. Для остальных основание "
-                            "можно выбрать отдельно в проекте. Без подходящего протокола отправка в ГИС запрещена.")
+        basis_hint = QLabel("Выбранный протокол подставится во все новые проекты этого дома. Его можно изменить в отдельном проекте. "
+                            "Без подходящего протокола отправка в ГИС запрещена.")
         basis_hint.setWordWrap(True)
         layout.addWidget(basis_hint)
-        self.preview = _table(("Выбор", "Дом", "Период", "Руб./м² в мес.", "Договор", "Основание", "Проверка"))
-        for column, width in enumerate((55, 235, 180, 110, 110, 145)):
+        self.preview = _table(("Выбор", "Период", "Руб./м² в мес.", "Договор", "Основание", "Проверка"))
+        for column, width in enumerate((55, 200, 120, 140, 180)):
             self.preview.setColumnWidth(column, width)
         layout.addWidget(self.preview, 1)
         self.counter = QLabel()
@@ -207,7 +204,6 @@ class FeeGenerationDialog(QDialog):
         self.buttons.accepted.connect(self._create)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
-        self.houses_table.itemChanged.connect(self._houses_changed)
         self.start_edit.dateChanged.connect(self._refresh_candidates)
         self.end_edit.dateChanged.connect(self._refresh_candidates)
         self.protocol_combo.currentIndexChanged.connect(self._refresh_candidates)
@@ -219,7 +215,7 @@ class FeeGenerationDialog(QDialog):
         self._houses_changed()
 
     def house_ids(self):
-        return [self.houses[row].id for row in selected_rows(self.houses_table)]
+        return [self.house_id]
 
     def _houses_changed(self, *_):
         old = self.protocol_combo.currentData()
@@ -231,9 +227,7 @@ class FeeGenerationDialog(QDialog):
             selected_houses = set(self.house_ids())
             protocols = available_protocols(self.repository, self.store, self.organization_id, selected_houses)
             for protocol in protocols:
-                addresses = [house.address for house in self.houses if house.id in selected_houses
-                             and house.fias_house_guid in protocol["fiasHouseCodes"]]
-                self.protocol_combo.addItem(f"{_protocol_label(protocol)} • {'; '.join(addresses)}", protocol)
+                self.protocol_combo.addItem(_protocol_label(protocol), protocol)
         except ValueError as exc:
             self.progress.setText(str(exc))
         index = next((i for i in range(self.protocol_combo.count()) if self.protocol_combo.itemData(i) == old), -1)
@@ -252,7 +246,7 @@ class FeeGenerationDialog(QDialog):
             rows = []
             for candidate in self.candidates:
                 doc = candidate.document
-                rows.append(((candidate.address, f"{_display_date(doc['start'])} — {_display_date(doc['end'])}",
+                rows.append(((f"{_display_date(doc['start'])} — {_display_date(doc['end'])}",
                               doc["amount"], (doc["contract"] or {}).get("number", "Не выбран"),
                               _protocol_label(doc["protocol"]), candidate.detail), not candidate.blocked))
             _fill(self.preview, rows, True)
@@ -273,10 +267,10 @@ class FeeGenerationDialog(QDialog):
             return
         jobs = prepare_jobs(self.repository, self.store, self.organization_id, self.house_ids(), "load")
         if not any(job.state == "ready" for job in jobs):
-            self.progress.setText("У выбранных домов нет кода ФИАС. Загрузите сведения о домах.")
+            self.progress.setText("У дома нет кода ФИАС. Загрузите сведения о доме.")
             return
         self._loading_context = True
-        for widget in (self.houses_table, self.start_edit, self.end_edit, self.protocol_combo, self.load_button):
+        for widget in (self.start_edit, self.end_edit, self.protocol_combo, self.load_button):
             widget.setEnabled(False)
         self.stop_button.show()
         self._counter()
@@ -290,7 +284,7 @@ class FeeGenerationDialog(QDialog):
         if not self._loading_context:
             return
         self._loading_context = False
-        for widget in (self.houses_table, self.start_edit, self.end_edit, self.protocol_combo, self.load_button):
+        for widget in (self.start_edit, self.end_edit, self.protocol_combo, self.load_button):
             widget.setEnabled(True)
         self.stop_button.hide()
         self._houses_changed()
@@ -302,8 +296,8 @@ class FeeGenerationDialog(QDialog):
         if not selected or self.protocol_combo.currentIndex() < 0 or self._loading_context:
             return
         try:
-            if self.page.organization_combo.currentData() != self.organization_id:
-                raise ValueError("Выбранная УО изменилась. Закройте окно и начните формирование заново.")
+            if self.page.organization_combo.currentData() != self.organization_id or self.page._house_id != self.house_id:
+                raise ValueError("УО или дом изменились. Закройте окно и начните формирование заново.")
             start, end = self._dates()
             self.created = create_projects(self.repository, self.store, self.organization_id, self.house_ids(),
                                            start, end, self.protocol_combo.currentData(), selected)
@@ -326,3 +320,112 @@ class FeeGenerationDialog(QDialog):
             event.ignore()
         else:
             super().closeEvent(event)
+
+
+class FeeAmendmentDialog(QDialog):
+    """Review replacements on existing records; no GIS writes or new identities."""
+
+    def __init__(self, page, record_ids):
+        super().__init__(page)
+        self.page, self.repository, self.store = page, page.repository, page.store
+        self.organization_id, self.house_id = page.organization_combo.currentData(), page._house_id
+        self.record_ids = list(record_ids)
+        self.choices, self.updated, self.candidates = {}, [], []
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self._refresh)
+        house = self.repository.get_house(self.house_id)
+        self.tariffs = self.repository.list_house_tariffs(self.house_id)
+        self.setWindowTitle("Обновить выбранные периоды по локальным тарифам")
+        self.resize(1120, 620)
+        layout = QVBoxLayout(self)
+        hint = QLabel(house.address + "\nДаты и суммы берутся из локальных тарифов раздела «Дома». "
+                      "Проверьте соответствие периодов. Для неоднозначных записей выберите тариф вручную. "
+                      "Изменения сохранятся локально; отправка проектов и размещение выполняются отдельно.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Основание для изменений"))
+        self.protocol_combo = QComboBox()
+        self.protocol_combo.addItem("Сохранить основания отдельных записей", None)
+        for protocol in available_protocols(self.repository, self.store, self.organization_id, [self.house_id]):
+            self.protocol_combo.addItem(_protocol_label(protocol), protocol)
+        row.addWidget(self.protocol_combo, 1)
+        layout.addLayout(row)
+        note = QLabel("Если в записи вместо протокола был скан или другое основание, выберите протокол из ГИС здесь "
+                      "или после сохранения в карточке записи. При отправке он заменит прежнее основание. "
+                      "Одна запись ГИС изменяется по одному локальному периоду; длинные периоды автоматически не разбиваются.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.preview = _table(("Выбор", "Период в ГИС", "Плата в ГИС", "Локальный тариф", "Новый период", "Новая плата", "Проверка"))
+        for column, width in enumerate((55, 175, 90, 245, 175, 90)):
+            self.preview.setColumnWidth(column, width)
+        layout.addWidget(self.preview, 1)
+        self.counter = QLabel()
+        layout.addWidget(self.counter)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Сохранить локальные изменения")
+        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        self.buttons.accepted.connect(self._apply)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self.protocol_combo.currentIndexChanged.connect(self._refresh)
+        self.preview.itemChanged.connect(self._counter)
+        self._refresh()
+
+    def _refresh(self, *_):
+        previous = {self.candidates[row].record_id for row in selected_rows(self.preview)} if self.candidates else None
+        self.candidates = prepare_amendments(self.repository, self.store, self.organization_id, self.house_id,
+            self.record_ids, self.protocol_combo.currentData(), self.choices)
+        rows = []
+        for candidate in self.candidates:
+            record = self.store.get(candidate.record_id)
+            old = record["document"]
+            new = candidate.document
+            rows.append(((f"{_display_date(old.get('start'))} — {_display_date(old.get('end'))}", old.get("amount", ""), "",
+                          f"{_display_date(new.get('start'))} — {_display_date(new.get('end'))}", new.get("amount", ""),
+                          candidate.detail), not candidate.blocked))
+        for row in range(self.preview.rowCount()):
+            old = self.preview.cellWidget(row, 3)
+            if old is not None:
+                old.hide()
+                self.preview.removeCellWidget(row, 3)
+        _fill(self.preview, rows, True)
+        for row, candidate in enumerate(self.candidates):
+            combo = QComboBox()
+            combo.addItem("Выберите локальный тариф", None)
+            for tariff in self.tariffs:
+                combo.addItem(f"{tariff.period_full_label} · {tariff.amount} руб./м²", tariff.id)
+            combo.setCurrentIndex(max(0, combo.findData(candidate.tariff_id)))
+            combo.setToolTip(combo.currentText())
+            combo.currentIndexChanged.connect(lambda _index, record_id=candidate.record_id, field=combo: self._choose_tariff(record_id, field.currentData()))
+            self.preview.setCellWidget(row, 3, combo)
+            if previous is not None and candidate.record_id not in previous:
+                self.preview.item(row, 0).setCheckState(Qt.CheckState.Unchecked)
+        self._counter()
+
+    def _choose_tariff(self, record_id, tariff_id):
+        self.choices[record_id] = tariff_id
+        self._refresh_timer.start(0)
+
+    def _counter(self, *_):
+        count = len(selected_rows(self.preview))
+        self.counter.setText(f"Выбрано изменений: {count}. Сохранение изменит только локальные проекты; в ГИС ничего не отправляется.")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(count > 0)
+
+    def _apply(self):
+        try:
+            if self._refresh_timer.isActive():
+                self._refresh_timer.stop()
+                self._refresh()
+            if self.page._house_id != self.house_id or self.page.organization_combo.currentData() != self.organization_id:
+                raise ValueError("УО или дом изменились. Откройте предварительный просмотр заново.")
+            reviewed = [self.candidates[row] for row in selected_rows(self.preview)]
+            self.updated = apply_amendments(self.repository, self.store, self.organization_id,
+                                            self.house_id, reviewed, self.protocol_combo.currentData())
+        except (ValueError, sqlite3.Error) as exc:
+            QMessageBox.warning(self, "Изменения не сохранены", str(exc))
+            self._refresh()
+            return
+        if self.updated:
+            self.accept()

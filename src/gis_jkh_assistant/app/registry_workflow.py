@@ -397,7 +397,7 @@ def refresh_houses(page) -> None:
             has_houses = bool(organization_id and page.repository.list_houses(organization_id))
             button.setEnabled(ready and supported and has_houses)
             button.setToolTip("Дождитесь завершения операции." if busy else connection
-                              or ("Обновите помощник до 0.1.33 или новее." if not supported else "")
+                              or ("Обновите помощник до 0.1.34 или новее." if not supported else "")
                               or ("Сначала загрузите дома выбранной УО." if not has_houses else "")
                               or "Размещённые тарифы и основания всех домов УО. Локальные тарифы не перезаписываются; перечни не требуются.")
             continue
