@@ -5,6 +5,8 @@ import json
 import uuid
 from datetime import date, datetime, timezone
 
+from gis_jkh_assistant.act_images import normalize_image_settings
+
 
 PERSON_FIELDS = (
     "full_name", "name_genitive", "position", "position_genitive", "role", "premises", "gender",
@@ -41,7 +43,12 @@ def initialize_act_schema(connection):
     columns = {row[1] for row in connection.execute("PRAGMA table_info(act_organization_options)")}
     if "customer_signature_placeholder" not in columns:
         connection.execute("ALTER TABLE act_organization_options ADD COLUMN customer_signature_placeholder INTEGER NOT NULL DEFAULT 0")
-        connection.commit()
+    if "stamp_settings" not in columns:
+        connection.execute("ALTER TABLE act_organization_options ADD COLUMN stamp_settings TEXT NOT NULL DEFAULT '{}'")
+    people_columns = {row[1] for row in connection.execute("PRAGMA table_info(act_people)")}
+    if "signature_settings" not in people_columns:
+        connection.execute("ALTER TABLE act_people ADD COLUMN signature_settings TEXT NOT NULL DEFAULT '{}'")
+    connection.commit()
 
 
 def normalized_person(values, *, organization=True):
@@ -82,7 +89,8 @@ class ActRequisitesStore:
         rows = self.connection.execute(f"SELECT * FROM act_people WHERE {field} = ? ORDER BY rowid", (value,))
         return [dict(json.loads(row["data_json"]), id=row["id"],
                      organization_id=row["organization_id"], house_id=row["house_id"],
-                     signature=row["signature"], signature_name=row["signature_name"]) for row in rows]
+                     signature=row["signature"], signature_name=row["signature_name"],
+                     signature_settings=json.loads(row["signature_settings"])) for row in rows]
 
     def save_person(self, values, *, organization_id=None, house_id=None, person_id=None):
         if bool(organization_id) == bool(house_id):
@@ -122,26 +130,33 @@ class ActRequisitesStore:
 
     def options(self, organization_id):
         row = self.connection.execute("SELECT * FROM act_organization_options WHERE organization_id=?", (organization_id,)).fetchone()
-        return dict(row) if row else {"organization_id": organization_id, "insert_images": 0,
+        result = dict(row) if row else {"organization_id": organization_id, "insert_images": 0,
                                      "customer_signature_placeholder": 0,
-                                     "stamp": None, "stamp_name": None}
+                                     "stamp": None, "stamp_name": None, "stamp_settings": "{}"}
+        result["stamp_settings"] = json.loads(result["stamp_settings"])
+        return result
 
     def save_options(self, organization_id, **fields):
         previous = self.options(organization_id)
         previous.update({k: v for k, v in fields.items() if k in {
-            "insert_images", "customer_signature_placeholder", "stamp", "stamp_name"}})
+            "insert_images", "customer_signature_placeholder", "stamp", "stamp_name", "stamp_settings"}})
+        if "stamp" in fields or "stamp_settings" in fields:
+            previous["stamp_settings"] = normalize_image_settings(fields.get("stamp_settings"), kind="stamp")
+        previous["stamp_settings"] = json.dumps(previous["stamp_settings"])
         with self.connection:
             self.connection.execute("""INSERT INTO act_organization_options
-                (organization_id, insert_images, customer_signature_placeholder, stamp, stamp_name)
-                VALUES (?, ?, ?, ?, ?)
+                (organization_id, insert_images, customer_signature_placeholder, stamp, stamp_name, stamp_settings)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(organization_id) DO UPDATE SET insert_images=excluded.insert_images,
                 customer_signature_placeholder=excluded.customer_signature_placeholder,
-                stamp=excluded.stamp, stamp_name=excluded.stamp_name""",
-                tuple(previous[k] for k in ("organization_id", "insert_images", "customer_signature_placeholder", "stamp", "stamp_name")))
+                stamp=excluded.stamp, stamp_name=excluded.stamp_name, stamp_settings=excluded.stamp_settings""",
+                tuple(previous[k] for k in ("organization_id", "insert_images", "customer_signature_placeholder", "stamp", "stamp_name", "stamp_settings")))
 
-    def save_signature(self, person_id, content, name):
+    def save_signature(self, person_id, content, name, settings=None):
+        settings_json = json.dumps(normalize_image_settings(settings, kind="signature"))
         with self.connection:
-            self.connection.execute("UPDATE act_people SET signature=?, signature_name=? WHERE id=?", (content, name, person_id))
+            self.connection.execute("UPDATE act_people SET signature=?, signature_name=?, signature_settings=? WHERE id=?",
+                                    (content, name, settings_json, person_id))
 
     def save_snapshot(self, act_id, payload):
         # The owning quality store creates this table alongside acts, before use.

@@ -12,11 +12,34 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
-from reportlab.platypus import Image, KeepTogether, LongTable, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Flowable, Image, KeepTogether, LongTable, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .acceptance_act_details import (
     CUSTOMER_NAME_PLACEHOLDER, CUSTOMER_PREMISES_PLACEHOLDER, suggested_position_genitive,
 )
+from .act_images import (
+    SIGNATURE_HEIGHT_MM, SIGNATURE_LINE_MM, SIGNATURE_WIDTH_MM, fitted_size, image_png,
+    normalize_image_settings, prepare_act_image, signature_placement,
+)
+
+
+class _SignatureField(Flowable):
+    """Image and line share one reserved field; neither can overflow its row."""
+
+    def __init__(self, encoded, settings=None):
+        super().__init__()
+        self.width, self.height = SIGNATURE_WIDTH_MM * mm, SIGNATURE_HEIGHT_MM * mm
+        self.image = prepare_act_image(base64.b64decode(encoded), settings, kind="signature")
+        self.placement = signature_placement(self.image.size, settings)
+
+    def draw(self):
+        x, y, width, height = self.placement
+        self.canv.drawImage(ImageReader(BytesIO(image_png(self.image))), x * mm, y * mm,
+                            width=width * mm, height=height * mm, mask="auto")
+        # Draw last so even a user-retained opaque background cannot hide the line.
+        self.canv.setStrokeColor(colors.black)
+        self.canv.setLineWidth(.4)
+        self.canv.line(0, SIGNATURE_LINE_MM * mm, self.width, SIGNATURE_LINE_MM * mm)
 
 
 def amount_decimal(value):
@@ -173,21 +196,26 @@ def build_standard_pdf(*, organization_name, house_address, act_number, act_date
               p("4. Претензий по выполнению условий Договора Стороны друг к другу не имеют."),
               p("Настоящий Акт составлен в 2-х экземплярах, имеющих одинаковую юридическую силу, по одному для каждой из Сторон.")]
 
-    def image(encoded, width, height):
-        raw = BytesIO(base64.b64decode(encoded))
-        iw, ih = ImageReader(raw).getSize()
-        scale = min(width/iw, height/ih)
-        return Image(raw, width=iw*scale, height=ih*scale)
-
-    signature = image(executor["signature_base64"], 38*mm, 13*mm) if details.get("insert_images") and executor.get("signature_base64") else p("________________", small)
-    stamp = image(details["stamp_base64"], 30*mm, 25*mm) if details.get("insert_images") and details.get("stamp_base64") else p("", small)
+    signature = (_SignatureField(executor["signature_base64"], executor.get("signature_settings"))
+                 if details.get("insert_images") and executor.get("signature_base64")
+                 else p("________________", small))
+    stamp, stamp_column_mm = p("", small), 30
+    if details.get("insert_images") and details.get("stamp_base64"):
+        stamp_settings = normalize_image_settings(details.get("stamp_settings"), kind="stamp")
+        prepared = prepare_act_image(base64.b64decode(details["stamp_base64"]), stamp_settings, kind="stamp")
+        size = stamp_settings["size_mm"]
+        width, height = fitted_size(prepared.size, size, size)
+        stamp = Image(BytesIO(image_png(prepared)), width=width * mm, height=height * mm)
+        stamp_column_mm = max(28, size + 2)  # also leave room for the two-line customer placeholder
     customer_signature = (_customer_signature_placeholder(regular)
                           if details.get("customer_signature_placeholder") else p("________________", small))
     signatures = Table([
         [p("Исполнитель — " + executor_position + " " + organization_name + " " + (executor.get("full_name") or blank), small), signature, stamp],
         [p(_customer_signature_label(customer), small), customer_signature, p("", small)],
-    ], colWidths=[104*mm, 40*mm, 30*mm])
+    ], colWidths=[(134 - stamp_column_mm)*mm, 40*mm, stamp_column_mm*mm])
     signatures.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6)]))
+    signatures.setStyle(TableStyle([("LEFTPADDING", (1,0), (-1,-1), 1*mm),
+                                    ("RIGHTPADDING", (1,0), (-1,-1), 1*mm)]))
     if details.get("customer_signature_placeholder"):
         signatures.setStyle(TableStyle([("SPAN", (1,1), (2,1))]))
     story.append(KeepTogether([Spacer(1, 3*mm), p("Подписи Сторон", heading), signatures]))
