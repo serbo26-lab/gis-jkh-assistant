@@ -72,12 +72,13 @@ class ManagementFeesPage(QWidget):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             context.addWidget(combo, 1)
         body.addLayout(context)
-        actions = ActionFlowLayout()
+        self.import_group = CommandGroup("Импорт из ГИС ЖКХ — выбранный дом")
         self.load_button = QPushButton("Загрузить размер платы дома из ГИС")
         self.new_button = QPushButton("Новый проект из тарифа…")
         self.delete_button = QPushButton("Удалить локальный проект…")
         self.select_all_button = QPushButton("Выбрать все периоды")
         self.clear_selection_button = QPushButton("Снять выбор")
+        self.selection_count = QLabel("Отмечено периодов: 0")
         self.select_all_button.clicked.connect(lambda: self._check_all(True))
         self.clear_selection_button.clicked.connect(lambda: self._check_all(False))
         style_danger_button(self.delete_button)
@@ -85,14 +86,16 @@ class ManagementFeesPage(QWidget):
                              (self.delete_button, "trash"), (self.select_all_button, "check-all"),
                              (self.clear_selection_button, "check-all")):
             set_button_icon(button, name)
-            actions.addWidget(button)
-        body.addLayout(actions)
-        self.bulk_group = CommandGroup("Работа с периодами выбранного дома")
+            button.setProperty("compactCommand", True)
+        self.import_group.actions.addWidget(self.load_button)
+        body.addWidget(self.import_group)
+        self.preparation_group = CommandGroup("Подготовка локальных проектов по тарифам дома")
         self.bulk_generate_button = QPushButton("Сформировать проекты по тарифам…")
-        self.bulk_amend_button = QPushButton("Обновить выбранные по тарифам…")
-        self.bulk_save_button = QPushButton("Сохранить выбранные проекты в ГИС…")
-        self.bulk_approve_button = QPushButton("Разместить выбранные проекты в ГИС…")
-        self.bulk_save_approve_button = QPushButton("Сохранить и разместить выбранные…")
+        self.bulk_amend_button = QPushButton("Обновить отмеченные по тарифам…")
+        self.bulk_group = CommandGroup("Экспорт в ГИС ЖКХ — отмеченные периоды")
+        self.bulk_save_button = QPushButton("Сохранить проекты в ГИС…")
+        self.bulk_approve_button = QPushButton("Разместить сохранённые проекты…")
+        self.bulk_save_approve_button = QPushButton("Сохранить и разместить проекты…")
         self.bulk_save_button.setToolTip("Сохранить отмеченные локальные проекты и правки в ГИС без размещения.")
         self.bulk_approve_button.setToolTip("Разместить отмеченные проекты, уже сохранённые в ГИС, без локальных правок.")
         self.bulk_save_approve_button.setToolTip("Сохранить отмеченные проекты и правки в ГИС, затем разместить их.")
@@ -101,24 +104,31 @@ class ManagementFeesPage(QWidget):
                               (self.bulk_approve_button, "upload-cloud"),
                               (self.bulk_save_approve_button, "upload-cloud")):
             set_button_icon(button, glyph)
+            button.setProperty("compactCommand", True)
+        for button in (self.new_button, self.bulk_generate_button, self.bulk_amend_button):
+            self.preparation_group.actions.addWidget(button)
+        body.addWidget(self.preparation_group)
+        for button in (self.bulk_save_button, self.bulk_approve_button, self.bulk_save_approve_button):
             self.bulk_group.actions.addWidget(button)
-        body.addWidget(self.bulk_group)
+        self.periods_card = SectionCard("Периоды размера платы")
+        for control in (self.select_all_button, self.clear_selection_button, self.selection_count):
+            self.periods_card.actions.addWidget(control)
         self.operation_status = OperationStatus()
         self.operation_status.hide()
-        body.addWidget(self.operation_status)
         self.queue_summary = QLabel()
         self.queue_summary.setWordWrap(True)
         self.queue_summary.hide()
-        body.addWidget(self.queue_summary)
-        queue_commands = ActionFlowLayout()
+        self.queue_group = CommandGroup("Очередь экспорта в ГИС ЖКХ")
+        self.queue_group.hide()
+        self.queue_group.body.insertWidget(1, self.queue_summary)
         self.queue_stop_button = QPushButton("Остановить после текущего запроса")
         self.queue_continue_button = QPushButton("Продолжить остальные")
         self.queue_results_button = QPushButton("Результаты очереди…")
         for button in (self.queue_stop_button, self.queue_continue_button, self.queue_results_button):
-            queue_commands.addWidget(button)
+            self.queue_group.actions.addWidget(button)
+            button.setProperty("compactCommand", True)
             button.hide()
         set_button_icon(self.queue_results_button, "services")
-        body.addLayout(queue_commands)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(("Выбор", "Период платы", "Руб./м² в месяц", "Основание", "Договор", "Состояние"))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -133,12 +143,16 @@ class ManagementFeesPage(QWidget):
         self._select_all_shortcut = QShortcut(QKeySequence.StandardKey.SelectAll, self.table)
         self._select_all_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._select_all_shortcut.activated.connect(lambda: self._check_all(True))
-        self.table.setMinimumHeight(145)
-        body.addWidget(self.table, 1)
+        self.table.setMinimumHeight(195)
+        self.periods_card.body.addWidget(self.table, 1)
+        body.addWidget(self.periods_card, 1)
         self.empty = QLabel("Загрузите сведения из ГИС или создайте проект из тарифа, заполненного в разделе «Дома».")
         self.empty.setWordWrap(True)
-        body.addWidget(self.empty)
-        self.editor = SectionCard("Выбранные сведения о плате")
+        self.periods_card.body.addWidget(self.empty)
+        body.addWidget(self.bulk_group)
+        body.addWidget(self.operation_status)
+        body.addWidget(self.queue_group)
+        self.editor = SectionCard("Открытый период — сведения и действия")
         form = QFormLayout()
         self.contract_combo = SafeComboBox()
         self.contract_combo.setMinimumContentsLength(20)
@@ -173,21 +187,30 @@ class ManagementFeesPage(QWidget):
         self.state_text = QLabel()
         self.state_text.setWordWrap(True)
         self.editor.body.addWidget(self.state_text)
-        commands = ActionFlowLayout()
+        self.local_record_group = CommandGroup("Локальные изменения открытого периода")
+        self.record_export_group = CommandGroup("Экспорт в ГИС ЖКХ — открытый период")
+        self.record_removal_group = CommandGroup("Удаление и аннулирование открытого периода")
         self.edit_button = QPushButton("Изменить…")
         self.cancel_edit_button = QPushButton("Отменить локальные правки…")
         self.local_button = QPushButton("Сохранить локально")
         self.save_button = QPushButton("Сохранить проект в ГИС")
         self.approve_button = QPushButton("Разместить…")
-        self.annul_button = QPushButton("Аннулировать сведения…")
+        self.annul_button = QPushButton("Аннулировать сведения в ГИС…")
         self.approve_button.setObjectName("PrimaryButton")
         style_danger_button(self.annul_button)
         for button, name in ((self.edit_button, "edit"), (self.cancel_edit_button, "edit"),
                              (self.local_button, "save"), (self.save_button, "upload-cloud"),
                              (self.approve_button, "upload-cloud"), (self.annul_button, "ban")):
             set_button_icon(button, name)
-            commands.addWidget(button)
-        self.editor.body.addLayout(commands)
+            button.setProperty("compactCommand", True)
+        for button in (self.edit_button, self.local_button, self.cancel_edit_button):
+            self.local_record_group.actions.addWidget(button)
+        for button in (self.save_button, self.approve_button):
+            self.record_export_group.actions.addWidget(button)
+        for button in (self.delete_button, self.annul_button):
+            self.record_removal_group.actions.addWidget(button)
+        for group in (self.local_record_group, self.record_export_group, self.record_removal_group):
+            self.editor.body.addWidget(group)
         body.addWidget(self.editor)
         self.reason = QLabel()
         self.reason.setWordWrap(True)
@@ -228,6 +251,16 @@ class ManagementFeesPage(QWidget):
         self.queue_stop_button.clicked.connect(self.fee_queue.request_stop)
         self.queue_continue_button.clicked.connect(self._resume_bulk)
         self.queue_results_button.clicked.connect(self._show_queue_results)
+        focus_order = (self.house_combo, self.load_button, self.new_button, self.bulk_generate_button,
+                       self.bulk_amend_button, self.select_all_button, self.clear_selection_button,
+                       self.table, self.bulk_save_button, self.bulk_approve_button, self.bulk_save_approve_button,
+                       self.queue_stop_button, self.queue_continue_button, self.queue_results_button,
+                       self.contract_combo, self.start_edit, self.end_edit, self.amount_edit,
+                       self.protocol_button, self.refresh_protocols_button, self.edit_button,
+                       self.local_button, self.cancel_edit_button, self.save_button, self.approve_button,
+                       self.delete_button, self.annul_button)
+        for before, after in zip(focus_order, focus_order[1:]):
+            QWidget.setTabOrder(before, after)
         self.refresh_organizations()
 
     def refresh_organizations(self):
@@ -716,6 +749,7 @@ class ManagementFeesPage(QWidget):
                                               for row in checked) and not busy)
         self.select_all_button.setEnabled(bool(record) and not busy)
         self.clear_selection_button.setEnabled(bool(checked) and not busy)
+        self.selection_count.setText(f"Отмечено периодов: {len(checked)}")
         for button, action in ((self.bulk_save_button, "save"), (self.bulk_approve_button, "approve"),
                                (self.bulk_save_approve_button, "save_approve")):
             candidates = [dict(row, document=self._document(), dirty=1) if row["id"] == self._record_id and self._dirty
@@ -797,6 +831,11 @@ class ManagementFeesPage(QWidget):
 
     def _update_queue_ui(self):
         queue = self.fee_queue
+        self.queue_group.setVisible(bool(queue.jobs))
+        queue_title = ("Очередь импорта из ГИС ЖКХ" if queue.jobs and queue.jobs[0].action == "load"
+                       else "Очередь экспорта в ГИС ЖКХ")
+        self.queue_group.caption.setText(queue_title)
+        self.queue_group.setAccessibleName(queue_title)
         self.queue_summary.setVisible(bool(queue.jobs))
         current = next((job for job in queue.jobs if job.state == "running"), None)
         organization = self.repository.get_organization(queue.jobs[0].organization_id) if queue.jobs else None
