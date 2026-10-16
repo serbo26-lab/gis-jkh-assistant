@@ -14,7 +14,7 @@ LABELS = {"ready": "Готов", "waiting": "В очереди", "running": "В�
           "done": "Выполнено", "error": "Ошибка", "uncertain": "Проверьте результат в ГИС",
           "stopped": "Не выполнено", "blocked": "Пропущено", "review": "Загружено частично"}
 COMMANDS = {"load": "load_management_fees", "save": "save_management_fee_project",
-            "approve": "approve_management_fee"}
+            "approve": "approve_management_fee", "save_approve": "save_and_approve_management_fee"}
 
 
 class FeeQueue(QObject):
