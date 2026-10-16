@@ -50,14 +50,15 @@ class PersonRow(ExtraHouseRow):
 
 
 def _style(sheet):
-    sheet.freeze_panes = "C2"
+    visible_column = next(cell.column for cell in sheet[1] if not str(cell.value).startswith("_"))
+    sheet.freeze_panes = sheet.cell(2, visible_column + 1).coordinate
     sheet.auto_filter.ref = sheet.dimensions
     for cell in sheet[1]:
         cell.font = Font(bold=True)
         sheet.column_dimensions[cell.column_letter].width = 29
         if str(cell.value).startswith("_"):
             sheet.column_dimensions[cell.column_letter].hidden = True
-    sheet.column_dimensions["B"].width = 58
+    sheet.column_dimensions[sheet.cell(1, visible_column).column_letter].width = 58
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
             cell.number_format = "@"
@@ -66,11 +67,11 @@ def _style(sheet):
 def write_extra_sheets(workbook, houses, repository=None):
     store = ActRequisitesStore(repository) if repository else None
     house_sheet = workbook.create_sheet("Дома")
-    house_sheet.append(["_house_id", "Адрес", *HOUSE_COLUMNS.values(), *IDENTITIES])
+    house_sheet.append(["_house_id", *IDENTITIES, "Адрес", *HOUSE_COLUMNS.values()])
     people_sheet = workbook.create_sheet("Представители домов")
-    people_sheet.append(["_house_id", "Адрес", "_person_id", *PERSON_COLUMNS.values(), *IDENTITIES])
+    people_sheet.append(["_house_id", *IDENTITIES, "_person_id", "Адрес", *PERSON_COLUMNS.values()])
     org_sheet = workbook.create_sheet("Подписанты УО")
-    org_sheet.append(["_organization_id", "УО", "ОГРН УО", "_person_id", *PERSON_COLUMNS.values()])
+    org_sheet.append(["_organization_id", "_person_id", "УО", "ОГРН УО", *PERSON_COLUMNS.values()])
     for house in houses:
         parts = address_parts(house.address)
         if store:
@@ -80,17 +81,17 @@ def write_extra_sheets(workbook, houses, repository=None):
         for key in HOUSE_COLUMNS:
             value = parts.get(key, getattr(house, key, None))
             values.append(display_date(value) if key.endswith("_date") and value else value)
-        house_sheet.append([house.id, house.address, *values, *identity])
+        house_sheet.append([house.id, *identity, house.address, *values])
         representatives = store.list_people(house_id=house.id) if store else []
         for person in representatives or [{}]:
-            people_sheet.append([house.id, house.address, person.get("id"),
+            people_sheet.append([house.id, *identity, person.get("id"), house.address,
                 *[display_date(person[k]) if k in {"basis_date", "valid_from", "valid_to"} and person.get(k)
-                  else person.get(k) for k in PERSON_COLUMNS], *identity])
+                  else person.get(k) for k in PERSON_COLUMNS]])
     if repository:
         for organization_id in dict.fromkeys(house.organization_id for house in houses):
             organization = repository.get_organization(organization_id)
             for person in store.list_people(organization_id=organization_id) or [{}]:
-                org_sheet.append([organization_id, organization.name, organization.ogrn, person.get("id"),
+                org_sheet.append([organization_id, person.get("id"), organization.name, organization.ogrn,
                     *[display_date(person[k]) if k in {"basis_date", "valid_from", "valid_to"} and person.get(k)
                       else person.get(k) for k in PERSON_COLUMNS]])
     for sheet in (house_sheet, people_sheet, org_sheet):
@@ -117,6 +118,8 @@ def parse_extra_sheets(workbook):
         required = {"_house_id", "Адрес"} if name != "Подписанты УО" else {"ОГРН УО"}
         if not required.issubset(headers):
             raise ValueError(f"Лист «{name}»: отсутствуют служебные столбцы или адрес / ОГРН.")
+        if any(header and headers.count(header) > 1 for header in headers):
+            raise ValueError(f"Лист «{name}»: повторяются заголовки столбцов.")
         for number, values in enumerate(sheet.iter_rows(min_row=2, values_only=True), 2):
             cells = dict(zip(headers, values))
             columns = HOUSE_COLUMNS if name == "Дома" else PERSON_COLUMNS

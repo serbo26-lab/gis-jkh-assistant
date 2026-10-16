@@ -10,6 +10,10 @@ from gis_jkh_assistant.gis_files.house_data import (
 from gis_jkh_assistant.period_dates import parse_period_date
 
 
+def _column(sheet, header: str, occurrence: int = 0) -> int:
+    return [cell.column for cell in sheet[1] if cell.value == header][occurrence]
+
+
 def test_period_date_precision() -> None:
     month = parse_period_date("08.2025", boundary="start")
     month_end = parse_period_date("07.2026", boundary="end")
@@ -51,11 +55,11 @@ def test_house_data_template_roundtrip(tmp_path) -> None:
     workbook = load_workbook(path)
     areas = workbook["Площади"]
     tariffs = workbook["Тарифы"]
-    areas["C2"] = "3 956,40"
-    tariffs["C2"] = "08.2025"
-    tariffs["D2"] = "22,00"
-    tariffs["E2"] = "10.08.2026"
-    tariffs["F2"] = "24.50"
+    areas.cell(2, _column(areas, "Площадь к начислению, м²"), "3 956,40")
+    tariffs.cell(2, _column(tariffs, "Действует с"), "08.2025")
+    tariffs.cell(2, _column(tariffs, "Тариф, руб./м² в месяц"), "22,00")
+    tariffs.cell(2, _column(tariffs, "Действует с", 1), "10.08.2026")
+    tariffs.cell(2, _column(tariffs, "Тариф, руб./м² в месяц", 1), "24.50")
     workbook.save(path)
     workbook.close()
 
@@ -138,17 +142,17 @@ def test_wide_tariff_rows_allow_gaps_and_excel_month_dates(tmp_path) -> None:
     workbook = load_workbook(path)
     tariffs = workbook["Тарифы"]
 
-    tariffs["C2"] = datetime(2020, 8, 1)
-    tariffs["C2"].number_format = r"mm\.yyyy"
-    tariffs["D2"] = 18.43
+    start = tariffs.cell(2, _column(tariffs, "Действует с"), datetime(2020, 8, 1))
+    start.number_format = r"mm\.yyyy"
+    tariffs.cell(2, _column(tariffs, "Тариф, руб./м² в месяц"), 18.43)
 
     # Одна пара пропущена целиком — это допустимо.
-    tariffs["G2"] = datetime(2022, 8, 10)
-    tariffs["G2"].number_format = "dd.mm.yyyy"
-    tariffs["H2"] = 20.59
+    start = tariffs.cell(2, _column(tariffs, "Действует с", 2), datetime(2022, 8, 10))
+    start.number_format = "dd.mm.yyyy"
+    tariffs.cell(2, _column(tariffs, "Тариф, руб./м² в месяц", 2), 20.59)
 
-    tariffs["K2"] = "08.2024"
-    tariffs["L2"] = "22,33"
+    tariffs.cell(2, _column(tariffs, "Действует с", 4), "08.2024")
+    tariffs.cell(2, _column(tariffs, "Тариф, руб./м² в месяц", 4), "22,33")
 
     workbook.save(path)
     workbook.close()
@@ -183,13 +187,12 @@ def test_old_vertical_tariff_rows_still_import(tmp_path) -> None:
     )
 
     workbook = load_workbook(path)
-    tariffs = workbook["Тарифы"]
+    del workbook["Тарифы"]
+    tariffs = workbook.create_sheet("Тарифы")
 
-    # Сводим заголовок к старому формату dev23 из одной пары.
-    for column in range(tariffs.max_column, 4, -1):
-        tariffs.delete_cols(column)
-    tariffs["C2"] = "08.2025"
-    tariffs["D2"] = "22"
+    # Настоящий формат dev23, независимо от текущего порядка столбцов экспорта.
+    tariffs.append(["_house_id", "Адрес", "Действует с", "Тариф, руб./м² в месяц"])
+    tariffs.append([house.id, house.address, "08.2025", "22"])
     tariffs.append([house.id, house.address, "08.2026", "23"])
 
     workbook.save(path)
