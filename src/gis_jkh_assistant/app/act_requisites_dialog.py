@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import sqlite3
-from io import BytesIO
-from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -11,31 +9,16 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
     QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
-from reportlab.lib.utils import ImageReader
 
 from gis_jkh_assistant.acceptance_act_details import (
     address_parts, display_date, iso_date, suggested_genitive, suggested_position_genitive,
 )
 from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore, normalized_person
+from gis_jkh_assistant.act_images import load_act_image
 from .action_layout import ActionFlowLayout
+from .act_image_dialog import ActImageDialog
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .icons import set_button_icon
-
-
-def load_act_image(path):
-    file = Path(path)
-    if file.stat().st_size > 5 * 1024 * 1024:
-        raise ValueError("Изображение должно занимать не больше 5 МБ.")
-    content = file.read_bytes()
-    if not (content.startswith(b"\x89PNG\r\n\x1a\n") or content.startswith(b"\xff\xd8\xff")):
-        raise ValueError("Выберите изображение PNG или JPEG.")
-    try:
-        width, height = ImageReader(BytesIO(content)).getSize()
-        if max(width, height) > 8000:
-            raise ValueError("Сторона изображения не должна превышать 8000 пикселей.")
-    except Exception as exc:
-        raise ValueError("Не удалось прочитать изображение PNG / JPEG.") from exc
-    return content, file.name
 
 
 class ActPersonDialog(QDialog):
@@ -293,18 +276,39 @@ class ActRequisitesDialog(QDialog):
         if kind == "signature" and not person:
             QMessageBox.information(self, "Выберите подписанта", "Сначала добавьте и выберите запись подписанта.")
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Подпись" if kind == "signature" else "Печать УО", "", "Изображения (*.png *.jpg *.jpeg)")
-        if not path:
+        saved = person if kind == "signature" else self.store.options(self.organization_id)
+        try:
+            content, name = saved.get(kind), saved.get(kind + "_name")
+            if not content:
+                path, _ = QFileDialog.getOpenFileName(self, "Подпись" if kind == "signature" else "Печать УО", "", "Изображения (*.png *.jpg *.jpeg)")
+                if not path:
+                    return
+                content, name = load_act_image(path)
+            dialog = ActImageDialog(kind, content, name or "Изображение", saved.get(kind + "_settings"), self)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось загрузить изображение", str(exc))
             return
         try:
-            content, name = load_act_image(path)
-            if kind == "signature":
-                self.store.save_signature(person["id"], content, name)
-            else:
-                self.store.save_options(self.organization_id, stamp=content, stamp_name=name)
-            self._refresh()
-        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
-            QMessageBox.warning(self, "Не удалось загрузить изображение", str(exc))
+            while dialog.exec() == QDialog.DialogCode.Accepted:
+                try:
+                    if kind == "signature":
+                        self.store.save_signature(person["id"], dialog.content, dialog.name, dialog.settings)
+                    else:
+                        self.store.save_options(self.organization_id, stamp=dialog.content, stamp_name=dialog.name,
+                                                stamp_settings=dialog.settings)
+                    self._refresh()
+                    if person:
+                        for row, refreshed in enumerate(self.people):
+                            if refreshed["id"] == person["id"]:
+                                self.table.selectRow(row)
+                                break
+                    break
+                except (ValueError, sqlite3.DatabaseError) as exc:
+                    QMessageBox.warning(self, "Не удалось сохранить изображение", str(exc))
+        finally:
+            # The embedded organization page lives for the whole application.
+            # Do not retain a decoded full-page scan on every reopening.
+            dialog.deleteLater()
 
     def _load_chief(self):
         if self._embedded and self.page.flush_pending_changes() is False:
