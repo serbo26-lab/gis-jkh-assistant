@@ -38,7 +38,8 @@ def test_house_commands_follow_the_registry_and_preparation(desktop):
     commands = [flow.itemAt(i).widget() for i in range(1, flow.count())]
     assert commands == [page.sync_houses_button, page.sync_all_management_button,
                         page.sync_all_work_lists_button, page.sync_all_plans_button,
-                        page.sync_all_fixations_button, page.sync_all_quality_button]
+                        page.sync_all_fixations_button, page.sync_all_quality_button,
+                        page.sync_all_fees_button]
     assert flow.itemAt(0).widget().text() == "Импорт из ГИС ЖКХ:"
     local_flow = page.house_local_actions.layout()
     assert local_flow.itemAt(0).widget().text() == "Импорт локальный:"
