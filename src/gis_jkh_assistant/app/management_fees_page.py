@@ -16,6 +16,7 @@ from gis_jkh_assistant.management_fees import (
 )
 from gis_jkh_assistant.gis_integration import IntegrationError
 from .action_layout import ActionFlowLayout
+from .error_messages import READ_ONLY_GIS_COMMANDS, context_text, gis_error_text
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .icons import set_button_icon
 from .workflow_widgets import CommandGroup, OperationStatus, SectionCard, style_danger_button
@@ -585,9 +586,17 @@ class ManagementFeesPage(QWidget):
         worker.start()
 
     def _failed(self, message):
+        command = getattr(self._worker, "command_type", "")
         pending = bool(self._record() and self._record()["pending"])
+        message = gis_error_text(message, command_type=command, context=context_text(self))
         if pending:
-            message += "\nИзменения в форме сохранены. Загрузите сведения из ГИС и проверьте результат перед повторной отправкой."
+            if command in READ_ONLY_GIS_COMMANDS:
+                message += (
+                    "\nРезультат прежней отправки ещё не установлен. Повторная отправка заблокирована. "
+                    "После восстановления связи повторите загрузку сведений."
+                )
+            else:
+                message += "\nИзменения в форме сохранены. Загрузите сведения из ГИС и проверьте результат перед повторной отправкой."
         self.operation_status.outcome(message, tone="danger")
         QMessageBox.warning(self, "Обмен с ГИС не завершён", message)
 

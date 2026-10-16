@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .error_messages import context_text, error_text
+from .error_messages import context_text, error_text, gis_error_text
 from .queue_controls import preview as queue_preview
 
 import sqlite3
@@ -684,7 +684,7 @@ class FixationPage(QWidget):
             self._refresh_year_status()
 
         def failed(message: str) -> None:
-            QMessageBox.critical(self, "Не удалось получить справочник работ", error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."))
+            QMessageBox.critical(self, "Не удалось получить справочник работ", gis_error_text(message, command_type=worker.command_type, context=context_text(self)))
 
         def finished() -> None:
             self._integration_worker = None
@@ -1107,7 +1107,7 @@ class FixationPage(QWidget):
                 QMessageBox.critical(
                     self,
                     "Не удалось применить фиксацию",
-                    error_text(exc, context=context_text(self)),
+                    gis_error_text(exc, command_type=worker.command_type, context=context_text(self), result_apply_failed=True),
                 )
                 return
 
@@ -1137,7 +1137,7 @@ class FixationPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить фиксацию из ГИС ЖКХ",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:
@@ -1384,7 +1384,7 @@ class FixationPage(QWidget):
                     )
                 except (sqlite3.DatabaseError, ValueError) as exc:
                     command_succeeded["value"] = False
-                    failed(str(exc))
+                    failed(str(exc), result_apply_failed=True)
                     return
                 self.repository.set_setting(f"ui.remote_probe.fixation.{period.id}", "found")
                 self._queue_successes += 1
@@ -1400,7 +1400,7 @@ class FixationPage(QWidget):
                 self._load_unplanned_table()
                 self._refresh_period_status()
 
-        def failed(message: str) -> None:
+        def failed(message: str, *, result_apply_failed: bool = False) -> None:
             self.repository.update_work_fixation_gis_state(
                 period_id,
                 gis_status="ERROR",
@@ -1408,10 +1408,14 @@ class FixationPage(QWidget):
             )
             self._queue_failed_period_id = period_id
             self._queue_running = False
+            detail = gis_error_text(
+                message, command_type=worker.command_type, context=context_text(self),
+                result_apply_failed=result_apply_failed,
+            )
             self.queue_label.setText(
                 f"Очередь остановлена на {_MONTHS[period.month - 1]} "
-                f"{period.year}: {message}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
-                "Успешные месяцы повторно не отправляются. Устраните причину и продолжите с проблемного месяца."
+                f"{period.year}: {detail}\nУспешно: {self._queue_successes} из {len(self._queue_period_ids)}. "
+                "Ранее загруженные месяцы сохранены. Устраните причину и продолжите с проблемного месяца."
             )
             self.continue_queue_button.setText(
                 f"Продолжить с {_MONTHS[period.month - 1]} {period.year}"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .error_messages import context_text, error_text
+from .error_messages import context_text, error_text, gis_error_text
 
 import sqlite3
 from datetime import datetime
@@ -1202,7 +1202,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить сведения о МКД",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:
@@ -1302,23 +1302,21 @@ class HousesPage(QWidget):
             )
 
             if not preview.new_rows and not preview.linked_rows:
-                details = ""
-                if preview.conflicts:
-                    details = "\n\n" + "\n".join(preview.conflicts[:5])
-                QMessageBox.information(
-                    self,
+                self._show_work_list_sync_summary(
                     "Перечни МКД из ГИС ЖКХ",
-                    summary + "\n\nИзменять локальную базу не требуется." + details,
+                    summary + "\n\nИзменять локальную базу не требуется.",
+                    preview,
                 )
                 self._set_bulk_status("Перечни: изменений нет.")
                 return
 
-            answer = QMessageBox.question(
-                self,
+            answer = self._show_work_list_sync_summary(
                 "Загрузить перечни работ по всем МКД?",
                 summary
                 + "\n\nНовые перечни будут добавлены в локальную базу. "
                 "Существующие локальные перечни автоматически не перезаписываются.",
+                preview,
+                confirm=True,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 self._set_bulk_status("Массовая загрузка перечней отменена.")
@@ -1348,28 +1346,22 @@ class HousesPage(QWidget):
                 f"Не сопоставлено домов: {len(preview.unmatched)}."
             )
             if applied.errors:
-                result_text += (
-                    f"\nОшибок при сохранении: {len(applied.errors)}.\n\n"
-                    + "\n".join(applied.errors[:5])
-                )
-                QMessageBox.warning(
-                    self,
-                    "Массовая загрузка завершена с замечаниями",
-                    result_text,
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "Массовая загрузка перечней завершена",
-                    result_text,
-                )
+                result_text += f"\nОшибок при сохранении: {len(applied.errors)}."
+            self._show_work_list_sync_summary(
+                "Массовая загрузка завершена с замечаниями"
+                if applied.errors or preview.conflicts or preview.unmatched
+                else "Массовая загрузка перечней завершена",
+                result_text,
+                preview,
+                errors=applied.errors,
+            )
 
         def failed(message: str) -> None:
             self._set_bulk_status("Ошибка массовой загрузки перечней.")
             QMessageBox.critical(
                 self,
                 "Не удалось загрузить перечни МКД",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def progressed(progress: dict) -> None:
@@ -1390,6 +1382,54 @@ class HousesPage(QWidget):
         worker.progressed.connect(progressed)
         worker.finished.connect(finished)
         worker.start()
+
+    def _show_work_list_sync_summary(
+        self, title, summary, preview, *, confirm=False, errors=(),
+    ):
+        details = []
+        if preview.conflicts:
+            details.append("Конфликты — перечни пропущены:\n" + "\n".join(preview.conflicts))
+        if preview.unmatched:
+            rows = []
+            for remote in preview.unmatched:
+                period = remote.get("period")
+                period = period if isinstance(period, dict) else {}
+                start, end = period.get("from"), period.get("to")
+                if isinstance(start, dict) and isinstance(end, dict):
+                    label = (
+                        f"{start.get('month', '?')}.{start.get('year', '?')} — "
+                        f"{end.get('month', '?')}.{end.get('year', '?')}"
+                    )
+                else:
+                    label = "не определён"
+                rows.append(
+                    f"Дом ГИС: {remote.get('houseGuid') or 'не указан'}; "
+                    f"период: {label}; перечень: {remote.get('guid') or 'не указан'}. "
+                    "Нет соответствующего дома у выбранной УО."
+                )
+            details.append("Не сопоставлены с домами:\n" + "\n".join(rows))
+        if errors:
+            details.append("Ошибки сохранения:\n" + "\n".join(errors))
+        message = QMessageBox(self)
+        message.setWindowTitle(title)
+        message.setTextFormat(Qt.TextFormat.PlainText)
+        message.setText(summary)
+        if details:
+            message.setInformativeText(
+                "В подробностях приведён полный список пропущенных перечней и причин."
+            )
+            message.setDetailedText("\n\n".join(details))
+        message.setIcon(
+            QMessageBox.Icon.Question if confirm else
+            QMessageBox.Icon.Warning if details else QMessageBox.Icon.Information
+        )
+        message.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            if confirm else QMessageBox.StandardButton.Ok
+        )
+        if confirm:
+            message.setDefaultButton(QMessageBox.StandardButton.No)
+        return message.exec()
 
     @staticmethod
     def _house_management_identity_values(house) -> set[str]:
@@ -1619,7 +1659,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось обновить дома",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:
@@ -1716,7 +1756,7 @@ class HousesPage(QWidget):
             QMessageBox.critical(
                 self,
                 "Не удалось получить сведения",
-                error_text(message, context=context_text(self), effect="Операция не завершилась. Проверьте результат в ГИС перед повторной отправкой: там могли сохраниться изменения."),
+                gis_error_text(message, command_type=worker.command_type, context=context_text(self)),
             )
 
         def finished() -> None:

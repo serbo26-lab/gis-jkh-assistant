@@ -17,6 +17,7 @@ from gis_jkh_assistant.database.act_requisites_store import ActRequisitesStore, 
 from gis_jkh_assistant.act_images import load_act_image
 from .action_layout import ActionFlowLayout
 from .act_image_dialog import ActImageDialog
+from .error_messages import context_text, gis_error_text
 from .gis_integration_worker import GisIntegrationWorker, connect_result
 from .icons import set_button_icon
 
@@ -356,7 +357,10 @@ class ActRequisitesDialog(QDialog):
             if hasattr(self.page, "refresh_availability"):
                 self.page.refresh_availability()
         connect_result(worker, worker.succeeded, received)
-        connect_result(worker, worker.failed, lambda error: QMessageBox.warning(self, "Не удалось получить руководителя", error))
+        connect_result(worker, worker.failed, lambda error: QMessageBox.warning(
+            self, "Не удалось получить руководителя",
+            gis_error_text(error, command_type=worker.command_type, context=context_text(self.page)),
+        ))
         worker.finished.connect(finished)
         worker.start()
         if hasattr(self.page, "refresh_availability"):
