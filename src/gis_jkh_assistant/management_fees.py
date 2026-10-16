@@ -153,8 +153,10 @@ class ManagementFeeStore:
             "SELECT * FROM management_fee_records WHERE id=?", (record_id,)).fetchone())
 
     def list(self, house_id):
-        return [self._decode(row) for row in self.connection.execute(
+        rows = [self._decode(row) for row in self.connection.execute(
             "SELECT * FROM management_fee_records WHERE house_id=? ORDER BY rowid DESC", (house_id,))]
+        return sorted(rows, key=lambda row: (row["document"].get("start") or "",
+                                             row["document"].get("end") or ""), reverse=True)
 
     def save_local(self, house_id, document, record_id=None):
         if record_id:
@@ -259,7 +261,8 @@ class ManagementFeeStore:
 
     def delete_local(self, record_id):
         row = self.get(record_id)
-        if not row or row["remote_guid"] or row["pending"]:
-            raise ValueError("Можно удалить только локальный проект, который не отправлялся в ГИС.")
+        annulled = bool(row and (row["remote"] or {}).get("status") == "TERMINATED" and not row["dirty"])
+        if not row or (row["remote_guid"] and not annulled) or row["pending"]:
+            raise ValueError("Можно удалить локальный проект или локальную копию аннулированных сведений. Сначала проверьте результат незавершённой отправки.")
         with self.connection:
             self.connection.execute("DELETE FROM management_fee_records WHERE id=?", (record_id,))

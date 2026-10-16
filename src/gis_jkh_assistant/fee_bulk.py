@@ -171,7 +171,7 @@ def transfer_reason(repository, record, organization_id, action):
         return "Сначала откройте размещённые сведения для изменения. Аннулированные записи не изменяются."
     if remote and not can_edit_remote(remote):
         return "Основание этой записи доступно только для просмотра."
-    if action == "approve" and (not remote or record["dirty"]):
+    if action == "approve" and (remote.get("status") != "DRAFT" or record["dirty"]):
         return "Сначала сохраните проект и локальные правки в ГИС."
     if action == "save" and remote and not record["dirty"]:
         return "Проект уже сохранён в ГИС без локальных правок."
@@ -200,7 +200,7 @@ class FeeJob:
 
 
 def prepare_jobs(repository, store, organization_id, house_ids, action):
-    if action not in {"load", "save", "approve"}:
+    if action not in {"load", "save", "approve", "save_approve"}:
         raise ValueError("Неизвестная операция с проектами платы.")
     jobs = []
     for house_id in dict.fromkeys(house_ids):
@@ -247,8 +247,12 @@ def prepare_amendments(repository, store, organization_id, house_id, record_ids,
         reason = ""
         if record["pending"]:
             reason = "Сначала проверьте результат прежней отправки."
-        elif not can_edit_remote(remote):
+        elif remote and not can_edit_remote(remote):
             reason = "Эту запись нельзя изменять по тарифу; аннулированные сведения доступны только для просмотра."
+        elif ((document.get("contract") or {}).get("fiasHouseGuid") not in (None, house.fias_house_guid)):
+            reason = "Договор относится к другому дому."
+        elif protocol is not None and not protocol_applies(protocol, house.fias_house_guid):
+            reason = "Выбранный протокол недоступен или относится к другому дому."
         if record_id in choices:
             matched = next((t for t in tariffs if t.id == choices[record_id]), None)
         else:
@@ -318,7 +322,7 @@ def apply_amendments(repository, store, organization_id, house_id, reviewed, pro
                 raise ValueError("Сведения или тарифы изменились. Обновите предварительный просмотр.")
         for item in reviewed:
             record = store.get(item.record_id)
-            if record["remote"]["status"] == "APPROVED":
+            if (record["remote"] or {}).get("status") == "APPROVED":
                 store.begin_published_edit(item.record_id)
             store.save_local(house_id, item.document, item.record_id)
     return [item.record_id for item in reviewed]
