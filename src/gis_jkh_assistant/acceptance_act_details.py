@@ -254,4 +254,5 @@ def resolve_act_details(repository, house_id, act_date, *, executor_id=None, cus
         insert_images=bool(options["insert_images"]),
         customer_signature_placeholder=bool(options["customer_signature_placeholder"]),
         stamp_base64=base64.b64encode(options["stamp"]).decode("ascii") if options["stamp"] else None,
+        stamp_settings=options["stamp_settings"],
     )
