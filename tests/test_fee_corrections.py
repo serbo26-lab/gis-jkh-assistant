@@ -127,6 +127,7 @@ def test_single_house_scope_for_generation_protocols_and_export_selection(deskto
         dialog.deleteLater()
     captured = []
     monkeypatch.setattr(FeeQueueDialog, "exec", lambda dialog: captured.extend(dialog.jobs) or QDialog.DialogCode.Rejected)
+    page.select_all_button.click()
     page._start_bulk("save")
     assert {job.house_id for job in captured} == {desktop.house.id}
     assert ids[1] not in {job.record_id for job in captured}

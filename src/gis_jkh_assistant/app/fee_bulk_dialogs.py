@@ -13,6 +13,7 @@ from gis_jkh_assistant.fee_bulk import (
 )
 from .fee_bulk_queue import LABELS
 from .icons import set_button_icon
+from .widgets import SafeComboBox
 
 
 def _display_date(value):
@@ -47,6 +48,8 @@ def _fill(table, rows, checked):
                 cell.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
                               (Qt.ItemFlag.ItemIsUserCheckable if enabled else Qt.ItemFlag.NoItemFlags))
                 cell.setCheckState(Qt.CheckState.Checked if enabled and checked else Qt.CheckState.Unchecked)
+                if not enabled:
+                    cell.setToolTip(str(values[-1]))
             table.setItem(row, column, cell)
     table.setColumnWidth(0, 55)
     table.blockSignals(False)
@@ -54,7 +57,8 @@ def _fill(table, rows, checked):
 
 def selected_rows(table):
     return [row for row in range(table.rowCount())
-            if table.item(row, 0).checkState() == Qt.CheckState.Checked]
+            if table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
+            and table.item(row, 0).checkState() == Qt.CheckState.Checked]
 
 
 def _select_all(table, checked):
@@ -62,6 +66,34 @@ def _select_all(table, checked):
         item = table.item(row, 0)
         if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
             item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+
+
+def _selection_controls(table, layout):
+    controls = QHBoxLayout()
+    buttons = []
+    for text, checked in (("Выбрать доступные", True), ("Снять выбор", False)):
+        button = QPushButton(text)
+        set_button_icon(button, "check-all")
+        button.clicked.connect(lambda _=False, value=checked: _select_all(table, value))
+        controls.addWidget(button)
+        buttons.append(button)
+    counter = QLabel()
+    counter.setWordWrap(True)
+    controls.addWidget(counter, 1)
+    layout.addLayout(controls)
+    return *buttons, counter
+
+
+def _available_count(table):
+    return sum(bool(table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+               for row in range(table.rowCount()))
+
+
+def _blocked_reasons(table):
+    reasons = dict.fromkeys(table.item(row, table.columnCount() - 1).text()
+                           for row in range(table.rowCount())
+                           if not table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    return "\n".join(reason for reason in reasons if reason)
 
 
 class FeeQueueDialog(QDialog):
@@ -77,12 +109,13 @@ class FeeQueueDialog(QDialog):
             "load": "Последовательно загрузить договоры, протоколы и сведения. Данные в ГИС не изменяются.",
             "save": "Сохранить выбранные локальные проекты и правки в проекты ГИС. Размещение не выполняется.",
             "approve": "Разместить выбранные проекты, ранее сохранённые в ГИС. Локальные правки сначала нужно сохранить в ГИС.",
+            "save_approve": "Последовательно сохранить выбранные проекты и правки в ГИС, затем разместить каждый успешно сохранённый проект.",
         }
-        if preview and action == "save" and any(
+        if preview and action in {"save", "save_approve"} and any(
                 (record := page.store.get(job.record_id)) and record["remote"] and
                 (record["remote"].get("hasScanBasis") or len(record["remote"].get("ownerVotingList") or []) != 1)
                 for job in jobs if job.record_id and job.state == "ready"):
-            descriptions["save"] += " В записях со сканом или несколькими основаниями прежнее основание будет заменено выбранным протоколом из ГИС."
+            descriptions[action] += " В записях со сканом или несколькими основаниями прежнее основание будет заменено выбранным протоколом из ГИС."
         caption = QLabel(f"УО: {organization.name if organization else 'Не выбрана'}\n{descriptions[action]}")
         caption.setWordWrap(True)
         layout.addWidget(caption)
@@ -98,22 +131,33 @@ class FeeQueueDialog(QDialog):
         for column, width in enumerate((55, 255, 180, 110, 165)):
             self.table.setColumnWidth(column, width)
         layout.addWidget(self.table, 1)
-        controls = QHBoxLayout()
-        for text, checked in (("Выбрать доступные", True), ("Снять выбор", False)) if preview else ():
-            button = QPushButton(text)
-            set_button_icon(button, "check-all")
-            button.clicked.connect(lambda _=False, value=checked: _select_all(self.table, value))
-            controls.addWidget(button)
-        self.counter = QLabel()
-        controls.addWidget(self.counter, 1)
-        layout.addLayout(controls)
+        self.select_button = self.clear_button = None
+        if preview:
+            self.select_button, self.clear_button, self.counter = _selection_controls(self.table, layout)
+        else:
+            self.counter = QLabel()
+            layout.addWidget(self.counter)
+        self.selection_hint = QLabel()
+        self.selection_hint.setWordWrap(True)
+        if preview and not _available_count(self.table):
+            empty_messages = {
+                "load": "Нет домов, доступных для загрузки.",
+                "save": "Нет проектов, доступных для сохранения.",
+                "approve": "Нет проектов, готовых к размещению. Локальные проекты и правки сначала сохраните в ГИС или выберите «Сохранить и разместить».",
+                "save_approve": "Нет проектов, доступных для сохранения и размещения.",
+            }
+            reasons = _blocked_reasons(self.table)
+            self.selection_hint.setText(empty_messages[action] + ("\n" + reasons if reasons else ""))
+        self.selection_hint.setVisible(bool(self.selection_hint.text()))
+        layout.addWidget(self.selection_hint)
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel if preview
             else QDialogButtonBox.StandardButton.Close)
         if preview:
             self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText({
                 "load": "Загрузить сведения", "save": "Сохранить проекты в ГИС",
-                "approve": "Разместить проекты в ГИС"}[action])
+                "approve": "Разместить проекты в ГИС",
+                "save_approve": "Сохранить и разместить проекты в ГИС"}[action])
             if action != "load":
                 self.buttons.button(QDialogButtonBox.StandardButton.Ok).setDefault(False)
                 self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setDefault(True)
@@ -125,7 +169,11 @@ class FeeQueueDialog(QDialog):
 
     def _counter(self, *_):
         count = len(selected_rows(self.table))
-        self.counter.setText(f"Выбрано: {count}; всего записей: {len(self.jobs)}")
+        available = _available_count(self.table)
+        self.counter.setText(f"Выбрано: {count}; доступно: {available}; всего записей: {len(self.jobs)}")
+        if self.select_button is not None:
+            self.select_button.setEnabled(available > 0)
+            self.clear_button.setEnabled(count > 0)
         button = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         if button:
             button.setEnabled(count > 0)
@@ -183,7 +231,7 @@ class FeeGenerationDialog(QDialog):
         layout.addLayout(dates)
         protocol_row = QHBoxLayout()
         protocol_row.addWidget(QLabel("Протокол по умолчанию"))
-        self.protocol_combo = QComboBox()
+        self.protocol_combo = SafeComboBox()
         self.protocol_combo.setMinimumContentsLength(30)
         self.protocol_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.protocol_combo.setPlaceholderText("Выберите общее основание или отложите выбор")
@@ -341,12 +389,12 @@ class FeeAmendmentDialog(QDialog):
         layout = QVBoxLayout(self)
         hint = QLabel(house.address + "\nДаты и суммы берутся из локальных тарифов раздела «Дома». "
                       "Проверьте соответствие периодов. Для неоднозначных записей выберите тариф вручную. "
-                      "Изменения сохранятся локально; отправка проектов и размещение выполняются отдельно.")
+                      "Изменения сохранятся локально. Затем можно сохранить проекты в ГИС или сохранить и разместить их.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         row = QHBoxLayout()
         row.addWidget(QLabel("Основание для изменений"))
-        self.protocol_combo = QComboBox()
+        self.protocol_combo = SafeComboBox()
         self.protocol_combo.addItem("Сохранить основания отдельных записей", None)
         for protocol in available_protocols(self.repository, self.store, self.organization_id, [self.house_id]):
             self.protocol_combo.addItem(_protocol_label(protocol), protocol)
@@ -358,11 +406,13 @@ class FeeAmendmentDialog(QDialog):
         note.setWordWrap(True)
         layout.addWidget(note)
         self.preview = _table(("Выбор", "Период в ГИС", "Плата в ГИС", "Локальный тариф", "Новый период", "Новая плата", "Проверка"))
-        for column, width in enumerate((55, 175, 90, 245, 175, 90)):
+        for column, width in enumerate((55, 175, 90, 300, 175, 90)):
             self.preview.setColumnWidth(column, width)
         layout.addWidget(self.preview, 1)
-        self.counter = QLabel()
-        layout.addWidget(self.counter)
+        self.select_button, self.clear_button, self.counter = _selection_controls(self.preview, layout)
+        self.selection_hint = QLabel()
+        self.selection_hint.setWordWrap(True)
+        layout.addWidget(self.selection_hint)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Сохранить локальные изменения")
         self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
@@ -392,7 +442,7 @@ class FeeAmendmentDialog(QDialog):
                 self.preview.removeCellWidget(row, 3)
         _fill(self.preview, rows, True)
         for row, candidate in enumerate(self.candidates):
-            combo = QComboBox()
+            combo = SafeComboBox()
             combo.addItem("Выберите локальный тариф", None)
             for tariff in self.tariffs:
                 combo.addItem(f"{tariff.period_full_label} · {tariff.amount} руб./м²", tariff.id)
@@ -410,7 +460,13 @@ class FeeAmendmentDialog(QDialog):
 
     def _counter(self, *_):
         count = len(selected_rows(self.preview))
-        self.counter.setText(f"Выбрано изменений: {count}. Сохранение изменит только локальные проекты; в ГИС ничего не отправляется.")
+        available = _available_count(self.preview)
+        self.counter.setText(f"Выбрано изменений: {count}; доступно: {available}. Изменения сохраняются локально.")
+        self.select_button.setEnabled(available > 0)
+        self.clear_button.setEnabled(count > 0)
+        self.selection_hint.setText("Нет доступных изменений.\n" + _blocked_reasons(self.preview)
+                                    if self.preview.rowCount() and not available else "")
+        self.selection_hint.setVisible(bool(self.selection_hint.text()))
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(count > 0)
 
     def _apply(self):
