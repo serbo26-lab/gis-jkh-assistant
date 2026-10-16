@@ -237,7 +237,6 @@ class MainWindow(QMainWindow):
         self.integration_status_timer = QTimer(self)
         self.integration_status_timer.setInterval(1500)
         self.integration_status_timer.timeout.connect(self._refresh_integration_status)
-        self._refresh_integration_status()
         self.integration_status_timer.start()
 
         if self.settings_page.shared_context_enabled():
@@ -264,6 +263,7 @@ class MainWindow(QMainWindow):
             dismiss.clicked.connect(dismiss_intro)
             intro.addWidget(dismiss)
             self.organizations_page.page_content.layout().insertWidget(1, self.helper_intro)
+        self._refresh_integration_status()
         self._update_context_summary()
         self._update_display_layout(force=True)
 
@@ -902,6 +902,14 @@ class MainWindow(QMainWindow):
     def _refresh_integration_status(self) -> None:
         self._reload_pending_page_themes()
         status = self.integration_gateway.status()
+        intro = getattr(self, "helper_intro", None)
+        if (
+            intro is not None and not intro.isHidden()
+            and status.running and status.helper_connected and status.gis_page_ready
+            and helper_supports_organization_routing(status.helper_version)
+        ):
+            self.repository.set_setting("ui.helper.intro_seen", "1")
+            intro.hide()
         if not status.running:
             text = "Служба связи не запущена"
             if status.error:

@@ -1969,19 +1969,34 @@ class HousesPage(QWidget):
             if changes:
                 area_changes.append((house, changes, previous))
 
+        from gis_jkh_assistant.acceptance_act_details import address_parts, iso_date
+        management_date_fields = {
+            "management_agreement_date", "management_start_date", "management_end_date",
+        }
+
+        def stored_management_date(value):
+            try:
+                return iso_date(value)
+            except ValueError:
+                # Legacy GIS values may be invalid; a valid import can repair them.
+                return None
+
         for row in result.houses:
             try:
                 house = resolve(row, f"Дома, строка {row.row_number}")
-                from gis_jkh_assistant.acceptance_act_details import address_parts
                 old_parts = address_parts(house.address)
                 old_parts.update({k:v for k,v in requisites.house_fields(house.id).items() if v})
                 changes, previous = {}, {}
                 for field, value in row.fields.items():
                     current = old_parts.get(field, "") if field in HOUSE_ACT_FIELDS else getattr(house, field)
-                    if current != value:
+                    normalized = current
+                    if field in management_date_fields:
+                        value = iso_date(value)
+                        normalized = stored_management_date(current)
+                    if normalized != value:
                         changes[field], previous[field] = value, current
-                start = changes.get("management_start_date", house.management_start_date)
-                end = changes.get("management_end_date", house.management_end_date)
+                start = stored_management_date(changes.get("management_start_date", house.management_start_date))
+                end = stored_management_date(changes.get("management_end_date", house.management_end_date))
                 if start and end and start > end:
                     raise ValueError("Начало управления позже окончания.")
                 if changes:
