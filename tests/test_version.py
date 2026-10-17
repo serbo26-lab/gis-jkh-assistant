@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_version_is_initialized() -> None:
-    assert __version__ == "0.1.0.dev59"
+    assert __version__ == "0.1.0.dev60"
 
 
 def test_release_versions_match_sources() -> None:
