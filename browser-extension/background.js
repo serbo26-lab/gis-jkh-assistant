@@ -9,7 +9,7 @@ const KEEP_ALIVE_RETRY_MS = 15 * 1000;
 const KEEP_ALIVE_TAB_TIMEOUT_MS = 25 * 1000;
 const KEEP_ALIVE_CONCURRENCY = 3;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.35";
+const HELPER_CODE_VERSION = "0.1.36";
 const organizationTabs = new Map();
 const keepAliveTabRequests = new Map();
 // Routing identity for this worker, not an authentication credential.
@@ -210,6 +210,9 @@ async function maybeKeepSessionAlive() {
       lastKeepAliveAttemptMs = Date.now();
       keepAliveError = String(error?.message || error);
     }
+    // Publish the aggregate result after updating it. Delivery to localhost is
+    // advisory and must not extend a GIS request's deadline or retain its lock.
+    hello();
   })();
   keepAliveInFlight = attempt;
   try {
@@ -291,7 +294,7 @@ async function executeInGisTab(command, selectedTab = null) {
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     if (progressProbe) clearInterval(progressProbe);
-    await hello();
+    if (command?.type !== "keep_alive") await hello();
   }
 }
 
