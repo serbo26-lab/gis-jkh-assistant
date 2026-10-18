@@ -286,6 +286,72 @@ test("retries a transient renewal failure after fifteen seconds, then returns to
   assert.equal(executions.length, 2);
 });
 
+test("recovers from the observed removed-frame renewal error after navigation and dispatches a desktop import", async () => {
+  const tabs = [{ id: 42, active: true, url: "https://my.dom.gosuslugi.ru/workplanning" }];
+  const { context, executions } = helper(tabs);
+  context.now = Date.parse("2026-10-18T07:08:16Z");
+  context.previousSuccess = Date.parse("2026-10-18T07:06:08.887Z");
+  vm.runInContext("Date.now = () => now; lastKeepAliveSuccessMs = previousSuccess", context);
+  const timers = new Map();
+  let nextTimer = 0;
+  let newDocumentAvailable = false;
+  let commandSent = false;
+  const results = [];
+  const greetings = [];
+  context.setTimeout = (callback, delay) => { timers.set(++nextTimer, { callback, delay }); return nextTimer; };
+  context.clearTimeout = id => timers.delete(id);
+  context.chrome.scripting.executeScript = async options => {
+    executions.push(options);
+    if (options.args[0].type === "keep_alive") {
+      if (!newDocumentAvailable) throw new Error("Frame with ID 0 was removed.");
+      return [{ result: { ok: true, result: { keptAliveAt: "2026-10-18T07:08:31Z" } } }];
+    }
+    assert.equal(options.target.tabId, 42);
+    assert.equal(options.args[0].type, "load_work_plan");
+    assert.equal(newDocumentAvailable, true);
+    return [{ result: { ok: true, result: { year: 2022, items: [{ workGuid: "work-after-navigation" }] } } }];
+  };
+  context.fetch = async (url, options) => {
+    if (url.endsWith("/hello")) greetings.push(JSON.parse(options.body));
+    if (url.endsWith("/result")) results.push(JSON.parse(options.body));
+    if (url.endsWith("/next") && !commandSent) {
+      commandSent = true;
+      return { ok: true, status: 200, json: async () => ({
+        id: "plan-after-navigation", type: "load_work_plan", payload: { year: 2022 }
+      }) };
+    }
+    return { ok: true, status: 204 };
+  };
+
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(vm.runInContext("keepAliveError", context), "Frame with ID 0 was removed.");
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), context.previousSuccess);
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0, "a rejected old-document injection releases its tab");
+  context.now += 14999;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(executions.length, 1);
+
+  context.now += 1;
+  newDocumentAvailable = true;
+  tabs[0].url = "https://my.dom.gosuslugi.ru/workplanning?document=new";
+  await vm.runInContext("pollLoop()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(executions.filter(options => options.args[0].type === "keep_alive").length, 2);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, "plan-after-navigation");
+  assert.equal(results[0].ok, true);
+  assert.equal(results[0].result.items[0].workGuid, "work-after-navigation");
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), context.now);
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0);
+
+  const nextPoll = Array.from(timers.values()).find(timer => timer.delay === 1000);
+  assert.ok(nextPoll, "navigation did not terminate polling");
+  await nextPoll.callback();
+  assert.equal(greetings.at(-1).sessionKeepAliveError, null);
+  assert.equal(greetings.at(-1).lastKeepAliveSuccessAt, "2026-10-18T07:08:31.000Z");
+});
+
 test("an alarm and poll share one keepalive attempt even while the tab query is pending", async () => {
   const { context, executions } = helper([twoTabs()[0]]);
   vm.runInContext("hello = async () => true", context);

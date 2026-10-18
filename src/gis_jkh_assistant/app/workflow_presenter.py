@@ -401,6 +401,9 @@ def refresh_planning(page):
     work_list, year, _house = _target(page)
     plan = page.repository.get_work_plan(page._current_plan_id) if page._current_plan_id else None
     locked = busy(page)
+    owner = getattr(page.operation_status, "_operation_owner", None)
+    if owner is not None and owner != (page._current_work_list_id, year) and not locked:
+        page.operation_status.hide()
     context_lock(page, locked)
     local = bool(plan) and not locked
     page.table.setEnabled(local)
