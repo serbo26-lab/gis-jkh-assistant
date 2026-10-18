@@ -238,6 +238,115 @@ test("reports keepalive failure without claiming a successful renewal", async ()
   assert.equal(vm.runInContext("keepAliveError", context), "Session expired");
 });
 
+function renewalWithRealGreeting(http, tabs = [twoTabs()[0]]) {
+  const state = helper(tabs);
+  const page = organizationPage(http);
+  page.document.body.dispatchEvent = () => {};
+  page.document.dispatchEvent = () => {};
+  page.document.querySelectorAll = () => [];
+  page.Event = class Event {};
+  state.context.now = Date.parse("2026-10-18T12:00:00Z");
+  state.context.previousSuccess = Date.parse("2026-10-18T11:56:00Z");
+  vm.runInContext("Date.now = () => now; lastKeepAliveSuccessMs = previousSuccess", state.context);
+  state.context.chrome.scripting.executeScript = async options => {
+    state.executions.push(options);
+    assert.equal(options.args[0].type, "keep_alive");
+    page.command = options.args[0];
+    return [{ result: await vm.runInContext("runGisCommand(command)", page) }];
+  };
+  return state;
+}
+
+for (const succeeds of [true, false]) {
+  test(`publishes the completed echo ${succeeds ? "recovery" : "failure"} without waiting for the next poll`, async () => {
+    const echoRequests = [];
+    const { context, executions } = renewalWithRealGreeting(async config => {
+      echoRequests.push(config);
+      if (!succeeds) throw { status: 503, data: { message: "Echo temporarily unavailable" } };
+      return { data: {} };
+    });
+    context.previousError = succeeds ? "Previous renewal failed" : null;
+    vm.runInContext("keepAliveError = previousError", context);
+    const greetings = [];
+    context.fetch = async (url, options) => {
+      assert.ok(url.endsWith("/hello"), "the renewal result must not depend on /next");
+      greetings.push(JSON.parse(options.body));
+      return { ok: true };
+    };
+    await vm.runInContext("hello()", context);
+    await vm.runInContext("maybeKeepSessionAlive()", context);
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(executions.length, 1);
+    assert.equal(echoRequests.length, 1);
+    assert.equal(echoRequests[0].url, "/auth/api/rest/services/auth/echo/");
+    assert.equal(greetings.length, 2, "publish once after the aggregate result, not once per tab");
+    assert.equal(greetings[0].sessionKeepAliveError, context.previousError);
+    assert.equal(greetings[1].sessionKeepAliveError, succeeds ? null : "Echo temporarily unavailable");
+    assert.equal(greetings[1].lastKeepAliveSuccessAt,
+      succeeds ? "2026-10-18T12:00:00.000Z" : "2026-10-18T11:56:00.000Z");
+    assert.equal(vm.runInContext("keepAliveInFlight", context), null);
+  });
+}
+
+test("one multi-tab renewal publishes one aggregate greeting instead of one per tab", async () => {
+  const tabs = [
+    ...twoTabs(),
+    { id: 3, active: false, url: "https://my.dom.gosuslugi.ru/workplanning" }
+  ];
+  const { context, executions } = renewalWithRealGreeting(async () => ({ data: {} }), tabs);
+  vm.runInContext('keepAliveError = "Old warning"', context);
+  const greetings = [];
+  context.fetch = async (url, options) => {
+    assert.ok(url.endsWith("/hello"));
+    greetings.push(JSON.parse(options.body));
+    return { ok: true };
+  };
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(executions.length, 3);
+  assert.equal(greetings.length, 1);
+  assert.equal(greetings[0].sessionKeepAliveError, null);
+  assert.equal(greetings[0].lastKeepAliveSuccessAt, "2026-10-18T12:00:00.000Z");
+});
+
+test("a pending local greeting cannot turn a successful GIS echo into a renewal timeout", async () => {
+  const { context } = renewalWithRealGreeting(async () => ({ data: {} }));
+  const timers = new Map();
+  const greetings = [];
+  let nextTimer = 0;
+  let releaseGreeting;
+  context.setTimeout = (callback, delay) => { timers.set(++nextTimer, { callback, delay }); return nextTimer; };
+  context.clearTimeout = id => timers.delete(id);
+  context.fetch = async (url, options) => {
+    assert.ok(url.endsWith("/hello"));
+    greetings.push(JSON.parse(options.body));
+    return new Promise(resolve => { releaseGreeting = resolve; });
+  };
+  let settled = false;
+  const attempt = vm.runInContext("maybeKeepSessionAlive()", context).then(() => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  // Exercise a deadline if the implementation incorrectly includes /hello in
+  // its GIS deadline. Correct renewal has already cancelled that timer.
+  context.now += 25000;
+  for (const timer of Array.from(timers.values())) if (timer.delay === 25000) timer.callback();
+  await new Promise(resolve => setImmediate(resolve));
+  try {
+    assert.equal(vm.runInContext("keepAliveError", context), null);
+    assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), Date.parse("2026-10-18T12:00:00Z"));
+    assert.equal(settled, true, "loopback delivery must not retain the renewal single-flight lock");
+    assert.equal(vm.runInContext("keepAliveInFlight", context), null);
+    assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0);
+    assert.equal(timers.size, 0);
+    assert.equal(greetings.length, 1);
+    assert.equal(greetings[0].sessionKeepAliveError, null);
+    assert.equal(greetings[0].lastKeepAliveSuccessAt, "2026-10-18T12:00:00.000Z");
+  } finally {
+    releaseGreeting({ ok: true });
+    await attempt;
+  }
+});
+
 test("a stale duplicate tab does not override a confirmed live session", async () => {
   const { context } = helper(twoTabs());
   vm.runInContext("hello = async () => true", context);
