@@ -35,9 +35,11 @@ function helper(tabs, focusedWindowId = null) {
     },
     // The desktop poll stays suspended: these tests never access a real gateway.
     fetch: () => new Promise(() => {}),
-    setTimeout() {}, setInterval() { return 1; }, clearInterval() {}
+    setTimeout() {}, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {}
   });
-  vm.runInContext(source, context);
+  // Start polling explicitly in dispatcher tests. An implicit bootstrap racing
+  // fixture setup could otherwise consume the very command being asserted.
+  vm.runInContext(source.replace(/\r?\npollLoop\(\);\r?\n/, "\n"), context);
   return { context, queries, executions };
 }
 
@@ -236,6 +238,308 @@ test("reports keepalive failure without claiming a successful renewal", async ()
   assert.equal(vm.runInContext("keepAliveError", context), "Session expired");
 });
 
+test("a stale duplicate tab does not override a confirmed live session", async () => {
+  const { context } = helper(twoTabs());
+  vm.runInContext("hello = async () => true", context);
+  context.chrome.scripting.executeScript = async options => [{ result:
+    options.target.tabId === 1
+      ? { ok: true, result: { keptAliveAt: "test" } }
+      : { ok: false, error: "Old page has no Angular injector" }
+  }];
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.ok(vm.runInContext("lastKeepAliveSuccessMs", context));
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+});
+
+test("keeps the error when every GIS tab fails renewal", async () => {
+  const { context } = helper(twoTabs());
+  vm.runInContext("hello = async () => true", context);
+  context.chrome.scripting.executeScript = async options => [{
+    result: { ok: false, error: `Session expired in tab ${options.target.tabId}` }
+  }];
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), null);
+  assert.match(vm.runInContext("keepAliveError", context), /tab 1; .*tab 2/);
+});
+
+test("retries a transient renewal failure after fifteen seconds, then returns to four minutes", async () => {
+  const { context, executions } = helper([twoTabs()[0]]);
+  vm.runInContext("hello = async () => true", context);
+  context.now = 1000000;
+  vm.runInContext("Date.now = () => now", context);
+  context.chrome.scripting.executeScript = async options => {
+    executions.push(options);
+    return [{ result: executions.length === 1
+      ? { ok: false, error: "Page is loading" }
+      : { ok: true, result: { keptAliveAt: "test" } } }];
+  };
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  context.now += 14999;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(executions.length, 1);
+  context.now += 1;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(executions.length, 2);
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+  context.now += 15000;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(executions.length, 2);
+});
+
+test("recovers from the observed removed-frame renewal error after navigation and dispatches a desktop import", async () => {
+  const tabs = [{ id: 42, active: true, url: "https://my.dom.gosuslugi.ru/workplanning" }];
+  const { context, executions } = helper(tabs);
+  context.now = Date.parse("2026-10-18T07:08:16Z");
+  context.previousSuccess = Date.parse("2026-10-18T07:06:08.887Z");
+  vm.runInContext("Date.now = () => now; lastKeepAliveSuccessMs = previousSuccess", context);
+  const timers = new Map();
+  let nextTimer = 0;
+  let newDocumentAvailable = false;
+  let commandSent = false;
+  const results = [];
+  const greetings = [];
+  context.setTimeout = (callback, delay) => { timers.set(++nextTimer, { callback, delay }); return nextTimer; };
+  context.clearTimeout = id => timers.delete(id);
+  context.chrome.scripting.executeScript = async options => {
+    executions.push(options);
+    if (options.args[0].type === "keep_alive") {
+      if (!newDocumentAvailable) throw new Error("Frame with ID 0 was removed.");
+      return [{ result: { ok: true, result: { keptAliveAt: "2026-10-18T07:08:31Z" } } }];
+    }
+    assert.equal(options.target.tabId, 42);
+    assert.equal(options.args[0].type, "load_work_plan");
+    assert.equal(newDocumentAvailable, true);
+    return [{ result: { ok: true, result: { year: 2022, items: [{ workGuid: "work-after-navigation" }] } } }];
+  };
+  context.fetch = async (url, options) => {
+    if (url.endsWith("/hello")) greetings.push(JSON.parse(options.body));
+    if (url.endsWith("/result")) results.push(JSON.parse(options.body));
+    if (url.endsWith("/next") && !commandSent) {
+      commandSent = true;
+      return { ok: true, status: 200, json: async () => ({
+        id: "plan-after-navigation", type: "load_work_plan", payload: { year: 2022 }
+      }) };
+    }
+    return { ok: true, status: 204 };
+  };
+
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(vm.runInContext("keepAliveError", context), "Frame with ID 0 was removed.");
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), context.previousSuccess);
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0, "a rejected old-document injection releases its tab");
+  context.now += 14999;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(executions.length, 1);
+
+  context.now += 1;
+  newDocumentAvailable = true;
+  tabs[0].url = "https://my.dom.gosuslugi.ru/workplanning?document=new";
+  await vm.runInContext("pollLoop()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(executions.filter(options => options.args[0].type === "keep_alive").length, 2);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, "plan-after-navigation");
+  assert.equal(results[0].ok, true);
+  assert.equal(results[0].result.items[0].workGuid, "work-after-navigation");
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), context.now);
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0);
+
+  const nextPoll = Array.from(timers.values()).find(timer => timer.delay === 1000);
+  assert.ok(nextPoll, "navigation did not terminate polling");
+  await nextPoll.callback();
+  assert.equal(greetings.at(-1).sessionKeepAliveError, null);
+  assert.equal(greetings.at(-1).lastKeepAliveSuccessAt, "2026-10-18T07:08:31.000Z");
+});
+
+test("an alarm and poll share one keepalive attempt even while the tab query is pending", async () => {
+  const { context, executions } = helper([twoTabs()[0]]);
+  vm.runInContext("hello = async () => true", context);
+  let resolveTabs;
+  context.chrome.tabs.query = () => new Promise(resolve => { resolveTabs = resolve; });
+  const first = vm.runInContext("maybeKeepSessionAlive()", context);
+  const second = vm.runInContext("maybeKeepSessionAlive()", context);
+  resolveTabs([twoTabs()[0]]);
+  await Promise.all([first, second]);
+  assert.equal(executions.length, 1);
+});
+
+test("a failed tab query does not stop polling or prevent the next desktop command", async () => {
+  const { context, executions } = helper([twoTabs()[0]]);
+  const scheduled = [];
+  const paths = [];
+  const results = [];
+  let queryCount = 0;
+  let commandSent = false;
+  context.setTimeout = (callback, delay) => { scheduled.push({ callback, delay }); return 1; };
+  context.chrome.tabs.query = async () => {
+    if (++queryCount === 2) throw new Error("Temporary Edge tab query failure");
+    return [twoTabs()[0]];
+  };
+  context.fetch = async (url, options) => {
+    paths.push(url);
+    if (url.endsWith("/result")) results.push(JSON.parse(options.body));
+    if (url.endsWith("/next") && !commandSent) {
+      commandSent = true;
+      return { ok: true, status: 200, json: async () => ({ id: "after-failed-renewal", type: "ping", payload: {} }) };
+    }
+    return { ok: true, status: 204 };
+  };
+  await vm.runInContext("pollLoop()", context);
+  assert.ok(paths.some(url => url.endsWith("/next")));
+  assert.equal(executions[0]?.args[0].type, "ping", JSON.stringify(results));
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, "after-failed-renewal");
+  assert.equal(results[0].ok, true);
+  assert.match(vm.runInContext("keepAliveError", context), /tab query failure/);
+  assert.equal(scheduled.at(-1).delay, 1000, "polling remains scheduled after the error");
+  await scheduled.at(-1).callback();
+  assert.equal(paths.filter(url => url.endsWith("/next")).length, 2);
+});
+
+test("a timed-out keepalive cannot overwrite a later successful renewal", async () => {
+  const { context } = helper(twoTabs());
+  vm.runInContext("hello = async () => true", context);
+  context.now = 1000000;
+  vm.runInContext("Date.now = () => now", context);
+  const timers = new Map();
+  let nextTimerId = 0;
+  context.setTimeout = (callback, delay) => { timers.set(++nextTimerId, { callback, delay }); return nextTimerId; };
+  context.clearTimeout = id => timers.delete(id);
+  let finishOldAttempt;
+  let attempts = 0;
+  let otherTabAttempts = 0;
+  context.chrome.scripting.executeScript = async options => {
+    attempts++;
+    if (options.target.tabId === 1) return new Promise(resolve => { finishOldAttempt = resolve; });
+    return [{ result: ++otherTabAttempts === 1
+      ? { ok: false, error: "Other page still loading" }
+      : { ok: true, result: {} } }];
+  };
+  const oldAttempt = vm.runInContext("maybeKeepSessionAlive()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  const deadline = Array.from(timers.values()).find(timer => timer.delay === 25000);
+  assert.ok(deadline);
+  context.now += 25000;
+  deadline.callback();
+  await oldAttempt;
+  assert.match(vm.runInContext("keepAliveError", context), /не ответила/);
+  assert.equal(timers.size, 0);
+  assert.equal(vm.runInContext("lastKeepAliveAttemptMs", context), context.now);
+  context.now += 14999;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(attempts, 2, "retry delay starts after the timeout, not before it");
+  context.now += 1;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(attempts, 3, "only the other tab is retried while the old injection remains pending");
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+  const successTime = vm.runInContext("lastKeepAliveSuccessMs", context);
+  finishOldAttempt([{ result: { ok: false, error: "Late failure from sleeping page" } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0);
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), successTime);
+});
+
+test("repeated renewal cycles do not accumulate injections into an unresponsive tab", async () => {
+  const tabs = [twoTabs()[0]];
+  const { context, executions } = helper(tabs);
+  vm.runInContext("hello = async () => true", context);
+  context.now = 1000000;
+  vm.runInContext("Date.now = () => now", context);
+  let deadline;
+  context.setTimeout = callback => { deadline = callback; return 1; };
+  context.chrome.scripting.executeScript = async options => {
+    executions.push(options);
+    return new Promise(() => {});
+  };
+  const first = vm.runInContext("maybeKeepSessionAlive()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  deadline();
+  await first;
+  for (let cycle = 0; cycle < 5; cycle++) {
+    context.now += 15000;
+    await vm.runInContext("maybeKeepSessionAlive()", context);
+  }
+  assert.equal(executions.length, 1);
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 1);
+  tabs.length = 0;
+  context.now += 15000;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0, "a closed/non-GIS tab releases its pending entry");
+});
+
+test("does not inject renewal scripts into discarded tabs", async () => {
+  const { context, executions } = helper([{ ...twoTabs()[0], discarded: true }]);
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(executions.length, 0);
+  assert.match(vm.runInContext("keepAliveError", context), /выгружена браузером/);
+});
+
+test("several sleeping tabs do not delay desktop commands, heartbeats or a healthy tab", async () => {
+  const tabs = Array.from({ length: 5 }, (_, index) => ({
+    id: index + 1, active: index === 0, url: "https://my.dom.gosuslugi.ru/workplanning"
+  }));
+  const { context, executions } = helper(tabs);
+  const timers = new Map();
+  let nextTimer = 0;
+  let runningRenewals = 0;
+  let peakRenewals = 0;
+  const sentResults = [];
+  const requests = [];
+  context.setTimeout = (callback, delay) => { timers.set(++nextTimer, { callback, delay }); return nextTimer; };
+  context.clearTimeout = id => timers.delete(id);
+  context.chrome.scripting.executeScript = async options => {
+    executions.push(options);
+    if (options.args[0].type === "keep_alive") {
+      peakRenewals = Math.max(peakRenewals, ++runningRenewals);
+      if (options.target.tabId <= 2) return new Promise(() => {});
+      runningRenewals--;
+    }
+    return [{ result: { ok: true, result: { done: true } } }];
+  };
+  context.fetch = async (url, options) => {
+    requests.push(url);
+    if (url.endsWith("/result")) sentResults.push(JSON.parse(options.body));
+    if (url.endsWith("/next")) return {
+      ok: true, status: 200,
+      json: async () => ({ id: `ping-${sentResults.length}`, type: "ping", payload: {} })
+    };
+    return { ok: true };
+  };
+  vm.runInContext('keepAliveError = "Previous tab failed"', context);
+  await vm.runInContext("pollLoop()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sentResults.length, 1, "a desktop command finishes before any renewal deadline fires");
+  assert.equal(sentResults[0].ok, true);
+  assert.ok(peakRenewals <= 3, "renewal concurrency is bounded");
+  assert.equal(executions.filter(options => options.args[0].type === "keep_alive").length, 5);
+  assert.equal(vm.runInContext("keepAliveError", context), null, "a successful echo clears the old error promptly");
+  const nextPoll = Array.from(timers.values()).find(timer => timer.delay === 1000);
+  assert.ok(nextPoll);
+  await nextPoll.callback();
+  assert.equal(sentResults.length, 2, "polling continues while the same renewal attempt is pending");
+  assert.ok(requests.filter(url => url.endsWith("/hello")).length >= 2);
+  for (const timer of timers.values()) if (timer.delay === 25000) timer.callback();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(vm.runInContext("keepAliveError", context), null, "sleeping duplicates do not negate the confirmed session");
+});
+
+test("a synchronous tab API failure also releases the renewal single-flight lock", async () => {
+  const { context, executions } = helper([twoTabs()[0]]);
+  vm.runInContext("hello = async () => true", context);
+  context.now = 1000000;
+  vm.runInContext("Date.now = () => now", context);
+  context.chrome.tabs.query = () => { throw new Error("Extension tab API temporarily unavailable"); };
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(vm.runInContext("keepAliveInFlight", context), null);
+  context.now += 15000;
+  context.chrome.tabs.query = async () => [twoTabs()[0]];
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(executions.length, 1);
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+});
+
 test("keepalive uses the page's authorized relative echo and harmless activity", async () => {
   const { context } = helper([]);
   const requests = [];
@@ -257,6 +561,7 @@ test("keepalive uses the page's authorized relative echo and harmless activity",
       return async config => { requests.push(config); return { data: {} }; };
     }
   }) }) } };
+  context.window.__GIS_JKH_ASSISTANT_PROGRESS = { commandId: "running-import" };
   const result = await vm.runInContext(
     'runGisCommand({type: "keep_alive", payload: {}})', context
   );
@@ -265,7 +570,56 @@ test("keepalive uses the page's authorized relative echo and harmless activity",
   assert.equal(requests.length, 1);
   assert.equal(requests[0].method, "GET");
   assert.equal(requests[0].url, "/auth/api/rest/services/auth/echo/");
+  assert.equal(requests[0].cache, false);
+  assert.equal(requests[0].timeout, 15000);
   assert.equal(result.result.timeoutDialogWasVisible, false);
+  assert.deepEqual(context.window.__GIS_JKH_ASSISTANT_PROGRESS, { commandId: "running-import" });
+});
+
+for (const status of [0, 401, 503]) {
+  test(`preserves an echo network/auth/server failure instead of reporting renewal (${status})`, async () => {
+    const context = organizationPage(async () => { throw { status, data: { message: `Echo failed ${status}` } }; });
+    context.document.body.dispatchEvent = () => {};
+    context.document.dispatchEvent = () => {};
+    context.document.querySelectorAll = () => [];
+    context.Event = class Event {};
+    const result = await vm.runInContext('runGisCommand({type: "keep_alive", payload: {}})', context);
+    assert.equal(result.ok, false);
+    assert.match(result.error, new RegExp(`Echo failed ${status}`));
+  });
+}
+
+for (const data of [false, "<!doctype html><html><body>Вход</body></html>", { ok: false }, { success: false }, { authenticated: false }]) {
+  test(`does not report successful renewal for an HTTP-200 negative echo: ${JSON.stringify(data)}`, async () => {
+    const context = organizationPage(async () => ({ data }));
+    context.document.body.dispatchEvent = () => {};
+    context.document.dispatchEvent = () => {};
+    context.document.querySelectorAll = () => [];
+    context.Event = class Event {};
+    const result = await vm.runInContext('runGisCommand({type: "keep_alive", payload: {}})', context);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /не подтвердила сессию/);
+  });
+}
+
+test("continues a visible native timeout dialog before the echo, ignoring hidden or disabled copies", async () => {
+  const calls = [];
+  const context = organizationPage(async config => {
+    calls.push(config.url);
+    assert.deepEqual(calls, ["continue", "/auth/api/rest/services/auth/echo/"]);
+    return { data: {} };
+  });
+  context.document.body.dispatchEvent = () => {};
+  context.document.dispatchEvent = () => {};
+  context.Event = class Event {};
+  context.document.querySelectorAll = () => [
+    { textContent: "Продолжить работу", getClientRects: () => [], click: () => assert.fail("hidden button") },
+    { textContent: "Продолжить работу", disabled: true, getClientRects: () => [{}], click: () => assert.fail("disabled button") },
+    { textContent: "Продолжить работу", getClientRects: () => [{}], click: () => calls.push("continue") }
+  ];
+  const result = await vm.runInContext('runGisCommand({type: "keep_alive", payload: {}})', context);
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.result.timeoutDialogWasVisible, true);
 });
 
 function organizationPage(http) {

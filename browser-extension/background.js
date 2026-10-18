@@ -5,9 +5,13 @@ const GIS_MATCH = [
   "https://lk.dom.gosuslugi.ru/*"
 ];
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
+const KEEP_ALIVE_RETRY_MS = 15 * 1000;
+const KEEP_ALIVE_TAB_TIMEOUT_MS = 25 * 1000;
+const KEEP_ALIVE_CONCURRENCY = 3;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.34";
+const HELPER_CODE_VERSION = "0.1.35";
 const organizationTabs = new Map();
+const keepAliveTabRequests = new Map();
 // Routing identity for this worker, not an authentication credential.
 const HELPER_INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let gisTabAvailable = false;
@@ -15,6 +19,7 @@ let gisTabAvailable = false;
 let lastKeepAliveAttemptMs = 0;
 let lastKeepAliveSuccessMs = null;
 let keepAliveError = null;
+let keepAliveInFlight = null;
 
 async function localFetch(path, options = {}) {
   const headers = Object.assign({}, HELPER_HEADER, {
@@ -138,27 +143,80 @@ async function sendProgress(id, progress) {
 }
 
 async function maybeKeepSessionAlive() {
-  const now = Date.now();
-  if (now - lastKeepAliveAttemptMs < KEEP_ALIVE_INTERVAL_MS) {
-    return;
-  }
+  // Polling and the alarm can wake together after Edge resumes a sleeping tab.
+  // Share one attempt, and retry transient page/network failures promptly.
+  if (keepAliveInFlight) return keepAliveInFlight;
+  const interval = keepAliveError ? KEEP_ALIVE_RETRY_MS : KEEP_ALIVE_INTERVAL_MS;
+  if (Date.now() - lastKeepAliveAttemptMs < interval) return;
 
-  const tabs = await chrome.tabs.query({ url: GIS_MATCH });
-  if (!tabs.length) {
-    return;
-  }
-
-  lastKeepAliveAttemptMs = now;
-  const errors = [];
-  for (const tab of tabs) {
+  const attempt = (async () => {
     try {
-      await executeInGisTab({ type: "keep_alive", payload: {} }, tab);
-      lastKeepAliveSuccessMs = Date.now();
+      const tabs = await chrome.tabs.query({ url: GIS_MATCH });
+      const openTabIds = new Set(tabs.map(tab => tab.id));
+      for (const tabId of keepAliveTabRequests.keys()) {
+        if (!openTabIds.has(tabId)) keepAliveTabRequests.delete(tabId);
+      }
+      if (!tabs.length) return;
+      lastKeepAliveAttemptMs = Date.now();
+      const errors = [];
+      let succeeded = false;
+      async function renewTab(tab) {
+        if (tab.discarded || keepAliveTabRequests.has(tab.id)) {
+          errors.push(tab.discarded
+            ? "Вкладка ГИС ЖКХ выгружена браузером. Откройте её для проверки сессии."
+            : "Ожидается ответ предыдущей проверки сессии во вкладке ГИС ЖКХ.");
+          return;
+        }
+        let deadline;
+        try {
+          const request = executeInGisTab({ type: "keep_alive", payload: {} }, tab)
+            .finally(() => {
+              if (keepAliveTabRequests.get(tab.id) === request) keepAliveTabRequests.delete(tab.id);
+            });
+          keepAliveTabRequests.set(tab.id, request);
+          // executeScript may remain pending in a discarded/frozen page. This
+          // read-only renewal must never stop the desktop command poll forever.
+          // Keep the real request registered until it settles: the deadline
+          // cannot cancel execution, so retries must not accumulate injections.
+          await Promise.race([
+            request,
+            new Promise((_, reject) => {
+              deadline = setTimeout(() => reject(new Error(
+                "Вкладка ГИС ЖКХ не ответила при продлении сессии."
+              )), KEEP_ALIVE_TAB_TIMEOUT_MS);
+            })
+          ]);
+          succeeded = true;
+          lastKeepAliveSuccessMs = Date.now();
+          keepAliveError = null;
+        } catch (error) {
+          errors.push(String(error?.message || error));
+        } finally {
+          clearTimeout(deadline);
+        }
+      }
+      let nextTab = 0;
+      await Promise.all(Array.from(
+        { length: Math.min(tabs.length, KEEP_ALIVE_CONCURRENCY) },
+        async () => {
+          while (nextTab < tabs.length) await renewTab(tabs[nextTab++]);
+        }
+      ));
+      // A stale or loading duplicate tab must not overrule a confirmed session
+      // in another tab. Organization routing still validates every real command.
+      keepAliveError = succeeded ? null : errors.join("; ") || null;
+      lastKeepAliveAttemptMs = Date.now();
     } catch (error) {
-      errors.push(String(error?.message || error));
+      lastKeepAliveAttemptMs = Date.now();
+      keepAliveError = String(error?.message || error);
     }
+  })();
+  keepAliveInFlight = attempt;
+  try {
+    await attempt;
+  } finally {
+    keepAliveInFlight = null;
   }
-  keepAliveError = errors.length ? errors.join("; ") : null;
 }
 
 async function executeInGisTab(command, selectedTab = null) {
@@ -169,7 +227,7 @@ async function executeInGisTab(command, selectedTab = null) {
 
   // Long registry operations can take several minutes. Keep the desktop-side
   // connection status fresh while the command is still executing in the GIS tab.
-  const heartbeat = setInterval(() => {
+  const heartbeat = command?.type === "keep_alive" ? null : setInterval(() => {
     hello();
   }, 10000);
 
@@ -231,7 +289,7 @@ async function executeInGisTab(command, selectedTab = null) {
     }
     return result.result || {};
   } finally {
-    clearInterval(heartbeat);
+    if (heartbeat) clearInterval(heartbeat);
     if (progressProbe) clearInterval(progressProbe);
     await hello();
   }
@@ -240,28 +298,25 @@ async function executeInGisTab(command, selectedTab = null) {
 let reconnectDelayMs = 1000;
 
 async function pollLoop() {
-  const connected = await hello();
-
-  if (!connected) {
-    // Do not also call /next when the desktop app is closed. One failed probe is
-    // enough, and a short backoff keeps the extension console/network log quiet.
-    reconnectDelayMs = Math.min(reconnectDelayMs * 2, 10000);
-    setTimeout(pollLoop, reconnectDelayMs);
-    return;
-  }
-
-  reconnectDelayMs = 1000;
-
-  // An extension in another browser without a GIS tab must never consume a
-  // command intended for the connected browser. Tab changes also wake us below.
-  if (!gisTabAvailable) {
-    setTimeout(pollLoop, 2000);
-    return;
-  }
-
-  await maybeKeepSessionAlive();
-
   try {
+    const connected = await hello();
+    if (!connected) {
+      // Do not also call /next when the desktop app is closed. One failed probe
+      // and a short backoff keep the extension console/network log quiet.
+      reconnectDelayMs = Math.min(reconnectDelayMs * 2, 10000);
+      return;
+    }
+    reconnectDelayMs = 1000;
+
+    // A browser without a GIS tab must not consume another browser's command.
+    if (!gisTabAvailable) {
+      reconnectDelayMs = 2000;
+      return;
+    }
+
+    // Slow/frozen GIS tabs must not delay commands or the normal /hello rhythm.
+    // The shared renewal attempt handles its own errors and remains read-only.
+    maybeKeepSessionAlive().catch(() => {});
     const response = await localFetch("/next");
     if (response.status === 200) {
       const command = await response.json();
@@ -276,15 +331,17 @@ async function pollLoop() {
     }
   } catch (_) {
     reconnectDelayMs = 2000;
+  } finally {
+    // A failed tab query/renewal must not silently terminate the polling chain.
+    setTimeout(pollLoop, reconnectDelayMs);
   }
-
-  setTimeout(pollLoop, reconnectDelayMs);
 }
 
 pollLoop();
 for (const event of [chrome.tabs.onUpdated, chrome.tabs.onActivated, chrome.tabs.onRemoved]) {
   if (event?.addListener) event.addListener(() => { hello(); });
 }
+chrome.tabs.onRemoved?.addListener((tabId) => { keepAliveTabRequests.delete(tabId); });
 
 chrome.alarms.create(KEEP_ALIVE_ALARM, {
   delayInMinutes: 4,
@@ -384,7 +441,8 @@ async function runGisCommand(command) {
     const STATE_WORKPLANNING = "/workplanning";
     const STATE_FILE_REGISTRY = "/file/registry";
 
-    window.__GIS_JKH_ASSISTANT_PROGRESS = null;
+    // Background session renewal may overlap a long-running import.
+    if (command?.type !== "keep_alive") window.__GIS_JKH_ASSISTANT_PROGRESS = null;
 
     function setProgress(progress) {
       window.__GIS_JKH_ASSISTANT_PROGRESS = progress || null;
@@ -2340,20 +2398,31 @@ async function runGisCommand(command) {
         );
       }
 
-      await request(
-        "GET",
-        "/auth/api/rest/services/auth/echo/",
-        undefined,
-        STATE_WORKPLANNING
-      );
-
-      // If the warning dialog appeared between keepalive cycles, use its native
-      // continuation action as a recovery path.
+      // Recover the page's native timeout warning before probing the session:
+      // the echo itself may fail until that continuation action has run.
       const continueButton = Array.from(document.querySelectorAll("button")).find(
-        (button) => (button.textContent || "").trim() === "Продолжить работу"
+        (button) => (button.textContent || "").trim() === "Продолжить работу" &&
+          !button.disabled && button.getClientRects().length > 0
       );
       if (continueButton) {
         continueButton.click();
+      }
+
+      const echo = (await $http({
+        method: "GET",
+        url: "/auth/api/rest/services/auth/echo/",
+        headers: { "State-GUID": STATE_WORKPLANNING },
+        cache: false,
+        timeout: 15000
+      })).data;
+      // A redirected login/maintenance document can arrive with HTTP 200.
+      // Do not require any undocumented positive field in ordinary echo data.
+      if (echo === false ||
+          (typeof echo === "string" && /<\s*(?:!doctype\s+html|html|head|body|form)\b/i.test(echo)) ||
+          echo?.ok === false || echo?.success === false || echo?.authenticated === false) {
+        throw new Error(
+          "ГИС ЖКХ не подтвердила сессию. Проверьте личный кабинет в браузере."
+        );
       }
 
       return {
