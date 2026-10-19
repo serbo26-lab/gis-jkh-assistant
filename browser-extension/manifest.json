@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ГИС ЖКХ помощник",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "Связывает ГИС ЖКХ Ассистент с уже открытым личным кабинетом ГИС ЖКХ.",
   "permissions": [
     "alarms",

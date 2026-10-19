@@ -234,7 +234,7 @@ class ManagementFeesPage(QWidget):
         self.load_button.clicked.connect(self._load)
         self.new_button.clicked.connect(self._new)
         self.delete_button.clicked.connect(self._delete)
-        self.local_button.clicked.connect(self.flush_pending_changes)
+        self.local_button.clicked.connect(self._save_local)
         self.edit_button.clicked.connect(self._begin_edit)
         self.cancel_edit_button.clicked.connect(self._cancel_edit)
         self.protocol_button.clicked.connect(self._choose_protocol)
@@ -443,6 +443,10 @@ class ManagementFeesPage(QWidget):
         self._save_error = self._dirty = False
         self.state_text.setText("Локально: сохранено. Данные в ГИС не изменены.")
         return True
+
+    def _save_local(self):
+        if self.flush_pending_changes():
+            self._refresh_table(self._record_id)
 
     def has_pending_save_error(self):
         return self._save_error

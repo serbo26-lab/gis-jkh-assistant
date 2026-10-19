@@ -631,7 +631,7 @@ class QualityAssessmentStore:
     def _touch_period(self, period_id: str) -> None:
         period = self.get_period(period_id)
         status = str(period.gis_status or "").upper() if period else ""
-        next_status = "MODIFIED" if status in {"DRAFT", "APPROVED"} else "LOCAL"
+        next_status = "MODIFIED" if status in {"DRAFT", "APPROVED", "MODIFIED"} else "LOCAL"
         self.connection.execute(
             """
             UPDATE quality_assessment_periods

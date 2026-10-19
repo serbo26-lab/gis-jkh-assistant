@@ -71,7 +71,7 @@ function fixture(options = {}) {
   };
   const context = vm.createContext({chrome: {tabs: {query: async () => []},
     alarms: {create() {}, onAlarm: {addListener() {}}}},
-    fetch: () => new Promise(() => {}), setTimeout() {}, setInterval() {}, clearInterval() {}});
+    fetch: () => new Promise(() => {}), setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {}});
   vm.runInContext(source, context);
   const element = {};
   context.document = {body: element, documentElement: element, querySelector: () => element};

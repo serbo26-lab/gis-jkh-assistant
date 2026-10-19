@@ -1390,23 +1390,7 @@ class HousesPage(QWidget):
         if preview.conflicts:
             details.append("Конфликты — перечни пропущены:\n" + "\n".join(preview.conflicts))
         if preview.unmatched:
-            rows = []
-            for remote in preview.unmatched:
-                period = remote.get("period")
-                period = period if isinstance(period, dict) else {}
-                start, end = period.get("from"), period.get("to")
-                if isinstance(start, dict) and isinstance(end, dict):
-                    label = (
-                        f"{start.get('month', '?')}.{start.get('year', '?')} — "
-                        f"{end.get('month', '?')}.{end.get('year', '?')}"
-                    )
-                else:
-                    label = "не определён"
-                rows.append(
-                    f"Дом ГИС: {remote.get('houseGuid') or 'не указан'}; "
-                    f"период: {label}; перечень: {remote.get('guid') or 'не указан'}. "
-                    "Нет соответствующего дома у выбранной УО."
-                )
+            rows = [self._unmatched_work_list_summary(remote) for remote in preview.unmatched]
             details.append("Не сопоставлены с домами:\n" + "\n".join(rows))
         if errors:
             details.append("Ошибки сохранения:\n" + "\n".join(errors))
@@ -1419,10 +1403,13 @@ class HousesPage(QWidget):
                 "В подробностях приведён полный список пропущенных перечней и причин."
             )
             message.setDetailedText("\n\n".join(details))
-        message.setIcon(
-            QMessageBox.Icon.Question if confirm else
-            QMessageBox.Icon.Warning if details else QMessageBox.Icon.Information
-        )
+        if confirm:
+            icon = QMessageBox.Icon.Question
+        elif details:
+            icon = QMessageBox.Icon.Warning
+        else:
+            icon = QMessageBox.Icon.Information
+        message.setIcon(icon)
         message.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             if confirm else QMessageBox.StandardButton.Ok
@@ -1430,6 +1417,24 @@ class HousesPage(QWidget):
         if confirm:
             message.setDefaultButton(QMessageBox.StandardButton.No)
         return message.exec()
+
+    @staticmethod
+    def _unmatched_work_list_summary(remote):
+        period = remote.get("period")
+        period = period if isinstance(period, dict) else {}
+        start, end = period.get("from"), period.get("to")
+        if isinstance(start, dict) and isinstance(end, dict):
+            label = (
+                f"{start.get('month', '?')}.{start.get('year', '?')} — "
+                f"{end.get('month', '?')}.{end.get('year', '?')}"
+            )
+        else:
+            label = "не определён"
+        return (
+            f"Дом ГИС: {remote.get('houseGuid') or 'не указан'}; "
+            f"период: {label}; перечень: {remote.get('guid') or 'не указан'}. "
+            "Нет соответствующего дома у выбранной УО."
+        )
 
     @staticmethod
     def _house_management_identity_values(house) -> set[str]:
@@ -1746,6 +1751,10 @@ class HousesPage(QWidget):
             )
             if self._current_house_id == house_id:
                 self._load_house(house_id)
+            self.operation_status.outcome(
+                "Сведения об управлении обновлены. Локальная карточка сохранена.",
+                tone="success",
+            )
             QMessageBox.information(
                 self,
                 "Сведения обновлены",

@@ -150,6 +150,40 @@ def test_fill_from_plan_and_manual_change_mark_period(tmp_path) -> None:
     repository.close()
 
 
+@pytest.mark.parametrize("status", ["SAVED", "MODIFIED", "LOCAL"])
+@pytest.mark.parametrize("operation", ["manual", "fill", "clear", "extra"])
+def test_repeated_local_changes_preserve_fixation_sync_status(tmp_path, status, operation):
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list, _plan = _fixture(repository)
+    period = repository.get_or_create_work_fixation_period(
+        work_list_id=work_list.id, year=2026, month=1,
+    )
+    item = repository.list_work_fixation_items(period.id)[0]
+    repository.update_work_fixation_gis_state(
+        period.id, reporting_period_guid="reporting-period-guid", gis_status=status,
+    )
+    expected = "LOCAL" if status == "LOCAL" else "MODIFIED"
+    for count in (2, 3):
+        if operation == "manual":
+            repository.update_work_fixation_item(
+                item.id, fact_price=None, fact_amount=None,
+                fact_count=count, fact_total_cost="100",
+            )
+        elif operation == "fill":
+            repository.fill_work_fixation_from_plan(period.id)
+        elif operation == "clear":
+            repository.clear_work_fixation_period(period.id)
+        else:
+            repository.add_work_fixation_unplanned_item(
+                period.id, work_code=f"extra-{count}", work_guid=f"extra-guid-{count}",
+                work_name="Внеплановая работа", fact_count=count,
+            )
+        refreshed = repository.get_work_fixation_period(period.id)
+        assert refreshed.gis_status == expected
+        assert refreshed.reporting_period_guid == "reporting-period-guid"
+    repository.close()
+
+
 def test_fixation_payload_contains_complete_local_month_state(tmp_path) -> None:
     repository = Repository(tmp_path / "app.db")
     _organization, house, work_list, _plan = _fixture(repository)
