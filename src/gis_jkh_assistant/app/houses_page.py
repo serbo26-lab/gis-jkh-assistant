@@ -1746,6 +1746,10 @@ class HousesPage(QWidget):
             )
             if self._current_house_id == house_id:
                 self._load_house(house_id)
+            self.operation_status.outcome(
+                "Сведения об управлении обновлены. Локальная карточка сохранена.",
+                tone="success",
+            )
             QMessageBox.information(
                 self,
                 "Сведения обновлены",

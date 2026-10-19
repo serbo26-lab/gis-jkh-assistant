@@ -126,7 +126,7 @@ class WorkListSelector(QTableWidget):
     def _selected(self, row, *_args):
         if self._syncing or row < 0 or not self.source.isEnabled():
             return
-        if hasattr(self.source, "setCurrentIndex"):
+        if hasattr(self.source, "currentIndexChanged"):
             self.source.setCurrentIndex(row)
         else:
             self.source.setCurrentRow(row)
