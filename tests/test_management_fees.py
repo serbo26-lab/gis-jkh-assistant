@@ -334,6 +334,24 @@ def test_protocol_dialog_requires_explicit_selection(desktop, monkeypatch):
     assert page.store.get(record_id)["document"]["protocol"]["protocolDate"] == "2020-01-01"
 
 
+def test_local_save_immediately_refreshes_fee_amount_status_and_selection(desktop, monkeypatch):
+    page = fee_page(desktop, monkeypatch)
+    page.store.import_remote(desktop.house.id, context(remote(status="APPROVED")))
+    page._refresh_table()
+    record_id = page._record_id
+    page.select_all_button.click()
+    page.edit_button.click()
+    for amount in ("15.13", "15.14"):
+        page.amount_edit.setText(amount)
+        page.local_button.click()
+        assert page.table.item(0, 2).text() == amount
+        assert page.table.item(0, 5).text() == "Размещено • локальные правки"
+        assert page.store.get(record_id)["document"]["amount"] == amount
+        assert page._record_id == record_id
+        assert page._selected_record_ids() == [record_id]
+        assert page.store.get(record_id)["remote"]["managementPayment"] == "15.12"
+
+
 def test_published_edit_retains_basis_and_can_be_saved_as_a_project(desktop, monkeypatch):
     page = fee_page(desktop, monkeypatch)
     page.store.import_remote(desktop.house.id, context(remote(status="APPROVED")))

@@ -37,7 +37,8 @@ def test_visible_selection_updates_hidden_source_and_current_card(desktop, monke
         assert isinstance(source, QComboBox)
     workflows._settle(desktop.app)
     selector = page.list_selector
-    assert selector.isVisible() and source.isHidden()
+    assert selector.isVisible()
+    assert source.isHidden()
     assert selector.rowCount() == 4
     original = page._current_work_list_id
     errors = []

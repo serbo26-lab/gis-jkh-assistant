@@ -26,7 +26,8 @@ def _start_lookup(desktop, monkeypatch):
     monkeypatch.setattr(houses_page, "GisIntegrationWorker", workflows.ControlledWorker)
     page._sync_management_from_gis()
     worker = page._management_worker
-    assert worker is not None and worker.isRunning()
+    assert worker is not None
+    assert worker.isRunning()
     assert worker.command_type == "get_house_management_info"
     assert not page.sync_management_button.isEnabled()
     return page, worker

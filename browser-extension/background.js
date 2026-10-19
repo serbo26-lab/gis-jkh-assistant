@@ -122,7 +122,7 @@ async function findGisTab(command = null) {
 async function hello() {
   try {
     const tab = await findGisTab();
-    gisTabAvailable = Boolean(tab && tab.id);
+    gisTabAvailable = Boolean(tab?.id);
     const response = await localFetch("/hello", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -254,7 +254,7 @@ async function executeInGisTab(command, selectedTab = null) {
   // Long registry operations can take several minutes. Keep the desktop-side
   // connection status fresh while the command is still executing in the GIS tab.
   const heartbeat = command?.type === "keep_alive" ? null : setInterval(() => {
-    hello();
+    void hello();
   }, 10000);
 
   let progressProbe = null;
@@ -320,7 +320,7 @@ async function executeInGisTab(command, selectedTab = null) {
     if (heartbeat) clearInterval(heartbeat);
     if (progressProbe) clearInterval(progressProbe);
     // Greeting delivery must not retain a completed command or a routing error.
-    if (command?.type !== "keep_alive") hello();
+    if (command?.type !== "keep_alive") void hello();
   }
 }
 
@@ -2520,7 +2520,7 @@ async function runGisCommand(command) {
       return `${day}.${month}.${year}`;
     }
     function feeAmount(value) {
-      const text = String(value ?? "").trim().replace(/,/g, ".");
+      const text = String(value ?? "").trim().replaceAll(",", ".");
       if (!/^\d{1,10}(\.\d{1,2})?$/.test(text) || Number(text) <= 0) {
         throw new Error("Укажите положительный размер платы с точностью до копеек.");
       }
@@ -2556,8 +2556,10 @@ async function runGisCommand(command) {
         throw new Error("Договор или объект управления не соответствует выбранному дому и УО. Обновите данные из ГИС.");
       }
       const object = objects[0];
-      const starts = [dto.effectiveDate, object.managedDateStart].filter(Boolean).map(feeDate).sort();
-      const ends = [dto.endDate, object.managedDateEnd].filter(Boolean).map(feeDate).sort();
+      const starts = [dto.effectiveDate, object.managedDateStart].filter(Boolean).map(feeDate)
+        .sort((left, right) => left.localeCompare(right));
+      const ends = [dto.endDate, object.managedDateEnd].filter(Boolean).map(feeDate)
+        .sort((left, right) => left.localeCompare(right));
       return {guid: dto.guid, versionGuid: dto.versionInfoDTO.guid,
         objectRootGuid: object.rootEntityGuid, fiasHouseGuid: payload.fiasHouseGuid,
         number: dto.number || "Без номера", date: dto.signDate ? feeDate(dto.signDate) : "",
@@ -2591,7 +2593,7 @@ async function runGisCommand(command) {
     }
     function feePage(response, key, message) {
       const raw = response?.[key];
-      const total = typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw)) ? Number(raw) : NaN;
+      const total = typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw)) ? Number(raw) : Number.NaN;
       const items = response?.items ?? (total === 0 ? [] : null);
       if (!Array.isArray(items) || !Number.isSafeInteger(total) || total < 0 ||
           (total === 0 && items.length) || (total > 0 && !items.length)) throw new Error(message);
@@ -2738,7 +2740,7 @@ async function runGisCommand(command) {
           if (existing.length === 1 && feeMatches(existing[0], desired)) return {record: existing[0], contract};
           if (existing.length) throw new Error("За этот период уже есть сведения в ГИС. Загрузите их перед повторным сохранением.");
         }
-        const body = {...(current || {}), agreementRootGuid: contract.guid,
+        const body = {...current, agreementRootGuid: contract.guid,
           // Recorded PUT keeps APPROVED in the request. GIS creates DRAFT v+1.
           agreementType: "MANAGEMENT", type: "BY_PROTOCOL", status: current?.status || "DRAFT",
           versionInfo: current?.versionInfo || {versionNumber: "1", versionDateTime:

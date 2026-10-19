@@ -2625,7 +2625,7 @@ class Repository:
     def _touch_fixation_period(self, fixation_period_id: str) -> None:
         period = self.get_work_fixation_period(fixation_period_id)
         next_status = (
-            "MODIFIED" if period and str(period.gis_status or "").upper() == "SAVED"
+            "MODIFIED" if period and str(period.gis_status or "").upper() in {"SAVED", "MODIFIED"}
             else "LOCAL"
         )
         self.connection.execute(
@@ -2667,7 +2667,7 @@ class Repository:
 
         next_status = (
             "MODIFIED"
-            if str(period.gis_status or "").upper() == "SAVED"
+            if str(period.gis_status or "").upper() in {"SAVED", "MODIFIED"}
             else "LOCAL"
         )
         with self.connection:
@@ -2705,7 +2705,7 @@ class Repository:
         rows = self.list_work_fixation_items(fixation_period_id)
         next_status = (
             "MODIFIED"
-            if str(period.gis_status or "").upper() == "SAVED"
+            if str(period.gis_status or "").upper() in {"SAVED", "MODIFIED"}
             else "LOCAL"
         )
         with self.connection:
@@ -2748,7 +2748,7 @@ class Repository:
             return
         next_status = (
             "MODIFIED"
-            if str(period.gis_status or "").upper() == "SAVED"
+            if str(period.gis_status or "").upper() in {"SAVED", "MODIFIED"}
             else "LOCAL"
         )
         with self.connection:

@@ -1,3 +1,5 @@
+import pytest
+
 from gis_jkh_assistant.acceptance_act_pdf import build_acceptance_act_pdf
 from gis_jkh_assistant.database import Repository
 from gis_jkh_assistant.database.quality_assessment_store import QualityAssessmentStore
@@ -72,6 +74,32 @@ def _fixture(repository: Repository):
     work_list = repository.get_work_list(work_list.id)
     assert work_list is not None
     return organization, house, work_list
+
+
+@pytest.mark.parametrize("status", ["DRAFT", "APPROVED", "MODIFIED", "LOCAL"])
+def test_repeated_quality_edits_preserve_sync_status(tmp_path, status):
+    repository = Repository(tmp_path / "app.db")
+    _organization, _house, work_list = _fixture(repository)
+    store = QualityAssessmentStore(repository)
+    period = store.get_or_create_period(work_list_id=work_list.id, year=2026, month=1)
+    item = store.list_items(period.id)[0]
+    store.set_gis_state(
+        period.id, reporting_period_guid="reporting-guid",
+        estimation_guid="estimation-guid", gis_status=status,
+    )
+    expected = "LOCAL" if status == "LOCAL" else "MODIFIED"
+    for days in (1, 2):
+        store.update_item(
+            item.id, included=True, cost="3100", days_count=days,
+            cost_reduction=quality_reduction("3100", days, 31),
+        )
+        assert store.get_period(period.id).gis_status == expected
+    store.set_items_included(period.id, False)
+    refreshed = store.get_period(period.id)
+    assert refreshed.gis_status == expected
+    assert refreshed.estimation_guid == "estimation-guid"
+    assert store.get_item(item.id).days_count == 2
+    repository.close()
 
 
 def test_quality_helper_version() -> None:
