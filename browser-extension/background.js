@@ -8,9 +8,11 @@ const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
 const KEEP_ALIVE_RETRY_MS = 15 * 1000;
 const KEEP_ALIVE_TAB_TIMEOUT_MS = 25 * 1000;
 const KEEP_ALIVE_CONCURRENCY = 3;
+const ORGANIZATION_PROBE_TIMEOUT_MS = 20 * 1000;
 const KEEP_ALIVE_ALARM = "gis-jkh-session-keepalive";
-const HELPER_CODE_VERSION = "0.1.36";
+const HELPER_CODE_VERSION = "0.1.37";
 const organizationTabs = new Map();
+const organizationProbeRequests = new Map();
 const keepAliveTabRequests = new Map();
 // Routing identity for this worker, not an authentication credential.
 const HELPER_INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -37,6 +39,32 @@ function organizationMatches(expected, actual) {
       text(expected.organizationRootGuid) === text(actual.organizationRootGuid));
 }
 
+async function readOrganizationInTab(tab) {
+  if (organizationProbeRequests.has(tab.id)) {
+    throw new Error("Вкладка ГИС ЖКХ ещё не ответила при проверке УО. Откройте её и проверьте состояние страницы.");
+  }
+  const request = Promise.resolve().then(() => chrome.scripting.executeScript({
+    target: { tabId: tab.id }, world: "MAIN", func: runGisCommand,
+    args: [{ type: "get_current_organization", payload: {} }]
+  })).finally(() => {
+    if (organizationProbeRequests.get(tab.id) === request) organizationProbeRequests.delete(tab.id);
+  });
+  organizationProbeRequests.set(tab.id, request);
+  let deadline;
+  try {
+    return await Promise.race([
+      request,
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error(
+          "Вкладка ГИС ЖКХ не ответила при проверке УО. Откройте её и проверьте состояние страницы."
+        )), ORGANIZATION_PROBE_TIMEOUT_MS);
+      })
+    ]);
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
 async function findGisTab(command = null) {
   const tabs = await chrome.tabs.query({ url: GIS_MATCH });
   if (!tabs.length) return null;
@@ -60,25 +88,25 @@ async function findGisTab(command = null) {
     const key = `${expected.ogrn}:${expected.organizationRootGuid || ""}`;
     const pinnedId = organizationTabs.get(key);
     const candidates = [...tabs].sort((a, b) => Number(b.id === pinnedId) - Number(a.id === pinnedId));
+    let probeError = "";
     for (const tab of candidates) {
       try {
-        const execution = await chrome.scripting.executeScript({
-          target: { tabId: tab.id }, world: "MAIN", func: runGisCommand,
-          args: [{ type: "get_current_organization", payload: {} }]
-        });
+        const execution = await readOrganizationInTab(tab);
         const reply = execution?.[0]?.result;
         if (reply?.ok && organizationMatches(expected, reply.result?.organization)) {
           organizationTabs.set(key, tab.id);
           return tab;
         }
-      } catch (_) {
+      } catch (error) {
+        probeError = String(error?.message || error);
         // Closed and unauthorized tabs cannot be used for this organization.
       }
     }
     organizationTabs.delete(key);
     throw new Error(
       `Не найдена авторизованная вкладка ГИС ЖКХ для УО с ОГРН ${expected.ogrn}. ` +
-      "Откройте её кабинет в браузере и повторите операцию."
+      "Откройте её кабинет в браузере и повторите операцию." +
+      (probeError ? ` ${probeError}` : "")
     );
   }
 
@@ -223,44 +251,44 @@ async function maybeKeepSessionAlive() {
 }
 
 async function executeInGisTab(command, selectedTab = null) {
-  const tab = selectedTab || await findGisTab(command);
-  if (!tab?.id) {
-    throw new Error("Не найдена открытая вкладка личного кабинета ГИС ЖКХ.");
-  }
-
   // Long registry operations can take several minutes. Keep the desktop-side
   // connection status fresh while the command is still executing in the GIS tab.
   const heartbeat = command?.type === "keep_alive" ? null : setInterval(() => {
     hello();
   }, 10000);
 
-  let progressProbeRunning = false;
-  let lastProgressJson = "";
-  const progressProbe = command?.id
-    ? setInterval(async () => {
-        if (progressProbeRunning) return;
-        progressProbeRunning = true;
-        try {
-          const probe = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            world: "MAIN",
-            func: () => window.__GIS_JKH_ASSISTANT_PROGRESS || null
-          });
-          const progress = probe?.[0]?.result || null;
-          const serialized = progress ? JSON.stringify(progress) : "";
-          if (serialized && serialized !== lastProgressJson) {
-            lastProgressJson = serialized;
-            await sendProgress(command.id, progress);
-          }
-        } catch (_) {
-          // The main command result will report a real error if the tab failed.
-        } finally {
-          progressProbeRunning = false;
-        }
-      }, 1000)
-    : null;
-
+  let progressProbe = null;
   try {
+    const tab = selectedTab || await findGisTab(command);
+    if (!tab?.id) {
+      throw new Error("Не найдена открытая вкладка личного кабинета ГИС ЖКХ.");
+    }
+    let progressProbeRunning = false;
+    let lastProgressJson = "";
+    progressProbe = command?.id
+      ? setInterval(async () => {
+          if (progressProbeRunning) return;
+          progressProbeRunning = true;
+          try {
+            const probe = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              world: "MAIN",
+              func: () => window.__GIS_JKH_ASSISTANT_PROGRESS || null
+            });
+            const progress = probe?.[0]?.result || null;
+            const serialized = progress ? JSON.stringify(progress) : "";
+            if (serialized && serialized !== lastProgressJson) {
+              lastProgressJson = serialized;
+              await sendProgress(command.id, progress);
+            }
+          } catch (_) {
+            // The main command result will report a real error if the tab failed.
+          } finally {
+            progressProbeRunning = false;
+          }
+        }, 1000)
+      : null;
+
     const execution = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: "MAIN",
@@ -278,10 +306,7 @@ async function executeInGisTab(command, selectedTab = null) {
     }
     const expected = command.payload?.organizationContext;
     if (expected) {
-      const check = await chrome.scripting.executeScript({
-        target: { tabId: tab.id }, world: "MAIN", func: runGisCommand,
-        args: [{ type: "get_current_organization", payload: {} }]
-      });
+      const check = await readOrganizationInTab(tab);
       const reply = check?.[0]?.result;
       if (!reply?.ok || !organizationMatches(expected, reply.result?.organization)) {
         throw new Error(
@@ -294,7 +319,8 @@ async function executeInGisTab(command, selectedTab = null) {
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     if (progressProbe) clearInterval(progressProbe);
-    if (command?.type !== "keep_alive") await hello();
+    // Greeting delivery must not retain a completed command or a routing error.
+    if (command?.type !== "keep_alive") hello();
   }
 }
 
@@ -344,7 +370,10 @@ pollLoop();
 for (const event of [chrome.tabs.onUpdated, chrome.tabs.onActivated, chrome.tabs.onRemoved]) {
   if (event?.addListener) event.addListener(() => { hello(); });
 }
-chrome.tabs.onRemoved?.addListener((tabId) => { keepAliveTabRequests.delete(tabId); });
+chrome.tabs.onRemoved?.addListener((tabId) => {
+  keepAliveTabRequests.delete(tabId);
+  organizationProbeRequests.delete(tabId);
+});
 
 chrome.alarms.create(KEEP_ALIVE_ALARM, {
   delayInMinutes: 4,
@@ -440,6 +469,23 @@ async function runGisCommand(command) {
 
     const $http = injector.get("$http");
 
+    // Angular's own timeout can remain pending with its promise/digest queue.
+    // Bound these read-only session/identity probes independently in the page,
+    // so executeScript can settle and release its real single-flight entry.
+    async function sessionProbe(action, message) {
+      let deadline;
+      try {
+        return await Promise.race([
+          Promise.resolve().then(action),
+          new Promise((_, reject) => {
+            deadline = setTimeout(() => reject(new Error(message)), 15000);
+          })
+        ]);
+      } finally {
+        clearTimeout(deadline);
+      }
+    }
+
     const STATE_FORMATION = "/workplanning/worklist/card/formation";
     const STATE_WORKPLANNING = "/workplanning";
     const STATE_FILE_REGISTRY = "/file/registry";
@@ -511,12 +557,12 @@ async function runGisCommand(command) {
       // information page uses this same GET without an organization parameter.
       let details;
       try {
-        details = await request(
+        details = await sessionProbe(() => request(
           "GET",
           "/ppa/api/rest/services/ppa/organizations/details",
           undefined,
           "/organization/information"
-        );
+        ), "Сервер ГИС ЖКХ не ответил при проверке УО. Проверьте состояние личного кабинета.");
       } catch (error) {
         if (error?.status === 401 || error?.status === 403) {
           throw new Error(
@@ -2411,13 +2457,13 @@ async function runGisCommand(command) {
         continueButton.click();
       }
 
-      const echo = (await $http({
+      const echo = (await sessionProbe(() => $http({
         method: "GET",
         url: "/auth/api/rest/services/auth/echo/",
         headers: { "State-GUID": STATE_WORKPLANNING },
         cache: false,
         timeout: 15000
-      })).data;
+      }), "Сервер ГИС ЖКХ не ответил при продлении сессии. Проверьте состояние личного кабинета.")).data;
       // A redirected login/maintenance document can arrive with HTTP 200.
       // Do not require any undocumented positive field in ordinary echo data.
       if (echo === false ||

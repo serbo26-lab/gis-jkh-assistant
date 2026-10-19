@@ -254,8 +254,145 @@ function renewalWithRealGreeting(http, tabs = [twoTabs()[0]]) {
     page.command = options.args[0];
     return [{ result: await vm.runInContext("runGisCommand(command)", page) }];
   };
-  return state;
+  return { ...state, page };
 }
+
+test("a stalled Angular echo releases renewal and the next attempt can recover", async () => {
+  let calls = 0;
+  const { context, page } = renewalWithRealGreeting(() =>
+    ++calls === 1 ? new Promise(() => {}) : Promise.resolve({ data: {} })
+  );
+  const timers = new Map();
+  let next = 0;
+  page.setTimeout = (callback, delay) => { timers.set(++next, { callback, delay }); return next; };
+  page.clearTimeout = id => timers.delete(id);
+  context.fetch = async () => ({ ok: true });
+  const attempt = vm.runInContext("maybeKeepSessionAlive()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  const watchdog = [...timers.values()].find(timer => timer.delay === 15000);
+  assert.ok(watchdog, "echo needs a native deadline independent of Angular's timeout");
+  watchdog.callback();
+  await attempt;
+  assert.equal(vm.runInContext("keepAliveTabRequests.size", context), 0);
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), context.previousSuccess);
+  assert.match(vm.runInContext("keepAliveError", context), /не ответил/);
+  context.now += 15000;
+  await vm.runInContext("maybeKeepSessionAlive()", context);
+  assert.equal(calls, 2);
+  assert.equal(vm.runInContext("keepAliveError", context), null);
+  assert.equal(vm.runInContext("lastKeepAliveSuccessMs", context), context.now);
+  assert.equal(timers.size, 0);
+});
+
+test("a stalled organization probe keeps greetings alive and never dispatches a write", async () => {
+  const { context, executions } = routedHelper([twoTabs()[0]], new Map([[1, orgA]]));
+  const timers = new Map();
+  const intervals = new Map();
+  let next = 0;
+  let greetCount = 0;
+  let releaseProbe;
+  context.setTimeout = (callback, delay) => { timers.set(++next, { callback, delay }); return next; };
+  context.clearTimeout = id => timers.delete(id);
+  context.setInterval = callback => { intervals.set(++next, callback); return next; };
+  context.clearInterval = id => intervals.delete(id);
+  context.greet = async () => { greetCount++; return true; };
+  vm.runInContext("hello = greet", context);
+  const normalExecution = context.chrome.scripting.executeScript;
+  context.chrome.scripting.executeScript = options => {
+    executions.push(options);
+    return new Promise(resolve => { releaseProbe = resolve; });
+  };
+  context.command = { type: "save_work_plan", payload: { organizationContext: orgA } };
+  const attempt = vm.runInContext("executeInGisTab(command)", context);
+  const rejected = assert.rejects(attempt, /проверке УО/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(intervals.size, 1, "heartbeat must start before tab routing");
+  await [...intervals.values()][0]();
+  assert.equal(greetCount, 1);
+  const watchdog = [...timers.values()].find(timer => timer.delay === 20000);
+  assert.ok(watchdog);
+  watchdog.callback();
+  await rejected;
+  assert.equal(intervals.size, 0);
+  assert.equal(executions.length, 1);
+  await assert.rejects(vm.runInContext("executeInGisTab(command)", context), /проверке УО/);
+  assert.equal(executions.length, 1, "do not accumulate injections into a frozen page");
+  assert.ok(executions.every(options => options.args[0].type === "get_current_organization"));
+  releaseProbe([{ result: { ok: true, result: { organization: orgA } } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  context.chrome.scripting.executeScript = normalExecution;
+  await vm.runInContext("executeInGisTab(command)", context);
+  assert.equal(executions.filter(options => options.args[0].type === "save_work_plan").length, 1);
+  assert.equal(timers.size, 0);
+});
+
+test("a stalled local greeting does not retain an otherwise completed command", async () => {
+  const { context } = helper([twoTabs()[0]]);
+  let completed = false;
+  const attempt = vm.runInContext('executeInGisTab({type: "ping", payload: {}})', context)
+    .then(() => { completed = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(completed, true);
+  await attempt;
+});
+
+test("an organization routing timeout returns an error and schedules the next desktop poll", async () => {
+  const { context, executions } = helper([twoTabs()[0]]);
+  const timers = new Map();
+  const results = [];
+  let next = 0;
+  context.setTimeout = (callback, delay) => { timers.set(++next, { callback, delay }); return next; };
+  context.clearTimeout = id => timers.delete(id);
+  vm.runInContext("lastKeepAliveAttemptMs = Date.now()", context);
+  context.chrome.scripting.executeScript = options => {
+    executions.push(options);
+    return new Promise(() => {});
+  };
+  context.fetch = async (url, options) => {
+    if (url.endsWith("/next")) return { status: 200, json: async () => ({
+      id: "routed-write", type: "save_work_plan", payload: { organizationContext: orgA }
+    }) };
+    if (url.endsWith("/result")) results.push(JSON.parse(options.body));
+    return { ok: true };
+  };
+  const poll = vm.runInContext("pollLoop()", context);
+  await new Promise(resolve => setImmediate(resolve));
+  [...timers.values()].find(timer => timer.delay === 20000).callback();
+  await poll;
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, "routed-write");
+  assert.equal(results[0].ok, false);
+  assert.match(results[0].error, /проверке УО/);
+  assert.ok([...timers.values()].some(timer => timer.delay === 1000));
+  assert.ok(executions.every(options => options.args[0].type === "get_current_organization"));
+});
+
+test("a stalled identity request inside the page cannot proceed to a GIS write", async () => {
+  const requests = [];
+  const context = organizationPage(config => {
+    requests.push(config);
+    return new Promise(() => {});
+  });
+  const timers = new Map();
+  let next = 0;
+  context.setTimeout = (callback, delay) => { timers.set(++next, { callback, delay }); return next; };
+  context.clearTimeout = id => timers.delete(id);
+  context.command = { type: "cancel_work_list", payload: {
+    workListGuid: "list-a", organizationContext: orgA
+  } };
+  const attempt = vm.runInContext("runGisCommand(command)", context);
+  await new Promise(resolve => setImmediate(resolve));
+  const watchdog = [...timers.values()].find(timer => timer.delay === 15000);
+  assert.ok(watchdog);
+  watchdog.callback();
+  const reply = await attempt;
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /не ответил при проверке УО/);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "GET");
+  assert.equal(requests[0].url, "/ppa/api/rest/services/ppa/organizations/details");
+  assert.equal(timers.size, 0);
+});
 
 for (const succeeds of [true, false]) {
   test(`publishes the completed echo ${succeeds ? "recovery" : "failure"} without waiting for the next poll`, async () => {
