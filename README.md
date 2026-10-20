@@ -1,7 +1,7 @@
 # ГИС ЖКХ Ассистент
 
 ![Badge](https://hitscounter.dev/api/hit?url=https%3A%2F%2Fgithub.com%2Fserbo26-lab%2Fgis-jkh-assistant&label=&icon=geo&color=%23212529&message=&style=social&tz=Europe%2FMoscow)
-
+[![Поддержать проект через CloudTips](docs/assets/cloudtips-support.svg)](https://pay.cloudtips.ru/p/6b9c3555)
 [![Telegram](https://img.shields.io/badge/Telegram-Ассистенты%20УО-229ED9?style=flat-square&logo=telegram&logoColor=white)](https://t.me/assistant_yo)
 
 Программа для управляющих организаций: дома, перечни работ и услуг, планирование, фиксация выполнения, оценка качества, акты и сведения о размере платы. Данные можно подготовить на компьютере, а затем загрузить в ГИС ЖКХ через открытый личный кабинет.
