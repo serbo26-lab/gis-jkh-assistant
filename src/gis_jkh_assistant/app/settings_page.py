@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton, QWidget
 
 from gis_jkh_assistant.database import Repository
@@ -153,7 +154,31 @@ class SettingsPage(QWidget):
         connection.body.addWidget(self.helper_setup_button, 0)
         root.addWidget(connection)
         connection.setMaximumWidth(900)
+
+        data = SectionCard("Данные и резервная копия")
+        self.open_data_folder_button = QPushButton("Открыть папку данных")
+        self.open_data_folder_button.setToolTip(str(self.repository.database_path.resolve().parent))
+        self.open_data_folder_button.clicked.connect(self._open_data_folder)
+        data.body.addWidget(self.open_data_folder_button)
+        backup_hint = QLabel(
+            "Перед копированием закройте программу. Для переноса данных "
+            "скопируйте папку целиком."
+        )
+        backup_hint.setObjectName("Muted")
+        backup_hint.setWordWrap(True)
+        data.body.addWidget(backup_hint)
+        root.addWidget(data)
+        data.setMaximumWidth(900)
         root.addStretch(1)
+
+    def _open_data_folder(self) -> None:
+        folder = self.repository.database_path.resolve().parent
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            QMessageBox.warning(
+                self, "Не удалось открыть папку данных",
+                f"Откройте папку вручную:\n{folder}\n\n"
+                "Перед копированием закройте программу.",
+            )
 
     def shared_context_enabled(self) -> bool:
         return self.shared_radio.isChecked()
