@@ -180,9 +180,11 @@ def install_selector(page, root, source, *, start=2):
         lambda *_: None if getattr(page.window(), "_closing", False) else
         page.repository.set_setting(key, str(page.workspace_splitter.sizes()[0]))
     )
-    QWidget.setTabOrder(page.house_combo, page.list_selector)
+    # Build in visual order: moving house_combo into an earlier pair after
+    # linking it to the registry would break that already established link.
+    chain = [page.workflow.primary, page.workflow.help_button, page.house_combo, page.list_selector]
     following = getattr(page, "year_combo", None) or getattr(page, "start_month", None)
     if following:
-        QWidget.setTabOrder(page.list_selector, following)
-    QWidget.setTabOrder(page.workflow.primary, page.workflow.help_button)
-    QWidget.setTabOrder(page.workflow.help_button, page.house_combo)
+        chain.append(following)
+    for before, after in zip(chain, chain[1:]):
+        QWidget.setTabOrder(before, after)
