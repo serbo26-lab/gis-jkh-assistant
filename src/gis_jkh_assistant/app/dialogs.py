@@ -270,14 +270,27 @@ class HouseTariffDialog(QDialog):
             "ММ.ГГГГ означает первый день месяца. "
             "ДД.ММ.ГГГГ сохраняет точную дату."
         )
+        end = None
+        if tariff:
+            if tariff.gis_fee_guid:
+                end = tariff.effective_to_date
+            elif tariff.manual_end_date:
+                end = date.fromisoformat(tariff.manual_end_date)
+        self.end_date_edit = QLineEdit(end.strftime("%d.%m.%Y") if end else "")
+        self.end_date_edit.setPlaceholderText("ММ.ГГГГ или ДД.ММ.ГГГГ; можно оставить пустым")
+        self.end_date_edit.setToolTip(
+            "Дата включительно. ММ.ГГГГ означает последний день месяца. "
+            "Пустое поле сохраняет автоматическое окончание по следующему тарифу."
+        )
 
         explanation = QLabel(
             ("Будет создан локальный тариф с приоритетом перед сведениями ГИС. "
              "Размещённые сведения и основание в ГИС не изменятся. " if tariff and tariff.gis_fee_guid else "")
             + "Укажите дату, с которой меняется тариф. Можно использовать ММ.ГГГГ "
             "(например 08.2025 — это 01.08.2025) или точную дату ДД.ММ.ГГГГ "
-            "(например 10.08.2025). Тариф действует до дня перед следующим "
-            "изменением. Если тариф не менялся, новую строку добавлять не нужно."
+            "(например 10.08.2025). Окончание можно указать вручную без добавления "
+            "нового тарифа. Если оно не указано, период определяется следующим изменением. "
+            "Новый тариф всегда ограничивает предыдущий днём накануне своего начала."
         )
         explanation.setWordWrap(True)
         explanation.setObjectName("Muted")
@@ -285,6 +298,7 @@ class HouseTariffDialog(QDialog):
         form = QFormLayout()
         form.addRow("Тариф, руб./м² в месяц *", self.amount_edit)
         form.addRow("Действует с *", self.start_date_edit)
+        form.addRow("Действует до включительно", self.end_date_edit)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -304,12 +318,19 @@ class HouseTariffDialog(QDialog):
 
     def values(self) -> dict[str, object]:
         parsed = parse_period_date(self.start_date_edit.text(), boundary="start")
+        end = (parse_period_date(self.end_date_edit.text(), boundary="end").value
+               if self.end_date_edit.text().strip() else date.max)
+        if end < parsed.value:
+            raise ValueError("Окончание периода не может быть раньше начала.")
         return {
             "amount": self.amount_edit.text().strip(),
             "start_year": parsed.value.year,
             "start_month": parsed.value.month,
             "start_day": parsed.value.day,
             "start_precision": parsed.precision,
+            "end_year": end.year,
+            "end_month": end.month,
+            "end_day": end.day,
         }
 
     def _validate_and_accept(self) -> None:
@@ -337,6 +358,13 @@ class HouseTariffDialog(QDialog):
         except ValueError as exc:
             QMessageBox.warning(self, "Проверьте дату", str(exc))
             self.start_date_edit.setFocus()
+            return
+
+        try:
+            self.values()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Проверьте дату", str(exc))
+            self.end_date_edit.setFocus()
             return
 
         super().accept()

@@ -419,6 +419,7 @@ class Repository:
             "TEXT NOT NULL DEFAULT 'month'",
         )
         self._ensure_column("house_tariffs", "end_day", "INTEGER NOT NULL DEFAULT 31")
+        self._ensure_column("house_tariffs", "manual_end_date", "TEXT")
         self._ensure_column("work_templates", "source_file_path", "TEXT")
         self._ensure_column("work_template_items", "unit_name", "TEXT")
         self._ensure_column("work_template_items", "allocation_percent", "TEXT")
@@ -786,9 +787,9 @@ class Repository:
         end_month: int | None = None,
         end_day: int | None = None,
     ) -> HouseTariff:
-        del end_year, end_month, end_day
         _validate_date_point(start_year, start_month, start_day)
         precision = _validate_date_precision(start_precision)
+        manual_end = _tariff_end_date(start_year, start_month, start_day, end_year, end_month, end_day)
         self._assert_unique_tariff_start(
             house_id,
             start_year=start_year,
@@ -804,8 +805,8 @@ class Repository:
                 id, house_id, amount,
                 start_year, start_month, start_day, start_precision,
                 end_year, end_month, end_day,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, manual_end_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tariff_id,
@@ -820,6 +821,7 @@ class Repository:
                 31,
                 timestamp,
                 timestamp,
+                manual_end,
             ),
         )
         self.connection.commit()
@@ -841,13 +843,16 @@ class Repository:
         end_month: int | None = None,
         end_day: int | None = None,
     ) -> None:
-        del end_year, end_month, end_day
         _validate_date_point(start_year, start_month, start_day)
         precision = _validate_date_precision(start_precision)
 
         existing = self.get_house_tariff(tariff_id)
         if existing is None:
             raise ValueError("Тариф не найден.")
+        manual_end = (existing.manual_end_date if end_year is None and end_month is None and end_day is None
+                      else _tariff_end_date(start_year, start_month, start_day, end_year, end_month, end_day))
+        if manual_end and date.fromisoformat(manual_end) < date(start_year, start_month, start_day):
+            raise ValueError("Окончание периода не может быть раньше начала.")
 
         self._assert_unique_tariff_start(
             existing.house_id,
@@ -865,6 +870,7 @@ class Repository:
                 start_month = ?,
                 start_day = ?,
                 start_precision = ?,
+                manual_end_date = ?,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -874,6 +880,7 @@ class Repository:
                 int(start_month),
                 int(start_day),
                 precision,
+                manual_end,
                 _now(),
                 tariff_id,
             ),
@@ -1037,7 +1044,7 @@ class Repository:
     def _recalculate_house_tariff_periods(self, house_id: str) -> None:
         rows = self.connection.execute(
             """
-            SELECT id, start_year, start_month, start_day
+            SELECT id, start_year, start_month, start_day, manual_end_date
             FROM house_tariffs
             WHERE house_id = ?
             ORDER BY start_year, start_month, start_day, created_at
@@ -1062,6 +1069,10 @@ class Repository:
                     end_day = previous_day.day
                 else:
                     end_year, end_month, end_day = 9999, 12, 31
+
+                if row["manual_end_date"]:
+                    finish = min(date(end_year, end_month, end_day), date.fromisoformat(row["manual_end_date"]))
+                    end_year, end_month, end_day = finish.year, finish.month, finish.day
 
                 self.connection.execute(
                     """
@@ -3479,6 +3490,22 @@ def _validate_date_precision(value: str) -> str:
     if precision not in {"month", "day"}:
         raise ValueError("Точность даты должна быть month или day.")
     return precision
+
+
+def _tariff_end_date(start_year, start_month, start_day, end_year, end_month, end_day):
+    if end_year == 9999 and end_month == 12 and end_day == 31:
+        return None
+    if end_year is None and end_month is None and end_day is None:
+        return None
+    if end_year is None or end_month is None:
+        raise ValueError("Укажите год и месяц окончания тарифа.")
+    _validate_month_point(end_year, end_month)
+    day = end_day if end_day is not None else _last_day_of_month(end_year, end_month)
+    _validate_date_point(end_year, end_month, day)
+    finish = date(int(end_year), int(end_month), int(day))
+    if finish < date(int(start_year), int(start_month), int(start_day)):
+        raise ValueError("Окончание периода не может быть раньше начала.")
+    return finish.isoformat()
 
 
 def _last_day_of_month(year: int, month: int) -> int:
