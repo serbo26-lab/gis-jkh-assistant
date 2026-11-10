@@ -31,6 +31,13 @@ class HouseImportPreview(QDialog):
         for house, row, previous in tariffs:
             self._row(house.address, "Тариф с " + row.start.input_label,
                       previous.amount if previous else None, row.amount)
+            if row.end is not None:
+                self._row(house.address, "Окончание с " + row.start.input_label,
+                          previous.manual_end_date if previous else None, row.end.input_label)
+            if row.auto_renew is not None:
+                self._row(house.address, "Пролонгация с " + row.start.input_label,
+                          ("Да" if previous.auto_renew else "Нет") if previous else None,
+                          "Да" if row.auto_renew else "Нет")
         for owner, field, before, after in other_changes:
             self._row(owner, field, before, after)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)

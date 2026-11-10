@@ -59,8 +59,9 @@ def test_local_history_has_priority_over_full_or_partial_overlap_without_any_upd
     assert [tuple(row) for row in repo.connection.execute("SELECT * FROM house_tariffs")] == before
     assert intervals(repo, house_id) == [
         (date(2024, 7, 10), date(2024, 12, 31), "15.12", True),
-        (date(2025, 1, 1), date(2026, 6, 30), "21.00", False),
-        (date(2026, 7, 1), None, "23.00", False),
+        (date(2025, 1, 1), date(2025, 12, 31), "21.00", False),
+        (date(2026, 1, 1), date(2026, 6, 30), "21.00", False),
+        (date(2026, 7, 1), date(2027, 6, 30), "23.00", False),
     ]
     for target in (date(2025, 3, 1), date(2026, 9, 1), date(2028, 1, 1)):
         assert repo.find_house_tariff_at_date(house_id, target).gis_fee_guid is None

@@ -72,7 +72,7 @@ def test_selected_published_records_are_amended_in_place_without_changing_tariff
     preview = prepare_amendments(repo, fee_store, house.organization_id, house.id, ids, fees.PROTOCOL, choices)
     assert not any(c.blocked for c in preview)
     assert [(c.document["start"], c.document["end"], c.document["amount"]) for c in preview] == [
-        ("2026-01-01", "2026-06-30", "20.00"), ("2026-07-01", "2026-12-31", "22.00")]
+        ("2026-01-01", "2026-06-30", "20.00"), ("2026-07-01", "2027-06-30", "22.00")]
     assert apply_amendments(repo, fee_store, house.organization_id, house.id, preview, fees.PROTOCOL) == ids
     assert len(fee_store.list(house.id)) == 2
     for record_id, original in zip(ids, originals):

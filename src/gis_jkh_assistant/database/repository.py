@@ -420,6 +420,8 @@ class Repository:
         )
         self._ensure_column("house_tariffs", "end_day", "INTEGER NOT NULL DEFAULT 31")
         self._ensure_column("house_tariffs", "manual_end_date", "TEXT")
+        from .tariff_renewal import initialize_periods
+        initialize_periods(self)
         self._ensure_column("work_templates", "source_file_path", "TEXT")
         self._ensure_column("work_template_items", "unit_name", "TEXT")
         self._ensure_column("work_template_items", "allocation_percent", "TEXT")
@@ -750,7 +752,9 @@ class Repository:
 
     @staticmethod
     def _house_tariff_from_row(row: sqlite3.Row) -> HouseTariff:
-        return HouseTariff(**dict(row))
+        values = dict(row)
+        values["auto_renew"] = bool(values["auto_renew"])
+        return HouseTariff(**values)
 
     def list_house_tariffs(self, house_id: str) -> list[HouseTariff]:
         rows = self.connection.execute(
@@ -770,9 +774,15 @@ class Repository:
         ).fetchone()
         return self._house_tariff_from_row(row) if row else None
 
-    def list_effective_house_tariffs(self, house_id: str) -> list[HouseTariff]:
+    def list_effective_house_tariffs(self, house_id: str, *, through: date | None = None) -> list[HouseTariff]:
         from .house_fee_tariffs import visible_tariffs
-        return visible_tariffs(self, house_id, self.list_house_tariffs(house_id))
+        from .tariff_renewal import projected_tariffs
+        local = projected_tariffs(self, house_id, through or date.today())
+        return visible_tariffs(self, house_id, local)
+
+    def ensure_house_tariff_periods(self, house_id: str, through: date) -> None:
+        from .tariff_renewal import ensure_periods
+        ensure_periods(self, house_id, through)
 
     def create_house_tariff(
         self,
@@ -786,49 +796,56 @@ class Repository:
         end_year: int | None = None,
         end_month: int | None = None,
         end_day: int | None = None,
+        auto_renew: bool | None = None,
     ) -> HouseTariff:
-        _validate_date_point(start_year, start_month, start_day)
-        precision = _validate_date_precision(start_precision)
-        manual_end = _tariff_end_date(start_year, start_month, start_day, end_year, end_month, end_day)
-        self._assert_unique_tariff_start(
-            house_id,
-            start_year=start_year,
-            start_month=start_month,
-            start_day=start_day,
-        )
-
-        tariff_id = str(uuid.uuid4())
-        timestamp = _now()
-        self.connection.execute(
-            """
-            INSERT INTO house_tariffs (
-                id, house_id, amount,
-                start_year, start_month, start_day, start_precision,
-                end_year, end_month, end_day,
-                created_at, updated_at, manual_end_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                tariff_id,
+        with self.connection.atomic():
+            _validate_date_point(start_year, start_month, start_day)
+            precision = _validate_date_precision(start_precision)
+            manual_end = _tariff_end_date(start_year, start_month, start_day, end_year, end_month, end_day)
+            from .tariff_renewal import discard_future_renewals, year_end
+            renew = manual_end is None if auto_renew is None else bool(auto_renew)
+            manual_end = manual_end or year_end(date(start_year, start_month, start_day)).isoformat()
+            discard_future_renewals(self, house_id, date(start_year, start_month, start_day))
+            self._assert_unique_tariff_start(
                 house_id,
-                _required_text(amount, "Тариф"),
-                int(start_year),
-                int(start_month),
-                int(start_day),
-                precision,
-                9999,
-                12,
-                31,
-                timestamp,
-                timestamp,
-                manual_end,
-            ),
-        )
-        self.connection.commit()
-        self._recalculate_house_tariff_periods(house_id)
-        result = self.get_house_tariff(tariff_id)
-        assert result is not None
-        return result
+                start_year=start_year,
+                start_month=start_month,
+                start_day=start_day,
+            )
+
+            tariff_id = str(uuid.uuid4())
+            timestamp = _now()
+            self.connection.execute(
+                """
+                INSERT INTO house_tariffs (
+                    id, house_id, amount,
+                    start_year, start_month, start_day, start_precision,
+                    end_year, end_month, end_day,
+                    created_at, updated_at, manual_end_date, auto_renew
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tariff_id,
+                    house_id,
+                    _required_text(amount, "Тариф"),
+                    int(start_year),
+                    int(start_month),
+                    int(start_day),
+                    precision,
+                    9999,
+                    12,
+                    31,
+                    timestamp,
+                    timestamp,
+                    manual_end,
+                    int(renew),
+                ),
+            )
+            self.connection.commit()
+            self._recalculate_house_tariff_periods(house_id)
+            result = self.get_house_tariff(tariff_id)
+            assert result is not None
+            return result
 
     def update_house_tariff(
         self,
@@ -842,51 +859,61 @@ class Repository:
         end_year: int | None = None,
         end_month: int | None = None,
         end_day: int | None = None,
+        auto_renew: bool | None = None,
     ) -> None:
-        _validate_date_point(start_year, start_month, start_day)
-        precision = _validate_date_precision(start_precision)
+        with self.connection.atomic():
+            _validate_date_point(start_year, start_month, start_day)
+            precision = _validate_date_precision(start_precision)
 
-        existing = self.get_house_tariff(tariff_id)
-        if existing is None:
-            raise ValueError("Тариф не найден.")
-        manual_end = (existing.manual_end_date if end_year is None and end_month is None and end_day is None
-                      else _tariff_end_date(start_year, start_month, start_day, end_year, end_month, end_day))
-        if manual_end and date.fromisoformat(manual_end) < date(start_year, start_month, start_day):
-            raise ValueError("Окончание периода не может быть раньше начала.")
+            existing = self.get_house_tariff(tariff_id)
+            if existing is None:
+                raise ValueError("Тариф не найден.")
+            manual_end = (existing.manual_end_date if end_year is None and end_month is None and end_day is None
+                          else _tariff_end_date(start_year, start_month, start_day, end_year, end_month, end_day))
+            if manual_end and date.fromisoformat(manual_end) < date(start_year, start_month, start_day):
+                raise ValueError("Окончание периода не может быть раньше начала.")
+            from .tariff_renewal import discard_future_renewals, year_end
+            manual_end = manual_end or year_end(date(start_year, start_month, start_day)).isoformat()
+            renew = existing.auto_renew if auto_renew is None else bool(auto_renew)
 
-        self._assert_unique_tariff_start(
-            existing.house_id,
-            start_year=start_year,
-            start_month=start_month,
-            start_day=start_day,
-            exclude_id=tariff_id,
-        )
+            self._assert_unique_tariff_start(
+                existing.house_id,
+                start_year=start_year,
+                start_month=start_month,
+                start_day=start_day,
+                exclude_id=tariff_id,
+            )
 
-        self.connection.execute(
-            """
-            UPDATE house_tariffs
-            SET amount = ?,
-                start_year = ?,
-                start_month = ?,
-                start_day = ?,
-                start_precision = ?,
-                manual_end_date = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                _required_text(amount, "Тариф"),
-                int(start_year),
-                int(start_month),
-                int(start_day),
-                precision,
-                manual_end,
-                _now(),
-                tariff_id,
-            ),
-        )
-        self.connection.commit()
-        self._recalculate_house_tariff_periods(existing.house_id)
+            discard_future_renewals(self, existing.house_id, date(start_year, start_month, start_day), exclude_id=tariff_id)
+            self.connection.execute("DELETE FROM house_tariffs WHERE renewal_source_id=?", (tariff_id,))
+
+            self.connection.execute(
+                """
+                UPDATE house_tariffs
+                SET amount = ?,
+                    start_year = ?,
+                    start_month = ?,
+                    start_day = ?,
+                    start_precision = ?,
+                    manual_end_date = ?,
+                    auto_renew = ?, renewal_source_id = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    _required_text(amount, "Тариф"),
+                    int(start_year),
+                    int(start_month),
+                    int(start_day),
+                    precision,
+                    manual_end,
+                    int(renew),
+                    _now(),
+                    tariff_id,
+                ),
+            )
+            self.connection.commit()
+            self._recalculate_house_tariff_periods(existing.house_id)
 
     def upsert_house_tariff_change(
         self,
@@ -897,6 +924,8 @@ class Repository:
         start_month: int,
         start_day: int = 1,
         start_precision: str = "month",
+        end_date: date | None = None,
+        auto_renew: bool | None = None,
     ) -> tuple[HouseTariff, bool, bool]:
         """Create or update one tariff change point.
 
@@ -919,6 +948,10 @@ class Repository:
             None,
         )
         cleaned_amount = _required_text(amount, "Тариф")
+        period = ({"end_year": end_date.year, "end_month": end_date.month, "end_day": end_date.day}
+                  if end_date else {})
+        if auto_renew is not None:
+            period["auto_renew"] = auto_renew
         if existing is None:
             created = self.create_house_tariff(
                 house_id=house_id,
@@ -927,12 +960,15 @@ class Repository:
                 start_month=start_month,
                 start_day=start_day,
                 start_precision=precision,
+                **period,
             )
             return created, True, True
 
         changed = (
             existing.amount != cleaned_amount
             or existing.start_precision != precision
+            or (end_date is not None and existing.manual_end_date != end_date.isoformat())
+            or (auto_renew is not None and bool(existing.auto_renew) != auto_renew)
         )
         if changed:
             self.update_house_tariff(
@@ -942,6 +978,7 @@ class Repository:
                 start_month=start_month,
                 start_day=start_day,
                 start_precision=precision,
+                **period,
             )
             refreshed = self.get_house_tariff(existing.id)
             assert refreshed is not None
@@ -949,14 +986,20 @@ class Repository:
         return existing, False, False
 
     def delete_house_tariff(self, tariff_id: str) -> None:
-        existing = self.get_house_tariff(tariff_id)
-        self.connection.execute(
-            "DELETE FROM house_tariffs WHERE id = ?",
-            (tariff_id,),
-        )
-        self.connection.commit()
-        if existing is not None:
-            self._recalculate_house_tariff_periods(existing.house_id)
+        with self.connection.atomic():
+            existing = self.get_house_tariff(tariff_id)
+            if existing:
+                root_id = existing.renewal_source_id or existing.id
+                self.connection.execute("UPDATE house_tariffs SET auto_renew=0 WHERE id=? OR renewal_source_id=?", (root_id, root_id))
+                if not existing.renewal_source_id:
+                    self.connection.execute("DELETE FROM house_tariffs WHERE renewal_source_id=?", (root_id,))
+            self.connection.execute(
+                "DELETE FROM house_tariffs WHERE id = ?",
+                (tariff_id,),
+            )
+            self.connection.commit()
+            if existing is not None:
+                self._recalculate_house_tariff_periods(existing.house_id)
 
     def find_house_tariff_at_date(
         self,
@@ -965,6 +1008,7 @@ class Repository:
     ) -> HouseTariff | None:
         """Return the tariff effective on one exact calendar date."""
 
+        self.ensure_house_tariff_periods(house_id, target_date)
         candidates = self.list_effective_house_tariffs(house_id)
         active = [
             item
@@ -995,6 +1039,7 @@ class Repository:
         )
 
         current = None
+        self.ensure_house_tariff_periods(house_id, period_end)
         cursor = period_start
         for item in self.list_effective_house_tariffs(house_id):
             finish = item.effective_to_date or date.max
@@ -1023,6 +1068,8 @@ class Repository:
         rows = self.list_house_tariffs(house_id)
         for item in rows:
             if exclude_id and item.id == exclude_id:
+                continue
+            if item.renewal_source_id:
                 continue
             if (
                 item.start_year,

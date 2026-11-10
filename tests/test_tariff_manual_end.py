@@ -64,7 +64,7 @@ def test_update_can_set_and_clear_end_without_another_tariff(tariff_repo):
         repo.update_house_tariff(tariff.id, **values, end_year=2023, end_month=7)
     assert repo.get_house_tariff(tariff.id).effective_to_date == date(2025, 7, 30)
     repo.update_house_tariff(tariff.id, **values, end_year=9999, end_month=12, end_day=31)
-    assert repo.get_house_tariff(tariff.id).effective_to_date is None
+    assert repo.get_house_tariff(tariff.id).effective_to_date == date(2025, 7, 31)
 
 
 def test_dialog_saves_end_inclusively_without_new_tariff(qt_app, tariff_repo):

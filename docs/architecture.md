@@ -20,7 +20,7 @@ flowchart LR
 | --- | --- |
 | Запуск и координация интерфейса | `__main__.py`, `app/main_window.py`: создание страниц, рабочий контекст, тема, завершение фоновых операций |
 | Страницы и общие элементы | `app/*_page.py`, `app/page_layouts.py`, `app/workflow_widgets.py`, `app/sidebar_navigation.py`: формы, таблицы, команды и боковая навигация |
-| УО, дома и тарифы | `database/models.py`, `database/repository.py`, `database/house_fee_tariffs.py`: организации, дома, параметры управления, локальные точки изменения и отдельные точные периоды платы из ГИС |
+| УО, дома и тарифы | `database/models.py`, `database/repository.py`, `database/tariff_renewal.py`, `database/house_fee_tariffs.py`: организации, дома, параметры управления, локальные точки изменения и отдельные точные периоды платы из ГИС |
 | Перечни, планирование и фиксация | `work_lists/`, `work_planning.py`, `work_fixation.py`, методы `Repository`: сопоставление работ, годовые и месячные показатели, внеплановые работы и фотографии |
 | Оценка качества и акты | `quality_assessment.py`, `quality_automation.py`, `database/quality_assessment_store.py`, `database/act_requisites_store.py`, `acceptance_act_details.py`, `acceptance_act_pdf.py`: оценка, связи документов с работами, реквизиты и PDF |
 | Информация о размере платы | `management_fees.py`, `fee_bulk.py`, `app/management_fees_page.py`: локальные проекты, снимки сведений по договорам, подготовка периодов по тарифам и проверка массовых операций; история тарифов хранится отдельно |

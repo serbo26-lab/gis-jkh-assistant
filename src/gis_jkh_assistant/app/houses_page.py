@@ -5,7 +5,7 @@ from __future__ import annotations
 from .error_messages import context_text, error_text, gis_error_text
 
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from collections import defaultdict
 from pathlib import Path
 
@@ -412,19 +412,19 @@ class HousesPage(QWidget):
         self.card_layout.addLayout(tariff_header)
 
         tariff_hint = QLabel(
-            "Добавляйте новую строку только когда тариф меняется. "
+            "Укажите срок тарифа и включите пролонгацию, если цена должна продолжаться в следующем году. "
             "Можно указать месяц (08.2025 = с 01.08.2025) или точную дату "
             "(10.08.2025). В окне изменения можно задать окончание вручную. "
-            "Без него последнее локальное значение действует до следующего изменения. "
+            "Продлённые периоды сохраняются с конкретными датами. "
             "Размещённые тарифы ГИС видны только на незаполненных участках и сохраняют точные даты."
         )
         tariff_hint.setWordWrap(True)
         tariff_hint.setObjectName("Muted")
         self.card_layout.addWidget(tariff_hint)
 
-        self.tariffs_table = QTableWidget(0, 4)
+        self.tariffs_table = QTableWidget(0, 5)
         self.tariffs_table.setHorizontalHeaderLabels(
-            ["Действует с", "Действует до", "Тариф, руб./м² в месяц", "Источник"]
+            ["Действует с", "Действует до", "Тариф, руб./м² в месяц", "Источник", "Продление"]
         )
         self.tariffs_table.verticalHeader().setVisible(False)
         self.tariffs_table.setSelectionBehavior(
@@ -443,6 +443,7 @@ class HousesPage(QWidget):
         tariff_header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         tariff_header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         tariff_header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        tariff_header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.card_layout.addWidget(self.tariffs_table)
 
         self.add_tariff_button.clicked.connect(self._add_tariff)
@@ -713,6 +714,7 @@ class HousesPage(QWidget):
         if not self._current_house_id:
             return
 
+        self.repository.ensure_house_tariff_periods(self._current_house_id, date.today())
         tariffs = self.repository.list_effective_house_tariffs(self._current_house_id)
         for tariff in tariffs:
             row = self.tariffs_table.rowCount()
@@ -732,6 +734,8 @@ class HousesPage(QWidget):
                                "Для изменения создайте локальный тариф; он получит приоритет.")
                               if tariff.gis_fee_guid else "Введён вручную или импортирован из Excel. Имеет приоритет перед ГИС.")
             self.tariffs_table.setItem(row, 3, source)
+            self.tariffs_table.setItem(row, 4, QTableWidgetItem(
+                "—" if tariff.gis_fee_guid else "Ежегодно" if tariff.auto_renew else "Нет"))
 
             if select_id == tariff.id:
                 self.tariffs_table.selectRow(row)
@@ -817,7 +821,10 @@ class HousesPage(QWidget):
             self,
             "Удалить тариф?",
             f"Удалить тариф {tariff.amount} руб./м² в месяц "
-            f"за период {tariff.period_label}?",
+            f"за период {tariff.period_label}?\n\n"
+            + ("Пролонгация этой цепочки будет выключена. "
+               "При удалении исходного тарифа удаляются и его автоматически созданные периоды."
+               if tariff.auto_renew or tariff.renewal_source_id else ""),
         )
         if answer != QMessageBox.Yes:
             return
@@ -2104,6 +2111,8 @@ class HousesPage(QWidget):
                 same = (
                     same_amount
                     and existing.start_precision == row.start.precision
+                    and (row.end is None or existing.manual_end_date == row.end.value.isoformat())
+                    and (row.auto_renew is None or bool(existing.auto_renew) == row.auto_renew)
                 )
             if not same:
                 tariff_changes.append((house, row, existing))
@@ -2184,6 +2193,7 @@ class HousesPage(QWidget):
                         house_id=house.id, amount=row.amount,
                         start_year=row.start.value.year, start_month=row.start.value.month,
                         start_day=row.start.value.day, start_precision=row.start.precision,
+                        end_date=row.end.value if row.end else None, auto_renew=row.auto_renew,
                     )
                 for owner, person_id, values in person_changes:
                     requisites.save_person(values, person_id=person_id, **owner)
