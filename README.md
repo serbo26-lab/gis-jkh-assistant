@@ -1,7 +1,5 @@
 # ГИС ЖКХ Ассистент
 
-[![Поддержать проект через CloudTips](docs/assets/cloudtips-support.svg)](https://pay.cloudtips.ru/p/6b9c3555)
-
 ![Badge](https://hitscounter.dev/api/hit?url=https%3A%2F%2Fgithub.com%2Fserbo26-lab%2Fgis-jkh-assistant&label=&icon=geo&color=%23212529&message=&style=social&tz=Europe%2FMoscow)
 
 [![Telegram](https://img.shields.io/badge/Telegram-Ассистенты%20УО-229ED9?style=flat-square&logo=telegram&logoColor=white)](https://t.me/assistant_yo)
