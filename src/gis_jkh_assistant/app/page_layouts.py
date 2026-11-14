@@ -531,11 +531,6 @@ def build_monthly(page, kind: str):
     page.scope_row.hide()
     page.workflow.title.show()
     page.workflow.help_button.toggled.disconnect(page.workflow.title.setVisible)
-    page.workflow.help_button.toggled.connect(
-        lambda expanded: page.workflow.set_recommendation_visible(
-            expanded or not getattr(page, "_dense_monthly", False)
-        )
-    )
     page.workflow.direct_keys = {"fill", "form", "acts", "review_acts", "save", "publish", "load"}
     page.workflow.register("load", page.load_gis_button if quality else page.load_month_button)
     if quality:
@@ -771,21 +766,13 @@ def compact_monthly(page, compact):
     page.workflow.set_compact(True)
     page.scope_row.hide()
     page.months_card.show()
-    if compact != getattr(page, "_dense_monthly", False):
-        if compact:
-            page.workflow.action_row.removeWidget(page.workflow.help_button)
-            page.data_card.actions.addWidget(page.workflow.help_button)
-        else:
-            page.data_card.actions.removeWidget(page.workflow.help_button)
-            page.workflow.action_row.addWidget(page.workflow.help_button)
-        page.workflow.help_button.setVisible(page.workflow.guidance_enabled)
     page._dense_monthly = compact
     for month, button in page.month_buttons.items():
         state = button.property("monthState")
         if state:
             button.setText(month_button_text(month, state, compact))
     page.months_card._queue_fit()
-    page.workflow.set_recommendation_visible(not compact or page.workflow.help_button.isChecked())
+    page.workflow.set_recommendation_visible(True)
     if hasattr(page, "manual_documents_caption"):
         for widget in (page.manual_documents_caption, page.create_act_button, page.upload_acts_button):
             widget.setVisible(not compact)

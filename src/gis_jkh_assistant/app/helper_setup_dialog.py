@@ -37,30 +37,55 @@ REQUIRED_VERSION = ".".join(map(str, max(
 )))
 
 
-def connection_message(status, bundle_version: str, *, waited: bool = False) -> str:
-    """Only report what the local heartbeat actually proves."""
+def connection_checks(status, bundle_version: str, *, waited: bool = False):
+    """Present independent local observations without treating unknowns as failures."""
+    version_unknown = (
+        f"Версия помощника: не проверена без подключения. Ожидается {bundle_version}.",
+        "neutral",
+    )
+    tab_unknown = ("Вкладка ГИС: не проверена без подключения.", "neutral")
     if not status.running:
-        return "Служба связи с браузером не запущена. " + (
+        connection = "Связь с программой: служба связи с браузером не запущена. " + (
             status.error or "Закройте мастер и перезапустите программу."
         )
+        return (connection, "danger"), version_unknown, tab_unknown
     if not status.helper_connected:
-        return (
-            "Подключение пока не обнаружено. " if waited else "Связь с программой: ожидается помощник. "
+        connection = "Связь с программой: " + (
+            "подключение пока не обнаружено. " if waited else "ожидается помощник. "
         ) + "Проверьте, что браузер открыт и расширение включено."
-    version = status.helper_version or "не определена"
-    text = f"Связь с программой: подключён помощник, версия {version}."
-    if not (
+        return (connection, "danger" if waited else "neutral"), version_unknown, tab_unknown
+    connection = ("Связь с программой: помощник подключён.", "success")
+    version = status.helper_version
+    if not version:
+        version_check = (
+            f"Версия помощника: не определена. Ожидается {bundle_version}. "
+            "Обновите расширение из подготовленной папки.",
+            "neutral",
+        )
+    elif not (
         helper_supports_organization_routing(status.helper_version)
         and helper_supports_quality_assessment(status.helper_version)
     ):
-        text += f" Нужна версия {REQUIRED_VERSION} или новее. Загрузите подготовленную папку."
-    elif status.helper_version != bundle_version:
-        text += f" Версия подготовленных файлов: {bundle_version}."
-    text += (
-        " Вкладка ГИС найдена; вход и нужную УО проверьте в браузере."
-        if status.gis_page_ready else " Вкладка ГИС не найдена. Откройте свой кабинет для дальнейшей работы."
+        version_check = (
+            f"Версия помощника: {version}. Нужна версия {REQUIRED_VERSION} или новее; "
+            f"ожидается {bundle_version}. Загрузите подготовленную папку.",
+            "danger",
+        )
+    elif version != bundle_version:
+        version_check = (
+            f"Версия помощника: {version} — не совпадает с ожидаемой {bundle_version}. "
+            "Загрузите подготовленную папку.",
+            "danger",
+        )
+    else:
+        version_check = (
+            f"Версия помощника: {version} — соответствует ожидаемой.", "success",
+        )
+    tab = (
+        ("Вкладка ГИС найдена.", "success") if status.gis_page_ready else
+        ("Вкладка ГИС не найдена. Откройте свой кабинет для дальнейшей работы.", "danger")
     )
-    return text
+    return connection, version_check, tab
 
 
 class HelperSetupDialog(QDialog):
@@ -278,11 +303,17 @@ class HelperSetupDialog(QDialog):
         self.files_status = self._label("")
         body.addWidget(self.files_status)
         self.connection_status = self._label("")
-        body.addWidget(self.connection_status)
-        body.addWidget(self._label(
-            "Подключение подтверждает связь с программой. Оно не определяет, в каком браузере "
-            "и профиле установлен помощник, и не подтверждает вход в ГИС ЖКХ.", muted=True,
-        ))
+        self.version_status = self._label("")
+        self.gis_status = self._label("")
+        for label in (self.connection_status, self.version_status, self.gis_status):
+            label.setObjectName("HelperStatus")
+            body.addWidget(label)
+        self.connection_notice = self._label(
+            "Подключение и найденная вкладка не подтверждают вход в ГИС ЖКХ и выбор нужной УО. "
+            "Вход и нужную УО проверьте в браузере. Проверка не определяет, "
+            "в каком браузере и профиле установлен помощник.", muted=True,
+        )
+        body.addWidget(self.connection_notice)
         body.addWidget(self._label(
             "Если связи нет: проверьте, что расширение включено, браузер открыт, "
             "а программа запущена. После добавления помощника обновите вкладку ГИС."
@@ -593,10 +624,23 @@ class HelperSetupDialog(QDialog):
         if self._step != 2 or self.bundle is None:
             return
         try:
-            text = connection_message(
+            checks = connection_checks(
                 self.gateway.status(), self.bundle.version,
                 waited=time.monotonic() - self._waiting_since >= 30,
             )
         except Exception as exc:
-            text = error_text(exc, effect="Проверка связи не завершена.", recovery="Повторите проверку; файлы помощника сохранены.")
-        self.connection_status.setText(text)
+            checks = (
+                (error_text(exc, effect="Проверка связи не завершена.",
+                            recovery="Повторите проверку; файлы помощника сохранены."), "danger"),
+                (f"Версия помощника: не проверена. Ожидается {self.bundle.version}.", "neutral"),
+                ("Вкладка ГИС: не проверена.", "neutral"),
+            )
+        for label, (text, tone) in zip(
+            (self.connection_status, self.version_status, self.gis_status), checks, strict=True,
+        ):
+            label.setText(text)
+            if label.property("tone") != tone:
+                label.setProperty("tone", tone)
+                label.style().unpolish(label)
+                label.style().polish(label)
+                label.update()

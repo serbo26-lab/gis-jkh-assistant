@@ -81,6 +81,9 @@ QLabel#SectionTitle { font-size: 10pt; font-weight: 600; }
 QLabel#Muted, QLabel#SaveStatus, QLabel#ContextCaption, QLabel#ToolbarGroupLabel { color: @muted_text; font-size: 9pt; }
 QLabel#ContextCaption, QLabel#SaveStatus { font-size: 9pt; }
 QLabel#SaveStatus[saveError="true"] { color: @danger; }
+QLabel#HelperStatus[tone="success"] { color: @success; }
+QLabel#HelperStatus[tone="danger"] { color: @danger; }
+QLabel#HelperStatus[tone="neutral"] { color: @muted_text; }
 QLabel#BlockingReason { color: @warning; font-size: 9pt; }
 QLabel#WorkflowStep { color: @muted_text; padding: 5px 7px; border-radius: 5px; font-size: 9pt; }
 QLabel#WorkflowStep[stage="current"] { background: @selection; color: @selection_text; font-weight: 600; }

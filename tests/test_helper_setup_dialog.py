@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QTest
 
 from gis_jkh_assistant.app import helper_setup_dialog as setup
@@ -70,7 +71,7 @@ def test_three_steps_prepare_copy_and_check_without_launching_or_gis(wizard, mon
     wizard.state.status = IntegrationStatus(True, True, True, helper_version="0.1.30")
     QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
     assert "подключён" in dialog.connection_status.text()
-    assert "УО проверьте" in dialog.connection_status.text()
+    assert "УО проверьте" in dialog.connection_notice.text()
     assert dialog._step == 2, "A connected helper does not prove installation in the selected browser"
     QTest.mouseClick(dialog.back, Qt.MouseButton.LeftButton)
     assert dialog._step == 1
@@ -90,6 +91,10 @@ def test_connection_waiting_timeout_and_gateway_exception_are_recoverable(wizard
     dialog.gateway.status = lambda: (_ for _ in ()).throw(OSError("isolated status failure"))
     dialog._refresh_connection()
     assert "не завершена" in dialog.connection_status.text()
+    assert "не проверена" in dialog.version_status.text()
+    assert "не проверена" in dialog.gis_status.text()
+    assert dialog.version_status.property("tone") == "neutral"
+    assert dialog.gis_status.property("tone") == "neutral"
     assert dialog.close_button.isEnabled()
 
 
@@ -165,19 +170,109 @@ def test_browser_and_folder_launch_errors_preserve_prepared_files(wizard, tmp_pa
     assert dialog._step == 1
 
 
-@pytest.mark.parametrize("status, fragments", [
-    (IntegrationStatus(False, False, False, error="port busy"), ("не запущен", "port busy")),
-    (IntegrationStatus(True, False, False), ("ожидается", "расширение включено")),
-    (IntegrationStatus(True, True, False), ("не определена", "Нужна версия")),
-    (IntegrationStatus(True, True, True, helper_version="0.1.27"), ("Нужна версия 0.1.30", "УО проверьте")),
-    (IntegrationStatus(True, True, False, helper_version="0.1.30"), ("подключён", "Вкладка ГИС не найдена")),
-    (IntegrationStatus(True, True, True, helper_version="0.1.31"), ("подключён", "Версия подготовленных файлов")),
+@pytest.mark.parametrize("status, fragments, tones", [
+    (IntegrationStatus(False, False, False, error="port busy"),
+     ("не запущена", "port busy", "не проверена"), ("danger", "neutral", "neutral")),
+    (IntegrationStatus(True, False, False),
+     ("ожидается", "расширение включено"), ("neutral", "neutral", "neutral")),
+    (IntegrationStatus(True, True, False),
+     ("не определена", "Ожидается 0.1.30"), ("success", "neutral", "danger")),
+    (IntegrationStatus(True, True, True, helper_version="0.1.27"),
+     ("Нужна версия 0.1.30", "Вкладка ГИС найдена"), ("success", "danger", "success")),
+    (IntegrationStatus(True, True, False, helper_version="0.1.30"),
+     ("соответствует ожидаемой", "Вкладка ГИС не найдена"), ("success", "success", "danger")),
+    (IntegrationStatus(True, True, True, helper_version="0.1.31"),
+     ("подключён", "не совпадает с ожидаемой 0.1.30"), ("success", "danger", "success")),
 ])
-def test_status_reports_local_observations_not_browser_or_authentication(status, fragments):
-    message = setup.connection_message(status, "0.1.30")
+def test_status_reports_independent_local_observations(status, fragments, tones):
+    checks = setup.connection_checks(status, "0.1.30")
+    message = " ".join(text for text, _tone in checks)
     assert all(fragment in message for fragment in fragments)
+    assert tuple(tone for _text, tone in checks) == tones
     assert "установка завершена" not in message.lower()
     assert "авторизация успешна" not in message.lower()
+
+
+def test_connection_rows_refresh_success_mismatch_missing_tab_and_stale_data(wizard):
+    dialog = select_and_prepare(wizard)
+    QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
+    labels = (dialog.connection_status, dialog.version_status, dialog.gis_status)
+    assert all(label.property("tone") == "neutral" for label in labels)
+    expected = dialog.bundle.version
+    wizard.state.status = IntegrationStatus(True, True, True, helper_version=expected)
+    QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
+    assert all(label.property("tone") == "success" for label in labels)
+    assert expected in dialog.version_status.text()
+    assert "соответствует ожидаемой" in dialog.version_status.text()
+    assert "не подтверждают вход" in dialog.connection_notice.text()
+    assert "нужной УО" in dialog.connection_notice.text()
+
+    parts = expected.split(".")
+    parts[-1] = str(int(parts[-1]) + 1)
+    newer = ".".join(parts)
+    wizard.state.status = IntegrationStatus(True, True, False, helper_version=newer)
+    reads = wizard.state.reads
+    dialog.timer.timeout.emit()
+    assert wizard.state.reads == reads + 1, "One status snapshot feeds all three rows"
+    assert [label.property("tone") for label in labels] == ["success", "danger", "danger"]
+    assert newer in dialog.version_status.text() and expected in dialog.version_status.text()
+    assert "не совпадает" in dialog.version_status.text()
+    assert "Вкладка ГИС не найдена" in dialog.gis_status.text()
+
+    # The gateway retains the last version after heartbeat expiry; it is not current evidence.
+    wizard.state.status = IntegrationStatus(
+        True, False, False, helper_version=expected, last_seen_age=40,
+    )
+    dialog.timer.timeout.emit()
+    assert all(label.property("tone") == "neutral" for label in labels)
+    assert "не проверена" in dialog.version_status.text()
+    assert "не проверена" in dialog.gis_status.text()
+    dialog._waiting_since = time.monotonic() - 31
+    QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
+    assert [label.property("tone") for label in labels] == ["danger", "neutral", "neutral"]
+    assert "пока не обнаружено" in dialog.connection_status.text()
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_connection_status_colours_are_readable_in_both_themes(wizard, theme):
+    from gis_jkh_assistant.app.styles import apply_theme, tokens
+
+    def luminance(value):
+        channels = (value.redF(), value.greenF(), value.blueF())
+        linear = [channel / 12.92 if channel <= 0.04045
+                  else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
+        return sum(channel * weight for channel, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+    dialog = wizard.dialog
+    dialog.timer.stop()
+    try:
+        apply_theme(wizard.app, theme)
+        # Palette inspection does not repeat the installation workflow for each theme.
+        for label, tone, text in zip(
+            (dialog.connection_status, dialog.version_status, dialog.gis_status),
+            ("success", "danger", "neutral"),
+            ("Связь с программой: помощник подключён.",
+             "Версия помощника: 0.1.36 — не совпадает с ожидаемой 0.1.37.",
+             "Вкладка ГИС: не проверена."), strict=True,
+        ):
+            label.setText(text)
+            label.setProperty("tone", tone)
+            label.style().unpolish(label)
+            label.style().polish(label)
+            label.ensurePolished()
+            foreground = label.palette().color(QPalette.ColorRole.WindowText)
+            key = "muted_text" if tone == "neutral" else tone
+            assert foreground == QColor(tokens(theme)[key])
+            levels = sorted((luminance(foreground), luminance(QColor(tokens(theme)["app_background"]))))
+            assert (levels[1] + 0.05) / (levels[0] + 0.05) >= 4.5
+        dialog.stack.setCurrentIndex(2)
+        _settle(wizard.app)
+        assert not dialog.grab().isNull(), "The offscreen dialog renders with theme colours"
+        for label in (dialog.connection_status, dialog.version_status, dialog.gis_status):
+            assert label.isVisible()
+            assert label.height() >= label.heightForWidth(label.width())
+    finally:
+        apply_theme(wizard.app, "light")
 
 
 def test_settings_button_opens_single_dialog_and_reopens_status_timer(desktop, tmp_path, monkeypatch):

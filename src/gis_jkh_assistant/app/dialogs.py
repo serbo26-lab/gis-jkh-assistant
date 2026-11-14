@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 from PySide6.QtWidgets import (
     QDialog,
+    QCheckBox,
     QDialogButtonBox,
     QFormLayout,
     QLabel,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from gis_jkh_assistant.database.models import House, HouseTariff, ManagementOrganization
 from gis_jkh_assistant.period_dates import parse_period_date
+from gis_jkh_assistant.database.tariff_renewal import year_end
 
 from .widgets import SafeSpinBox
 
@@ -270,14 +272,33 @@ class HouseTariffDialog(QDialog):
             "ММ.ГГГГ означает первый день месяца. "
             "ДД.ММ.ГГГГ сохраняет точную дату."
         )
+        end = None
+        if tariff:
+            if tariff.gis_fee_guid:
+                end = tariff.effective_to_date
+            elif tariff.manual_end_date:
+                end = date.fromisoformat(tariff.manual_end_date)
+        if end is None:
+            end = year_end(parse_period_date(start_text).value)
+        self.end_date_edit = QLineEdit(end.strftime("%d.%m.%Y"))
+        self._suggested_end = self.end_date_edit.text()
+        self.start_date_edit.textChanged.connect(self._suggest_end)
+        self.end_date_edit.setPlaceholderText("ММ.ГГГГ или ДД.ММ.ГГГГ")
+        self.end_date_edit.setToolTip(
+            "Дата включительно. ММ.ГГГГ означает последний день месяца."
+        )
+        self.auto_renew_checkbox = QCheckBox("Пролонгировать на следующий год")
+        self.auto_renew_checkbox.setChecked(bool(tariff.auto_renew) if tariff else True)
 
         explanation = QLabel(
             ("Будет создан локальный тариф с приоритетом перед сведениями ГИС. "
              "Размещённые сведения и основание в ГИС не изменятся. " if tariff and tariff.gis_fee_guid else "")
             + "Укажите дату, с которой меняется тариф. Можно использовать ММ.ГГГГ "
             "(например 08.2025 — это 01.08.2025) или точную дату ДД.ММ.ГГГГ "
-            "(например 10.08.2025). Тариф действует до дня перед следующим "
-            "изменением. Если тариф не менялся, новую строку добавлять не нужно."
+            "(например 10.08.2025). Окончание можно указать вручную без добавления "
+            "нового тарифа. При пролонгации для нужного года сохраняется следующий "
+            "годовой период с той же ценой. "
+            "Новый тариф всегда ограничивает предыдущий днём накануне своего начала."
         )
         explanation.setWordWrap(True)
         explanation.setObjectName("Muted")
@@ -285,6 +306,8 @@ class HouseTariffDialog(QDialog):
         form = QFormLayout()
         form.addRow("Тариф, руб./м² в месяц *", self.amount_edit)
         form.addRow("Действует с *", self.start_date_edit)
+        form.addRow("Действует до включительно *", self.end_date_edit)
+        form.addRow(self.auto_renew_checkbox)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -302,14 +325,33 @@ class HouseTariffDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(buttons)
 
+    def _suggest_end(self):
+        if self.end_date_edit.text() != self._suggested_end:
+            return
+        try:
+            end = year_end(parse_period_date(self.start_date_edit.text()).value)
+        except ValueError:
+            return
+        self._suggested_end = end.strftime("%d.%m.%Y")
+        self.end_date_edit.setText(self._suggested_end)
+
     def values(self) -> dict[str, object]:
         parsed = parse_period_date(self.start_date_edit.text(), boundary="start")
+        end = parse_period_date(self.end_date_edit.text(), boundary="end").value
+        if end.year >= 9999:
+            raise ValueError("Укажите конечную дату периода тарифа.")
+        if end < parsed.value:
+            raise ValueError("Окончание периода не может быть раньше начала.")
         return {
             "amount": self.amount_edit.text().strip(),
             "start_year": parsed.value.year,
             "start_month": parsed.value.month,
             "start_day": parsed.value.day,
             "start_precision": parsed.precision,
+            "end_year": end.year,
+            "end_month": end.month,
+            "end_day": end.day,
+            "auto_renew": self.auto_renew_checkbox.isChecked(),
         }
 
     def _validate_and_accept(self) -> None:
@@ -337,6 +379,13 @@ class HouseTariffDialog(QDialog):
         except ValueError as exc:
             QMessageBox.warning(self, "Проверьте дату", str(exc))
             self.start_date_edit.setFocus()
+            return
+
+        try:
+            self.values()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Проверьте дату", str(exc))
+            self.end_date_edit.setFocus()
             return
 
         super().accept()

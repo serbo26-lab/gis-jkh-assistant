@@ -454,7 +454,7 @@ class ManagementFeesPage(QWidget):
     def _new(self):
         if not self._house_id or not self.flush_pending_changes():
             return
-        tariffs = self.repository.list_effective_house_tariffs(self._house_id)
+        tariffs = self.repository.list_effective_house_tariffs(self._house_id, through=date.today())
         if not tariffs:
             QMessageBox.information(self, "Нет тарифа", "Сначала заполните тариф дома в разделе «Дома».")
             return
@@ -464,13 +464,18 @@ class ManagementFeesPage(QWidget):
             return
         tariff = tariffs[labels.index(choice)]
         start = tariff.effective_from_date
-        end = tariff.effective_to_date or date(start.year, 12, 31)
+        end = tariff.effective_to_date
+        if end is None:
+            QMessageBox.warning(self, "Укажите окончание тарифа", "Сначала сохраните срок тарифа в разделе «Дома».")
+            return
         context = self.store.context(self._house_id)
         contract = context["contracts"][0] if len(context["contracts"]) == 1 else None
         document = {"amount": tariff.amount, "start": start.isoformat(), "end": end.isoformat(),
                     "contract": contract, "protocol": None}
         try:
-            record_id = self.store.save_local(self._house_id, document)
+            with self.repository.connection.atomic():
+                self.repository.ensure_house_tariff_periods(self._house_id, end)
+                record_id = self.store.save_local(self._house_id, document)
         except sqlite3.DatabaseError as exc:
             QMessageBox.warning(self, "Проект не создан", str(exc))
             return

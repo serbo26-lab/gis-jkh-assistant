@@ -205,7 +205,7 @@ class MainWindow(QMainWindow):
             page.context_notice.setWordWrap(True)
             page.context_notice.hide()
             page_layout = getattr(page, "page_layout", page.layout())
-            page_layout.insertWidget(1, page.context_notice)
+            page_layout.insertWidget(2 if hasattr(page, "workflow") else 1, page.context_notice)
             workflow = getattr(page, "workflow", None)
             if workflow is not None:
                 workflow.navigateRequested.connect(
@@ -262,7 +262,7 @@ class MainWindow(QMainWindow):
                 self.helper_intro.hide()
             dismiss.clicked.connect(dismiss_intro)
             intro.addWidget(dismiss)
-            self.organizations_page.page_content.layout().insertWidget(1, self.helper_intro)
+            self.organizations_page.page_content.layout().insertWidget(2, self.helper_intro)
         self._refresh_integration_status()
         self._update_context_summary()
         self._update_display_layout(force=True)

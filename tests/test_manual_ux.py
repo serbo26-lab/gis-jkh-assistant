@@ -138,15 +138,23 @@ def test_cached_directory_adds_work_on_first_click_without_network(desktop, monk
     assert page._integration_worker is None
 
 
-def test_visible_selector_commands_months_and_unplanned(desktop):
+@pytest.mark.parametrize("guidance_enabled", [True, False])
+def test_visible_selector_commands_months_and_unplanned(desktop, guidance_enabled):
+    desktop.window.settings_page.next_step_panel_checkbox.setChecked(guidance_enabled)
     for index in (1, 2, 3, 4):
         page = _select_page(desktop, index)
         settle(desktop.app)
         assert page.list_selector.isVisible()
         assert page.list_selector.item(0, 0).text()
+        if guidance_enabled:
+            page.workflow.help_button.setFocus()
+            QTest.keyClick(page.workflow.help_button, Qt.Key_Tab)
+            assert desktop.app.focusWidget() is page.house_combo
         page.house_combo.setFocus()
         QTest.keyClick(page.house_combo, Qt.Key_Tab)
         assert desktop.app.focusWidget() is page.list_selector
+        QTest.keyClick(page.list_selector, Qt.Key_Tab, Qt.ShiftModifier)
+        assert desktop.app.focusWidget() is page.house_combo
         if index in (3, 4):
             assert page.months_card.isVisible()
             assert page.load_period_button.isVisible()

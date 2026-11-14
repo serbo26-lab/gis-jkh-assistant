@@ -144,7 +144,7 @@ class WorkListSelector(QTableWidget):
 
 
 def install_selector(page, root, source, *, start=2):
-    """Keep the header/context above a vertically resizable registry/workspace."""
+    """Keep guidance and context above a vertically resizable registry/workspace."""
     source.hide()
     page.list_selector = WorkListSelector(page, source)
     workspace = QWidget()
@@ -169,6 +169,8 @@ def install_selector(page, root, source, *, start=2):
     page.workspace_splitter.setStretchFactor(1, 1)
     page.workspace_splitter.setSizes([150, 700])
     root.addWidget(page.workspace_splitter, 1)
+    body.removeWidget(page.workflow)
+    root.insertWidget(1, page.workflow)
     # No data lives in this size preference; save it per section.
     key = "ui.registry.height." + type(page).__name__
     saved = page.repository.get_setting(key)
@@ -178,7 +180,11 @@ def install_selector(page, root, source, *, start=2):
         lambda *_: None if getattr(page.window(), "_closing", False) else
         page.repository.set_setting(key, str(page.workspace_splitter.sizes()[0]))
     )
-    QWidget.setTabOrder(page.house_combo, page.list_selector)
+    # Build in visual order: moving house_combo into an earlier pair after
+    # linking it to the registry would break that already established link.
+    chain = [page.workflow.primary, page.workflow.help_button, page.house_combo, page.list_selector]
     following = getattr(page, "year_combo", None) or getattr(page, "start_month", None)
     if following:
-        QWidget.setTabOrder(page.list_selector, following)
+        chain.append(following)
+    for before, after in zip(chain, chain[1:]):
+        QWidget.setTabOrder(before, after)

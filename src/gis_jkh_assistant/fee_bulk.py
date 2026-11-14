@@ -86,10 +86,11 @@ def prepare_candidates(repository, store, organization_id, house_ids, start, end
             upper = min(upper, management_end - timedelta(days=1))
         contracts = [item for item in store.context(house_id)["contracts"]
                      if item.get("fiasHouseGuid") == house.fias_house_guid]
-        for tariff in repository.list_effective_house_tariffs(house_id):
-            first = max(lower, tariff.effective_from_date)
-            last = min(upper, tariff.effective_to_date or upper)
-            if first > last:
+        for tariff in repository.list_effective_house_tariffs(house_id, through=end):
+            first = max(management_start or date.min, tariff.effective_from_date)
+            last = min((management_end - timedelta(days=1)) if management_end else date.max,
+                       tariff.effective_to_date or upper)
+            if first > last or first > upper or last < lower:
                 continue
             boundaries = {first, last + timedelta(days=1)} if last < date.max else {first}
             for contract in contracts:
@@ -147,6 +148,7 @@ def create_projects(repository, store, organization_id, house_ids, start, end, p
                     or reviewed.key in seen):
                 raise ValueError("Тарифы или проекты изменились. Обновите предварительный просмотр.")
             seen.add(reviewed.key)
+            repository.ensure_house_tariff_periods(candidate.house_id, _date(candidate.document["end"]))
             record_id = store.save_local(candidate.house_id, candidate.document)
             created.append((candidate.house_id, record_id))
     return created
