@@ -34,19 +34,20 @@ def test_tariff_days_and_exclusive_house_end_are_preserved(store):
     before = repo.list_house_tariffs(house.id)
     candidates = _preview(repo, fee_store, house, start=date(2020, 1, 1), end=date(2026, 12, 31))
     assert [(c.document["start"], c.document["end"], c.document["amount"]) for c in candidates] == [
-        ("2021-07-01", "2021-07-20", "10.00"), ("2021-07-21", "2022-12-31", "11.00")]
+        ("2021-07-01", "2021-07-20", "10.00"), ("2021-07-21", "2022-07-20", "11.00"),
+        ("2022-07-21", "2022-12-31", "11.00")]
     created = create_projects(repo, fee_store, house.organization_id, [house.id], date(2020, 1, 1),
                               date(2026, 12, 31), fees.PROTOCOL, candidates)
-    assert len(created) == 2
-    assert repo.list_house_tariffs(house.id) == before
+    assert len(created) == 3
+    assert len(repo.list_house_tariffs(house.id)) == len(before) + 1
     again = _preview(repo, fee_store, house, start=date(2020, 1, 1))
     assert all(candidate.blocked for candidate in again)
 
 
-def test_open_tariff_uses_explicit_end_without_rounding(store):
+def test_selection_window_keeps_saved_tariff_end(store):
     repo, fee_store, house = _setup(store)
     repo.create_house_tariff(house_id=house.id, amount="15.12", start_year=2026, start_month=1)
-    assert _preview(repo, fee_store, house, end=date(2026, 9, 17))[0].document["end"] == "2026-09-17"
+    assert _preview(repo, fee_store, house, end=date(2026, 9, 17))[0].document["end"] == "2026-12-31"
 
 
 def test_different_contract_periods_split_tariff_and_overlaps_are_not_guessed(store):

@@ -91,6 +91,9 @@ class HouseTariff:
     updated_at: str | None = None
     gis_fee_guid: str | None = None
     basis_label: str = ""
+    manual_end_date: str | None = None
+    auto_renew: bool = False
+    renewal_source_id: str | None = None
 
     @property
     def effective_from_date(self) -> date:

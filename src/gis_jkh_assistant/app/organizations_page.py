@@ -62,7 +62,9 @@ class OrganizationsPage(QWidget):
         self.workflow.register("organization_load", self.load_organization_button)
         self.workflow.register("next", lambda: self.workflow.navigateRequested.emit(0))
         self.workflow.direct_keys = {"organization", "organization_load"}
-        body.addWidget(self.workflow)
+        body.insertWidget(1, self.workflow)
+        QWidget.setTabOrder(self.workflow.primary, self.workflow.help_button)
+        QWidget.setTabOrder(self.workflow.help_button, self.load_organization_button)
         self.operation_status = OperationStatus()
         self.bulk_operation_status = self.operation_status.label
         self.operation_status.hide()

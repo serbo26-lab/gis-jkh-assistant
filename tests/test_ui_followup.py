@@ -106,7 +106,10 @@ def test_expanded_guidance_and_metadata_fit_after_resize(desktop, theme):
                 assert_inside(page.gis_state_label, page.details_card)
                 assert_inside(page.export_template_status, page.details_card)
                 workspace = page.workspace_splitter.widget(1)
-                assert not page.details_card.geometry().intersects(workflow.geometry()), (
+                details_rect = page.details_card.rect().translated(
+                    page.details_card.mapTo(page.page_content, QPoint(0, 0))
+                )
+                assert not details_rect.intersects(workflow.geometry()), (
                     width, height, workspace.geometry(), workspace.minimumSize(),
                     workspace.layout().totalMinimumSize(), workspace.heightForWidth(workspace.width()),
                 )

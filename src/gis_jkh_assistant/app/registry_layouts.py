@@ -475,7 +475,7 @@ def adapt_houses(page):
     page.workflow.register("load", page.sync_houses_button)
     page.workflow.register("reset_search", page.search_edit.clear)
     page.workflow.register("next", lambda: page.workflow.navigateRequested.emit(1))
-    root.insertWidget(2, page.workflow)
+    root.insertWidget(1, page.workflow)
     page.bulk_actions_button = command_menu("Обновить все дома УО", (page.sync_all_management_button, page.sync_all_work_lists_button), name="sync")
     page.bulk_actions_button.setToolTip(
         "Обновить сведения об управлении и перечнях для домов выбранной УО."
@@ -630,3 +630,5 @@ def adapt_houses(page):
     outer = QVBoxLayout(page)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.addWidget(page.page_scroll)
+    QWidget.setTabOrder(page.workflow.primary, page.workflow.help_button)
+    QWidget.setTabOrder(page.workflow.help_button, page.sync_houses_button)

@@ -197,6 +197,8 @@ class FeeGenerationDialog(QDialog):
         self.resize(1120, 700)
         layout = QVBoxLayout(self)
         hint = QLabel(house.address + "\nВыберите период. Будет создан отдельный локальный проект на каждый период тарифа. "
+                      "Используются полные сроки тарифов, пересекающие выбранный период. "
+                      "Пролонгация сохраняется в тарифах дома после создания проектов. "
                       "Существующие сведения не заменяются; в ГИС ничего не отправляется.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -214,7 +216,7 @@ class FeeGenerationDialog(QDialog):
         self.progress.setWordWrap(True)
         layout.addWidget(self.progress)
         dates = QHBoxLayout()
-        dates.addWidget(QLabel("Период формирования с"))
+        dates.addWidget(QLabel("Отбор периодов с"))
         self.start_edit, self.end_edit = QDateEdit(), QDateEdit()
         today = date.today()
         first = min(starts) if starts else date(today.year, 1, 1)

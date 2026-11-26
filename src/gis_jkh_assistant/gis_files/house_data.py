@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -43,6 +43,8 @@ class ImportedTariffRow:
     house_object_guid: str | None = None
     fias_house_guid: str | None = None
     gis_unique_house_number: str | None = None
+    end: ParsedPeriodDate | None = None
+    auto_renew: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,7 @@ class HouseDataImportResult:
 
 AREA_SHEET = "Площади"
 TARIFF_SHEET = "Тарифы"
+TARIFF_PERIOD_SHEET = "Сроки тарифов"
 INSTRUCTION_SHEET = "Инструкция"
 MIN_TARIFF_PAIRS = 20
 IDENTITY_HEADERS = ["_house_object_guid", "_fias_house_guid", "_gis_unique_house_number"]
@@ -85,7 +88,7 @@ def write_house_data_template(
         "Перед вставкой проверьте адреса строк: порядок и число домов в файлах могут различаться.",
         "Дата «08.2025» означает начало с 01.08.2025.",
         "Дата «10.08.2025» сохраняется как точная дата 10.08.2025.",
-        "Конечную дату тарифа вводить не нужно: она определяется следующим изменением.",
+        "Лист «Сроки тарифов» сохраняет окончание включительно и пролонгацию. Пары дат и сумм на листе «Тарифы» можно копировать как прежде.",
         "Если тариф не менялся, повторять его каждый год не обязательно.",
         "Старый вертикальный формат (одна строка = одна точка тарифа) тоже поддерживается.",
         "В шаблоне нет скрытых столбцов и служебных идентификаторов. Дома сопоставляются по адресу "
@@ -131,6 +134,19 @@ def write_house_data_template(
             else:
                 tariff_row.extend(["", ""])
         tariffs.append(tariff_row)
+
+    periods = workbook.create_sheet(TARIFF_PERIOD_SHEET)
+    periods.append(["Адрес", "Действует с", "Действует до включительно", "Пролонгировать на следующий год"])
+    for house in sorted_houses:
+        for tariff in histories[house.id]:
+            periods.append([house.address, tariff.effective_from_label,
+                            tariff.manual_end_date or (tariff.effective_to_date.isoformat() if tariff.effective_to_date else ""),
+                            "Да" if tariff.auto_renew else "Нет"])
+    _style_header(periods)
+    periods.freeze_panes = "B2"
+    periods.column_dimensions["A"].width = 70
+    for column in ("B", "C", "D"):
+        periods.column_dimensions[column].width = 32
 
     for row in range(2, areas.max_row + 1):
         for column in (2, 3, 4):
@@ -277,6 +293,32 @@ def parse_house_data_template(path: str | Path) -> HouseDataImportResult:
                 tariff_rows.append(
                     ImportedTariffRow(house_id, address, start, amount, row_number, **identities)
                 )
+
+        if TARIFF_PERIOD_SHEET in workbook.sheetnames:
+            limits = {}
+            sheet = workbook[TARIFF_PERIOD_SHEET]
+            headers = ["Адрес", "Действует с", "Действует до включительно", "Пролонгировать на следующий год"]
+            _require_headers(sheet, headers)
+            positions = [next(c.column - 1 for c in sheet[1] if str(c.value or "").strip() == header) for header in headers]
+            for number, values in enumerate(sheet.iter_rows(min_row=2, values_only=True), 2):
+                if not any(v is not None and str(v).strip() for v in values):
+                    continue
+                try:
+                    values = [_at(values, position) for position in positions]
+                    address, start = _normalize_address(str(_at(values, 0) or "")), parse_period_date(_at(values, 1))
+                    end = parse_period_date(_at(values, 2), boundary="end")
+                    flag = str(_at(values, 3) or "").strip().casefold()
+                    if not address or end.value < start.value or end.value.year >= 9999 or flag not in {"да", "нет"}:
+                        raise ValueError("Проверьте адрес, даты и пролонгацию (Да/Нет).")
+                    key = (address, start.value)
+                    if key in limits:
+                        raise ValueError("Повторный срок тарифа на одну дату.")
+                    limits[key] = (end, flag == "да")
+                except ValueError as exc:
+                    raise HouseDataImportError(f"Лист «{TARIFF_PERIOD_SHEET}», строка {number}: {exc}") from exc
+            tariff_rows = [replace(row, end=limits[key][0], auto_renew=limits[key][1])
+                           if (key := (_normalize_address(row.address), row.start.value)) in limits else row
+                           for row in tariff_rows]
 
         if recovered_rows:
             warnings.append(

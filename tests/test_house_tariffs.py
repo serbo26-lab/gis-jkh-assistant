@@ -147,7 +147,8 @@ def test_last_tariff_continues_until_next_explicit_change(tmp_path) -> None:
 
     tariffs = repository.list_house_tariffs(house.id)
     assert tariffs[0].period_label == "08.2020 — 07.2021"
-    assert tariffs[1].period_label == "с 08.2021"
+    assert tariffs[1].period_label == "08.2021 — 07.2022"
+    assert tariffs[1].auto_renew
 
     selected = repository.find_house_tariff_covering_period(
         house.id,
@@ -195,9 +196,11 @@ def test_exact_day_tariff_change_recalculates_previous_period(tmp_path) -> None:
     assert first is not None
     assert second is not None
     assert first.effective_from_label == "08.2025"
-    assert first.effective_to_date.isoformat() == "2026-08-09"
-    assert first.period_label == "08.2025 — 09.08.2026"
-    assert first.period_full_label == "01.08.2025 — 09.08.2026"
+    assert first.effective_to_date.isoformat() == "2026-07-31"
+    assert first.period_label == "08.2025 — 07.2026"
+    assert first.period_full_label == "01.08.2025 — 31.07.2026"
+    repository.ensure_house_tariff_periods(house.id, date(2026, 8, 1))
+    assert repository.find_house_tariff_at_date(house.id, date(2026, 8, 9)).amount == "23"
     assert second.effective_from_label == "10.08.2026"
 
     assert repository.find_house_tariff_covering_period(
